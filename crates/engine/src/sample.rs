@@ -362,7 +362,8 @@ pub fn sample_store(now: i64) -> MemStore {
 }
 
 /// The sample calendar: a few days of our own invented plans around `now`, two of them at the
-/// same time so they stand side by side, and events that last all day.
+/// same time so they stand side by side, events that last all day, and a stand-up every
+/// weekday.
 fn appointments(now: i64) -> Vec<Item> {
     use openmailclient_model::calendar::{Appointment, Busy};
     let today = now.div_euclid(DAY).saturating_mul(DAY);
@@ -377,9 +378,19 @@ fn appointments(now: i64) -> Vec<Item> {
         reminder: Some(15),
         recurring: false,
         meeting: false,
+        recurrence: None,
+        occurrence: None,
     };
+    // Every weekday from a week ago, at the same time; the sample's times are UTC.
+    use openmailclient_model::recur::{self, End, Freq, Recurrence, Rule};
+    let week_ago = recur::day_of_minutes(at(-7, 0, 0).div_euclid(MINUTE));
+    let pattern = Recurrence::new(Freq::Weekly, Rule::Week { days: 0x3E }, 1, End::Never, week_ago, 9 * 60 + 30, 9 * 60 + 45, 1);
+    let first = recur::minutes_of_day(pattern.start_day).saturating_add(9 * 60 + 30).saturating_mul(MINUTE);
+    let mut standup = plan("Team stand-up", "Room 2", first, first.saturating_add(15 * MINUTE), Busy::Busy);
+    standup.recurring = true;
+    standup.recurrence = Some(pattern);
     let mut list = vec![
-        plan("Team stand-up", "Room 2", at(0, 9, 30), at(0, 9, 45), Busy::Busy),
+        standup,
         plan("Review the spring catalogue", "Studio", at(0, 14, 0), at(0, 15, 30), Busy::Busy),
         plan("Call with the print shop", "Phone", at(0, 14, 30), at(0, 15, 0), Busy::Tentative),
         plan("Lunch with Priya", "Harbour Cafe", at(-1, 12, 30), at(-1, 13, 30), Busy::OutOfOffice),

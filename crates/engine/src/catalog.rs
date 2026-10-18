@@ -135,7 +135,7 @@ pub const FEATURES: &[Feature] = &[
     f("Calendar", "Home", "Arrange", "Day, Work Week, Week, Month", "calendar.view"),
     f("Calendar", "Home", "Arrange", "Schedule View", ""),
     f("Calendar", "Home", "Manage Calendars", "Open Calendar", ""),
-    f("Calendar", "Appointment", "Options", "Recurrence", ""),
+    f("Calendar", "Appointment", "Options", "Recurrence", "calendar.recurrence"),
     f("Calendar", "Appointment", "Options", "Reminder", "calendar.change"),
     f("Calendar", "Meeting", "Respond", "Accept, Tentative, Decline", ""),
     // People

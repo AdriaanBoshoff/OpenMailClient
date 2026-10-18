@@ -56,6 +56,10 @@ pub enum Icon {
     Clock,
     Palette,
     Link,
+    /// It repeats: one loop with an arrow at its end.
+    Recur,
+    /// One occurrence of a series changed on its own: the loop, struck through.
+    RecurChanged,
 }
 
 struct Pen<'a> {
@@ -360,6 +364,21 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             ]);
             pen.line(&[(6.5, 13.0), (8.0, 14.0), (9.5, 13.0)]);
             pen.line(&[(8.0, 1.5), (8.0, 3.0)]);
+        }
+        Icon::Recur | Icon::RecurChanged => {
+            // Three quarters and more of a circle, going clockwise, open at the top right.
+            let arc: Vec<(f32, f32)> = (0..=14)
+                .map(|i| {
+                    let a = (-50.0 + 290.0 * i as f32 / 14.0).to_radians();
+                    (8.0 + 5.6 * a.cos(), 8.0 + 5.6 * a.sin())
+                })
+                .collect();
+            pen.line(&arc);
+            // The arrow at its end, at 240 degrees, pointing on round the circle.
+            pen.line(&[(2.7, 2.9), (5.2, 3.15), (4.1, 5.4)]);
+            if icon == Icon::RecurChanged {
+                pen.line(&[(2.0, 14.0), (14.0, 2.0)]);
+            }
         }
         Icon::Clock => {
             pen.circle(8.0, 8.0, 6.3);

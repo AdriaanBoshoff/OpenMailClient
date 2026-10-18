@@ -180,3 +180,168 @@ fn no_calendar_and_hostile_appointments_are_errors_not_crashes() {
     assert!(s.run("calendar.select", &json!({"id": 999_999})).is_err());
     assert!(s.run("calendar.delete", &json!({"id": 999_999})).is_err());
 }
+
+/// The items of `from` to `to` (YYYY-MM-DD, the day after the last) whose subject starts so,
+/// as (start, subject, occurrence).
+fn shown(s: &mut Session, from: &str, to: &str, subject: &str) -> Vec<(String, String, String)> {
+    let got = run(s, "calendar.items", json!({"from": from, "to": to}));
+    got["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["untrusted_content"]["subject"].as_str().unwrap().starts_with(subject))
+        .map(|i| {
+            let text = |v: &Value| v.as_str().unwrap_or("").to_string();
+            (text(&i["start"]), text(&i["untrusted_content"]["subject"]), text(&i["occurrence"]))
+        })
+        .collect()
+}
+
+#[test]
+fn the_sample_stand_up_is_on_every_weekday() {
+    let mut s = session();
+    let week = shown(&mut s, "2026-10-04", "2026-10-11", "Team stand-up");
+    let days: Vec<&str> = week.iter().map(|(start, _, _)| &start[..10]).collect();
+    assert_eq!(days, ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"]);
+    assert!(week.iter().all(|(start, _, occurrence)| start.starts_with(occurrence.as_str()) && start.ends_with("09:30")));
+    let got = run(&mut s, "calendar.items", json!({"from": "2026-10-07", "to": "2026-10-08"}));
+    let one = got["items"].as_array().unwrap().iter().find(|i| i["untrusted_content"]["subject"] == "Team stand-up").unwrap().clone();
+    assert_eq!(one["recurring"], true);
+    assert!(one["pattern"].as_str().unwrap().starts_with("Occurs every weekday"), "{}", one["pattern"]);
+}
+
+#[test]
+fn a_series_is_made_and_its_occurrences_changed_one_by_one() {
+    let mut s = session();
+    s.tz_offset_min = 120;
+    run(&mut s, "nav.module", json!({"module": "calendar"}));
+    // Mondays and Wednesdays at 10, four times, from Sunday: the first is on Monday.
+    let repeat = json!({"every": "week", "on": ["monday", "Wed"], "count": 4});
+    let id =
+        run(&mut s, "calendar.new", json!({"subject": "Pottery", "start": "2026-10-11 10:00", "end": "2026-10-11 11:30", "repeat": repeat}))["id"]
+            .as_u64()
+            .unwrap();
+    let starts = |s: &mut Session| {
+        let all = shown(s, "2026-10-01", "2026-11-30", "");
+        all.into_iter().filter(|(_, b, _)| b.starts_with("Pottery") || b.starts_with("Clay")).map(|(a, b, _)| format!("{a} {b}")).collect::<Vec<_>>()
+    };
+    assert_eq!(starts(&mut s), ["2026-10-12 10:00 Pottery", "2026-10-14 10:00 Pottery", "2026-10-19 10:00 Pottery", "2026-10-21 10:00 Pottery"]);
+    assert_eq!(s.calendar.occurrence.map(|d| d % 7), Some(openmailclient_model::calendar::day_of(time::from_civil(2026, 10, 12, 0, 0, 0, 0), 0) % 7));
+
+    // One occurrence moved and renamed; the others are as they were.
+    run(&mut s, "calendar.change", json!({"id": id, "occurrence": "2026-10-14", "start": "2026-10-15 16:00", "subject": "Pottery, glazing"}));
+    assert_eq!(starts(&mut s)[1], "2026-10-15 16:00 Pottery, glazing");
+    assert_eq!(starts(&mut s)[2], "2026-10-19 10:00 Pottery");
+    // It cannot be moved past the next one.
+    assert!(s.run("calendar.change", &json!({"id": id, "occurrence": "2026-10-14", "start": "2026-10-20 10:00"})).is_err());
+    assert!(s.run("calendar.change", &json!({"id": id, "occurrence": "2026-10-13", "subject": "x"})).is_err(), "not a day it falls on");
+    assert!(s.run("calendar.change", &json!({"id": id, "occurrence": "2026-10-14", "repeat": null})).is_err());
+
+    // The chosen occurrence is deleted alone, and comes back when undone.
+    run(&mut s, "calendar.select", json!({"id": id, "occurrence": "2026-10-19"}));
+    run(&mut s, "calendar.delete", Value::Null);
+    assert_eq!(starts(&mut s).len(), 3);
+    assert_eq!(run(&mut s, "edit.undo", Value::Null)["undone"], "Delete Occurrence");
+    assert_eq!(starts(&mut s).len(), 4);
+
+    // The series renamed: the occurrence renamed on its own keeps its name.
+    run(&mut s, "calendar.change", json!({"id": id, "subject": "Clay class"}));
+    let names: Vec<String> = shown(&mut s, "2026-10-01", "2026-11-30", "").into_iter().filter(|(_, _, o)| !o.is_empty()).map(|(_, b, _)| b).collect();
+    assert!(names.contains(&"Pottery, glazing".to_string()) && names.iter().filter(|n| *n == "Clay class").count() == 3, "{names:?}");
+
+    // Its time moved: every occurrence as planned again, an hour later.
+    run(&mut s, "calendar.change", json!({"id": id, "series": true, "start": "2026-10-12 11:00", "end": "2026-10-12 12:30"}));
+    assert_eq!(
+        starts(&mut s),
+        ["2026-10-12 11:00 Clay class", "2026-10-14 11:00 Clay class", "2026-10-19 11:00 Clay class", "2026-10-21 11:00 Clay class"]
+    );
+
+    // Every other month on the last Friday, until the new year; then once only.
+    run(
+        &mut s,
+        "calendar.recurrence",
+        json!({"id": id, "repeat": {"every": "month", "interval": 2, "nth": "last", "on": ["friday"], "until": "2027-01-01"}}),
+    );
+    let monthly = shown(&mut s, "2026-10-01", "2027-03-01", "Clay");
+    assert_eq!(monthly.iter().map(|(a, _, _)| &a[..10]).collect::<Vec<_>>(), ["2026-10-30", "2026-12-25"]);
+    run(&mut s, "calendar.recurrence", json!({"id": id, "repeat": null}));
+    let once = shown(&mut s, "2026-10-01", "2027-03-01", "Clay");
+    assert_eq!(once.len(), 1);
+    assert_eq!(once[0].2, "", "no longer an occurrence");
+}
+
+#[test]
+fn hostile_patterns_are_errors_not_crashes() {
+    let mut s = session();
+    let id = run(&mut s, "calendar.new", json!({"subject": "x", "start": "2026-10-12 10:00"}))["id"].as_u64().unwrap();
+    for bad in [
+        json!(5),
+        json!("weekly"),
+        json!({"every": "fortnight"}),
+        json!({"every": "day", "interval": 0}),
+        json!({"every": "day", "interval": 1000}),
+        json!({"every": "week", "interval": 100}),
+        json!({"every": "week", "on": []}),
+        json!({"every": "week", "on": ["xx"]}),
+        json!({"every": "week", "on": "monday"}),
+        json!({"every": "month", "nth": 9, "on": ["monday"]}),
+        json!({"every": "month", "day": 32}),
+        json!({"every": "day", "count": 1000}),
+        json!({"every": "day", "count": 3, "until": "2027-01-01"}),
+        json!({"every": "day", "until": "2026-10-01"}),
+        json!({"every": "day", "until": "never"}),
+    ] {
+        assert!(s.run("calendar.recurrence", &json!({"id": id, "repeat": bad})).is_err(), "{bad}");
+    }
+    assert!(s.run("calendar.recurrence", &json!({"id": id})).is_err());
+    // The longest a series can be is walked in bounded time, and so is the widest range.
+    run(&mut s, "calendar.recurrence", json!({"id": id, "repeat": {"every": "day", "count": 999}}));
+    let got = run(&mut s, "calendar.items", json!({"from": "2026-10-01", "to": "2031-10-01"}));
+    assert_eq!(got["items"].as_array().unwrap().iter().filter(|i| i["id"] == id).count(), 999);
+    assert!(s.run("calendar.select", &json!({"id": id, "occurrence": "2020-01-01"})).is_err());
+}
+
+#[test]
+fn a_series_with_changed_and_deleted_occurrences_is_saved_to_a_pst_and_read_again() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-series-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = session();
+    let id = run(
+        &mut s,
+        "calendar.new",
+        json!({"subject": "Rowing", "start": "2026-10-12 07:00", "end": "2026-10-12 08:00", "repeat": {"every": "week", "on": ["monday", "thursday"], "count": 6}}),
+    )["id"]
+        .as_u64()
+        .unwrap();
+    run(
+        &mut s,
+        "calendar.change",
+        json!({"id": id, "occurrence": "2026-10-15", "subject": "Rowing (river closed: gym)", "start": "2026-10-15 18:00", "end": "2026-10-15 19:00"}),
+    );
+    run(&mut s, "calendar.select", json!({"id": id, "occurrence": "2026-10-19"}));
+    run(&mut s, "calendar.delete", json!({}));
+    let before = shown(&mut s, "2026-10-01", "2026-12-01", "Rowing");
+    assert_eq!(before.len(), 5, "{before:?}");
+    // Each occurrence, the one moved too, says the series' own pattern and times.
+    let got = run(&mut s, "calendar.items", json!({"from": "2026-10-01", "to": "2026-12-01"}));
+    let patterns: std::collections::BTreeSet<_> =
+        got["items"].as_array().unwrap().iter().filter(|i| i["id"] == id).map(|i| i["pattern"].as_str().unwrap().to_string()).collect();
+    assert_eq!(patterns.len(), 1, "{patterns:?}");
+    assert!(patterns.iter().all(|p| p.ends_with("from 07:00 to 08:00")), "{patterns:?}");
+
+    let path = dir.join("series.pst");
+    run(&mut s, "file.export", json!({"path": path}));
+    let found = crate::io::check_structure(&path).unwrap().unwrap();
+    assert!(found.problems.is_empty(), "{:?}", found.problems);
+    let mut other = Session::new();
+    other.now = now();
+    run(&mut other, "file.open", json!({"path": path}));
+    run(&mut other, "nav.module", json!({"module": "calendar"}));
+    assert_eq!(shown(&mut other, "2026-10-01", "2026-12-01", "Rowing"), before);
+    // Read again, it is changed as any series is.
+    let opened = other.calendar.items.iter().find(|(_, a)| a.subject == "Rowing").map(|(i, _)| *i).unwrap();
+    run(&mut other, "calendar.select", json!({"id": opened, "occurrence": "2026-10-22"}));
+    run(&mut other, "calendar.delete", json!({}));
+    assert_eq!(shown(&mut other, "2026-10-01", "2026-12-01", "Rowing").len(), 4);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

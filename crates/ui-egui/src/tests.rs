@@ -2544,3 +2544,79 @@ fn a_pressed_or_focused_button_is_readable_in_every_built_in_theme() {
         }
     }
 }
+
+#[test]
+fn a_series_is_made_in_the_appointment_window_and_one_occurrence_changed() {
+    use crate::calendar::{Ends, Repeats};
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "calendar" })).unwrap();
+    ui.execute("ui.appointment", &Value::Null).unwrap();
+    let mut form = ui.appointment.clone().unwrap();
+    assert_eq!(form.repeat.repeats, Repeats::Never);
+    assert!(!form.params().as_object().unwrap().contains_key("repeat"));
+    form.subject = "Choir".to_string();
+    form.start_date = "2026-11-02".to_string();
+    form.start_time = "19:00".to_string();
+    form.end_date = "2026-11-02".to_string();
+    form.end_time = "20:30".to_string();
+    form.repeat.repeats = Repeats::Weekly;
+    form.repeat.days = 0b0000_1010; // Monday and Wednesday
+    form.repeat.ends = Ends::After;
+    form.repeat.count = 4;
+    // The preview says what it will be before it is saved.
+    match ui.repeat_preview(&form) {
+        Some(Ok(Some((words, next)))) => {
+            assert!(words.contains("4 times"), "{words}");
+            assert_eq!(next.len(), 4);
+        }
+        other => panic!("{other:?}"),
+    }
+    let id = ui.execute("calendar.new", &form.params()).unwrap()["id"].as_u64().unwrap();
+    ui.execute("calendar.goTo", &json!({ "date": "2026-11-04" })).unwrap();
+    ui.execute("calendar.view", &json!({ "view": "week" })).unwrap();
+    let shown: Vec<_> = ui.session.calendar.items.iter().filter(|(i, _)| *i == id).map(|(_, a)| a.occurrence).collect();
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    // The Wednesday chosen and opened as Enter opens it: that occurrence alone.
+    let wednesday = shown[1].unwrap();
+    ui.execute("calendar.select", &json!({ "id": id, "occurrence": "2026-11-04" })).unwrap();
+    ui.execute("ui.appointment", &json!({ "id": id })).unwrap();
+    let mut one = ui.appointment.clone().unwrap();
+    assert_eq!(one.occurrence, Some(wednesday));
+    assert!(one.other.is_some() && one.recurring);
+    assert!(ui.repeat_preview(&one).is_none());
+    one.subject = "Choir (in the hall)".to_string();
+    let p = one.params();
+    assert_eq!(p["occurrence"], "2026-11-04");
+    assert!(!p.as_object().unwrap().contains_key("repeat"));
+    ui.execute("calendar.change", &p).unwrap();
+    let subjects: Vec<_> = ui.session.calendar.items.iter().filter(|(i, _)| *i == id).map(|(_, a)| a.subject.clone()).collect();
+    assert_eq!(subjects, ["Choir", "Choir (in the hall)"]);
+    // Switched to the whole series, and back with what was typed kept.
+    let series = one.clone().switched();
+    assert!(series.occurrence.is_none() && series.other.is_some());
+    assert_eq!(series.repeat.repeats, Repeats::Weekly);
+    assert_eq!(series.params()["series"], true);
+    assert_eq!(series.clone().switched().subject, "Choir (in the hall)");
+    // The window draws with either open, in each view.
+    for view in ["day", "week", "month"] {
+        ui.execute("calendar.view", &json!({ "view": view })).unwrap();
+        ui.appointment = Some(one.clone());
+        draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+        ui.appointment = Some(series.clone());
+        draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    }
+    // Delete in the occurrence's window deletes it alone.
+    ui.appointment = None;
+    ui.execute("calendar.view", &json!({ "view": "week" })).unwrap();
+    ui.execute("calendar.delete", &one.delete_params()).unwrap();
+    assert_eq!(ui.session.calendar.items.iter().filter(|(i, _)| *i == id).count(), 1);
+    // A pattern that never falls is said, not saved.
+    let mut never = series.clone();
+    never.repeat.repeats = Repeats::Monthly;
+    never.repeat.month_by = crate::calendar::MonthBy::Date;
+    never.repeat.day = 31;
+    never.repeat.interval = 12;
+    never.start_date = "2026-11-02".to_string();
+    assert!(ui.repeat_preview(&never).is_some());
+    assert!(ui.execute("ui.appointment", &json!({ "id": id, "occurrence": "nonsense" })).is_err());
+}

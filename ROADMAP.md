@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in (M7) comes after the first release · revision 118 · 2026-10-17
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3); third-party sign-in (M7) comes after the first release · revision 119 · 2026-10-18
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 57 of 121 (47%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 531, all passing |
+| Catalogued Outlook Classic features with a command | 58 of 121 (47%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 539, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
@@ -22,7 +22,7 @@
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
 | M3c | Proof in Outlook and 4K-page writing | closed: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | closed: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3); sending (M4.4); receiving (M4.5); Account Settings in the window (M4.6); each account in a data file of its own, the live check passed (M4.7); every IMAP folder kept in step both ways (M4.8); certificates trusted on the owner's word, new mail told of, Show Progress, Delay Delivery (M4.9); pictures on command (M4.10); attachments opened (M4.11); CONDSTORE, QRESYNC, IDLE, folders and drafts on the server (M4.12); pictures off the window's thread (M4.13); servers found from the address (M4.14) and its DNS records (M4.15). OAuth sign-in is M7 |
-| M5 | Calendar, People and Tasks modules | in progress: the Calendar's views and appointments (M5.1); see the M5 plan |
+| M5 | Calendar, People and Tasks modules | in progress: the Calendar's views and appointments (M5.1), Import from Outlook (M5.2), recurring appointments (M5.3); see the M5 plan |
 | M6 | MCP server, control channel, web build | not started |
 | M7 | Third-party sign-in: Gmail, Outlook.com and Microsoft 365, Yahoo and other providers through OAuth 2.0 (SASL XOAUTH2 and OAUTHBEARER, RFC 7628), signed in through the system's browser with PKCE, tokens kept and renewed in the system's credential store, a provider's servers filled in from its address | after the first release, by the owner's choice: until then such accounts sign in with an app password |
 
@@ -153,7 +153,8 @@
 100. Done: The Calendar: day, work week, week and month views of the data file's Calendar, a month to pick days from, appointments side by side when they overlap, all-day events in a band of their own, Show As drawn on each, a line at the time now; appointments made, opened, changed and deleted in a window of their own that names what clashes, every change undone (M5.1, `crates/model/src/calendar.rs`, `crates/engine/src/cmd/calendar.rs`, `crates/ui-egui/src/calendar.rs`).
 101. Done: Dialogs in the theme's colours, and themes of your own: every dialog has a coloured head with its own mark and a close button, a foot that holds its buttons with the one that does the work in the accent, warnings in tinted boxes, and the window behind dimmed; nine built-in themes and any number of one's own, each with its own light and dark colours, changed in a Themes window that shows the change at once and checks that text can be read, or following the system's light or dark setting (M1.9, `crates/ui-egui/src/dialog.rs`, `crates/ui-egui/src/themes.rs`, `crates/ui-egui/src/theme.rs`).
 102. Done: Import from Outlook: every IMAP and POP3 account of every Outlook profile, with its servers, ports, security and user name and never its password, and the data files the profile holds, shown before anything is done, then brought on a thread of their own: each account's data file is copied with Outlook kept from writing it meanwhile and checked, an `.ost` becomes a `.pst` of our own, and Outlook's own files are not changed (M5.2, `crates/engine/src/outlook.rs`, `crates/engine/src/cmd/import.rs`, `crates/ui-egui/src/import.rs`).
-103. Next: M5.3: Recurring appointments ([MS-OXOCAL] 2.2.1.44 pattern, exceptions), shown on every day they fall.
+103. Done: Recurring appointments: a series made, read and saved as Outlook keeps it ([MS-OXOCAL] 2.2.1.44 pattern, exceptions as hidden attached messages, 2.2.10.1), shown on every day it falls, and one occurrence changed or deleted alone, from the window or by command (M5.3, `crates/model/src/recur.rs`, `crates/engine/src/cmd/calendar.rs`, `crates/ui-egui/src/calendar.rs`).
+104. Next: M5.4: iCalendar: `.ics` files opened, imported and saved.
 
 ## M5 plan
 
@@ -161,7 +162,7 @@
 |---|---|
 | ~~M5.1~~ | done: the Calendar: day, work week, week and month views; appointments made, changed and deleted |
 | ~~M5.2~~ | done: Import from Outlook: every IMAP and POP3 account of every profile with its servers and without its password, and the profile's data files, shown first and copied without changing Outlook's |
-| M5.3 | Recurring appointments ([MS-OXOCAL] 2.2.1.44 pattern, exceptions), shown on every day they fall |
+| ~~M5.3~~ | done: recurring appointments ([MS-OXOCAL] 2.2.1.44 pattern, exceptions), shown on every day they fall, one occurrence changed or deleted alone |
 | M5.4 | iCalendar: `.ics` files opened, imported and saved (RFC 5545, [MS-OXCICAL]) |
 | M5.5 | Calendar sync over CalDAV (RFC 4791), as with Nextcloud: calendars found from the account, changes asked for by sync token (RFC 6578) and ETags, both ways, HTTPS only, the password in the credential store; tested against an in-process fake CalDAV server |
 | M5.6 | Time zones and daylight saving: an appointment kept in its own time zone, shown in the system's |
@@ -2100,6 +2101,37 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   strict #RRGGBB taken, names cleaned and capped at 60 characters, built-in and repeated names
   left out, and at most 40 kept. Every dialog is drawn in every theme, light and dark, in a large
   window and a tiny one. Do later: themes saved to and read from a file of their own. 4 tests.
+- **2026-10-18** - M5.3: recurring appointments.
+  An appointment repeats daily, every weekday, weekly on chosen days, monthly on a date, on the
+  nth (or last) day, weekday, weekend day or named day of the month, or on its last day, and
+  yearly the same ways; every so many days, weeks or months; for ever, so many times, or until a
+  date. The pattern is read and written as Outlook keeps it ([MS-OXOCAL] 2.2.1.44: the
+  RecurrencePattern blob in PidLidAppointmentRecur, with the clip start and end, the recurrence
+  type, the time zone it was made in and the pattern in words), and a series is shown on every
+  day it falls in the day, week and month views, each occurrence with a loop at its corner.
+  One occurrence is changed or deleted alone: its time (kept between its neighbours, as Outlook
+  keeps it), subject, location, Show As and reminder; a changed one is written as Outlook writes
+  it, an exception in the pattern and a hidden attached message ([MS-OXOCAL] 2.2.10.1) holding
+  only what differs, and is drawn with the loop struck through. Opening an occurrence opens it
+  alone, and the window switches to the whole series and back with nothing typed lost; Delete
+  there deletes that occurrence alone. Changing a series' time plans its occurrences again.
+  A pattern this program cannot read is kept as it is and the appointment is shown once.
+  Commands: `calendar.new` and `calendar.change` take "repeat" ("every": day, weekday, week,
+  month or year, "interval", "on", "nth", "day", "lastDay", "count", "until", or null for none),
+  `calendar.recurrence` sets it, and `calendar.select`, `calendar.change`, `calendar.delete` and
+  `ui.appointment` take "occurrence" (the day it was first planned on); `calendar.items` lists
+  each occurrence with its "occurrence", "changed" and "pattern".
+  Better than Outlook, which asks "Open this occurrence or the series?" before it opens: the
+  window opens on the occurrence and switches to the series with one click, keeping what was
+  typed in each; the pattern is said in words as it is chosen, with the first days it falls on,
+  and a pattern that can never fall, or an end before the start, is said at once instead of on
+  Save; the tooltip of every occurrence says the whole pattern.
+  Hostile input: a pattern blob is read with every count and offset checked, at most 999
+  occurrences and exceptions each, days outside 1601 to 9999 refused; a blob that cannot be read
+  is kept as stored; an interval is 1 to 999 days or 1 to 99 weeks or months; an occurrence
+  cannot be moved past its neighbours; listing is capped as before. Outlook Classic opened a file of ours with three series and read each pattern as written (weekly on two days 8 times, every weekday with no end, the last Thursday of each month until a date), the changed occurrence with its own subject, place and time, and the deleted one as deleted.
+  Do later: time zones and daylight saving for a series (M5.6), a series in `.ics` (M5.4).
+  7 tests.
 - **2026-10-17** - M5.2: Import from Outlook: accounts and their data files.
   File > Import from Outlook reads the Outlook profiles' settings (Office 2016 and later, and
   2013) and shows, before anything is done, each IMAP and POP3 account with its address, its

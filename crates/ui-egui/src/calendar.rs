@@ -7,6 +7,7 @@ use crate::line_edit::LineEdit;
 use crate::{MailUi, bold, clip_text, font, one_line, text_width};
 use egui::{Align2, Color32, Painter, Rect, ScrollArea, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
 use openmailclient_model::calendar::{self, Appointment, Busy, DAY, MINUTE, View};
+use openmailclient_model::recur::{self, End, Freq, Rule};
 use openmailclient_model::time::{self, Civil};
 use serde_json::{Value, json};
 
@@ -33,6 +34,149 @@ fn date_of(day: i64) -> Civil {
 /// Short weekday names, Sunday first.
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/// How often an appointment being made or changed repeats, as chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Repeats {
+    Never,
+    Daily,
+    Weekdays,
+    Weekly,
+    Monthly,
+    Yearly,
+}
+
+const REPEATS: &[(Repeats, &str)] = &[
+    (Repeats::Never, "Does not repeat"),
+    (Repeats::Daily, "Daily"),
+    (Repeats::Weekdays, "Every weekday"),
+    (Repeats::Weekly, "Weekly"),
+    (Repeats::Monthly, "Monthly"),
+    (Repeats::Yearly, "Yearly"),
+];
+
+/// Which day of a month a monthly or yearly series falls on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MonthBy {
+    /// Day `day` of the month.
+    Date,
+    /// The `nth` of `nth_days`, as "the second Tuesday".
+    Weekday,
+    LastDay,
+}
+
+/// When a series ends, as chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ends {
+    Never,
+    After,
+    On,
+}
+
+/// Which days the nth of a month counts: any day, weekdays, weekend days or one weekday.
+const NTH_DAYS: &[(u8, &str)] = &[
+    (0x7F, "day"),
+    (0x3E, "weekday"),
+    (0x41, "weekend day"),
+    (1, "Sunday"),
+    (2, "Monday"),
+    (4, "Tuesday"),
+    (8, "Wednesday"),
+    (16, "Thursday"),
+    (32, "Friday"),
+    (64, "Saturday"),
+];
+const NTH: &[(u32, &str)] = &[(1, "first"), (2, "second"), (3, "third"), (4, "fourth"), (5, "last")];
+const DAY_NAMES: [&str; 7] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+/// How an appointment repeats, as typed in its window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RepeatForm {
+    pub(crate) repeats: Repeats,
+    /// Days, weeks or months between.
+    pub(crate) interval: u32,
+    /// A weekly series' days, bit 0 being Sunday.
+    pub(crate) days: u8,
+    pub(crate) month_by: MonthBy,
+    pub(crate) day: u32,
+    pub(crate) nth: u32,
+    pub(crate) nth_days: u8,
+    pub(crate) ends: Ends,
+    pub(crate) count: u32,
+    pub(crate) until: String,
+}
+
+impl RepeatForm {
+    /// How `a` repeats, or how it would by default from its start.
+    fn of(a: &Appointment, offset: i32) -> Self {
+        let c = time::civil(a.start, offset);
+        let weekday = 1u8 << (c.weekday % 7);
+        let mut f = Self {
+            repeats: Repeats::Never,
+            interval: 1,
+            days: weekday,
+            month_by: MonthBy::Date,
+            day: c.day,
+            nth: (c.day.saturating_sub(1) / 7 + 1).min(5),
+            nth_days: weekday,
+            ends: Ends::Never,
+            count: 10,
+            until: ymd(&c),
+        };
+        let Some(r) = &a.recurrence else { return f };
+        f.interval = r.period.max(1);
+        f.repeats = match (r.freq, &r.rule) {
+            (_, Rule::Day) => Repeats::Daily,
+            (_, Rule::Week { days }) if *days == 0x3E && r.period <= 1 => Repeats::Weekdays,
+            (_, Rule::Week { .. }) => Repeats::Weekly,
+            (Freq::Yearly, _) => Repeats::Yearly,
+            (_, Rule::Other { .. }) => Repeats::Never,
+            _ => Repeats::Monthly,
+        };
+        match &r.rule {
+            Rule::Week { days } => f.days = *days,
+            Rule::Month { day } => (f.month_by, f.day) = (MonthBy::Date, *day),
+            Rule::MonthNth { days, nth } => (f.month_by, f.nth_days, f.nth) = (MonthBy::Weekday, *days, (*nth).clamp(1, 5)),
+            Rule::MonthEnd => f.month_by = MonthBy::LastDay,
+            Rule::Day | Rule::Other { .. } => {}
+        }
+        match r.end {
+            End::Never => {}
+            End::After(n) => (f.ends, f.count) = (Ends::After, n),
+            End::On(day) => (f.ends, f.until) = (Ends::On, ymd(&date_of(day))),
+        }
+        f
+    }
+
+    /// The "repeat" `calendar.new`, `calendar.change` and `calendar.recurrence` take.
+    pub(crate) fn param(&self) -> Value {
+        let names = |mask: u8| -> Vec<&str> { (0..7).filter(|i| mask & (1 << i) != 0).filter_map(|i| DAY_NAMES.get(i).copied()).collect() };
+        let mut p = match self.repeats {
+            Repeats::Never => return Value::Null,
+            Repeats::Daily => json!({ "every": "day", "interval": self.interval }),
+            Repeats::Weekdays => json!({ "every": "weekday" }),
+            Repeats::Weekly => json!({ "every": "week", "interval": self.interval, "on": names(self.days) }),
+            Repeats::Monthly => json!({ "every": "month", "interval": self.interval }),
+            Repeats::Yearly => json!({ "every": "year" }),
+        };
+        if matches!(self.repeats, Repeats::Monthly | Repeats::Yearly) {
+            match self.month_by {
+                MonthBy::Date => p["day"] = json!(self.day),
+                MonthBy::Weekday => {
+                    p["nth"] = if self.nth >= 5 { json!("last") } else { json!(self.nth) };
+                    p["on"] = json!(names(self.nth_days));
+                }
+                MonthBy::LastDay => p["lastDay"] = json!(true),
+            }
+        }
+        match self.ends {
+            Ends::Never => {}
+            Ends::After => p["count"] = json!(self.count),
+            Ends::On => p["until"] = json!(self.until.trim()),
+        }
+        p
+    }
+}
+
 /// An appointment being made or changed, as typed.
 #[derive(Clone, Debug)]
 pub(crate) struct AppointmentForm {
@@ -49,6 +193,19 @@ pub(crate) struct AppointmentForm {
     /// What went wrong with the last Save.
     pub(crate) said: Option<String>,
     pub(crate) focus: bool,
+    /// One occurrence of a series alone: the day it was first planned on.
+    pub(crate) occurrence: Option<i64>,
+    /// It is a series, or one of one.
+    pub(crate) recurring: bool,
+    /// The form a window opened on one occurrence can be switched to for the whole series, or
+    /// back; kept as typed.
+    pub(crate) other: Option<Box<AppointmentForm>>,
+    pub(crate) repeat: RepeatForm,
+    /// How it repeated when the window opened: the pattern is sent only when it was changed,
+    /// so that occurrences changed on their own stay so.
+    pub(crate) repeat_was: RepeatForm,
+    /// The pattern in words, as it is written for the series.
+    pub(crate) pattern: String,
 }
 
 const REMINDERS: &[(Option<i32>, &str)] = &[
@@ -122,11 +279,13 @@ impl AppointmentForm {
             reminder: if all_day { None } else { Some(15) },
             recurring: false,
             meeting: false,
+            recurrence: None,
+            occurrence: None,
         };
         Self::of(None, &a, offset)
     }
 
-    fn of(id: Option<u64>, a: &Appointment, offset: i32) -> Self {
+    pub(crate) fn of(id: Option<u64>, a: &Appointment, offset: i32) -> Self {
         let s = time::civil(a.start, offset);
         // An all-day event's last day is the one before the midnight it ends at.
         let e = time::civil(if a.all_day { a.end.saturating_sub(DAY).max(a.start) } else { a.end }, offset);
@@ -143,6 +302,12 @@ impl AppointmentForm {
             reminder: a.reminder,
             said: None,
             focus: true,
+            occurrence: a.occurrence,
+            recurring: a.recurrence.is_some() || a.recurring,
+            other: None,
+            repeat: RepeatForm::of(a, offset),
+            repeat_was: RepeatForm::of(a, offset),
+            pattern: a.recurrence.as_ref().map(|_| a.pattern_words()).unwrap_or_default(),
         }
     }
 
@@ -161,7 +326,36 @@ impl AppointmentForm {
         if let Some(id) = self.id {
             p["id"] = json!(id);
         }
+        match self.occurrence {
+            Some(day) => p["occurrence"] = json!(ymd(&date_of(day))),
+            None if self.id.is_some() => p["series"] = json!(true),
+            None => {}
+        }
+        if self.occurrence.is_none() && self.repeat != self.repeat_was {
+            p["repeat"] = self.repeat.param();
+        }
         p
+    }
+
+    /// What Delete in its window deletes: the occurrence alone, or the whole appointment.
+    pub(crate) fn delete_params(&self) -> Value {
+        match self.occurrence {
+            Some(day) => json!({ "id": self.id, "occurrence": ymd(&date_of(day)) }),
+            None => json!({ "id": self.id, "series": true }),
+        }
+    }
+
+    /// The window switched between the occurrence and the whole series.
+    pub(crate) fn switched(mut self) -> Self {
+        match self.other.take() {
+            Some(mut other) => {
+                self.focus = false;
+                other.other = Some(Box::new(self));
+                other.focus = false;
+                *other
+            }
+            None => self,
+        }
     }
 
     /// Start and end as typed, when both read as times.
@@ -374,7 +568,8 @@ impl MailUi {
         let col_w = ((rect.width() - GUTTER - 14.0) / n as f32).max(20.0);
         let col_x = |i: usize| rect.left() + GUTTER + col_w * i as f32;
         let items = self.session.calendar.items.clone();
-        let selected = self.session.calendar.selected;
+        let (selected, occurrence) = (self.session.calendar.selected, self.session.calendar.occurrence);
+        let chosen = |id: u64, a: &Appointment| selected == Some(id) && (occurrence.is_none() || a.occurrence == occurrence);
         let first = days.first().copied().unwrap_or(today);
         let last = days.last().copied().unwrap_or(first);
         let shown_from = calendar::day_start(first, off);
@@ -440,18 +635,18 @@ impl MailUi {
         let band = Rect::from_min_size(pos2(rect.left(), head.bottom()), vec2(rect.width(), band_h));
         p.hline(rect.x_range(), band.top() + 0.5, (1.0, t.line));
         p.hline(rect.x_range(), band.bottom() - 0.5, (1.0, t.line));
-        let mut band_open: Option<u64> = None;
-        let mut band_select: Option<u64> = None;
+        let mut band_open: Option<(u64, Option<i64>)> = None;
+        let mut band_select: Option<(u64, Option<i64>)> = None;
         for (row, c0, c1, (id, a)) in &placed {
             let r = Rect::from_min_max(
                 pos2(col_x(*c0) + 3.0, band.top() + 3.0 + BAND_ROW * *row as f32),
                 pos2(col_x(*c1 + 1) - 3.0, band.top() + 1.0 + BAND_ROW * (*row as f32 + 1.0)),
             );
-            let resp = self.appointment_box(ui, &p, r, *id, a, selected == Some(*id), "band");
+            let resp = self.appointment_box(ui, &p, r, *id, a, chosen(*id, a), "band");
             if resp.double_clicked() {
-                band_open = Some(*id);
+                band_open = Some((*id, a.occurrence));
             } else if resp.clicked() {
-                band_select = Some(*id);
+                band_select = Some((*id, a.occurrence));
             }
         }
         for (i, h) in hidden.iter().enumerate() {
@@ -465,8 +660,8 @@ impl MailUi {
         let scroll_to = std::mem::take(&mut self.cal_scroll);
         let mut new_at: Option<i64> = None;
         let mut clicked_empty = false;
-        let mut open: Option<u64> = None;
-        let mut select: Option<u64> = None;
+        let mut open: Option<(u64, Option<i64>)> = None;
+        let mut select: Option<(u64, Option<i64>)> = None;
         ui.scope_builder(UiBuilder::new().max_rect(hours), |ui| {
             ScrollArea::vertical().id_salt("cal-hours").auto_shrink(false).show(ui, |ui| {
                 let (canvas, resp) = ui.allocate_exact_size(vec2(hours.width().max(0.0), HOUR_H * 24.0), Sense::click());
@@ -511,11 +706,11 @@ impl MailUi {
                         let w = (col_w - 8.0) / (*of).max(1) as f32;
                         let r =
                             Rect::from_min_max(pos2(x + 2.0 + w * *col as f32, y0 + 1.0), pos2(x + 2.0 + w * (*col as f32 + 1.0) - 2.0, y1 - 1.0));
-                        let resp = self.appointment_box(ui, &p, r, id, a, selected == Some(id), "hours");
+                        let resp = self.appointment_box(ui, &p, r, id, a, chosen(id, a), "hours");
                         if resp.double_clicked() {
-                            open = Some(id);
+                            open = Some((id, a.occurrence));
                         } else if resp.clicked() {
-                            select = Some(id);
+                            select = Some((id, a.occurrence));
                         }
                     }
                     // Now, on today.
@@ -542,10 +737,10 @@ impl MailUi {
                 }
             });
         });
-        if let Some(id) = open.or(band_open) {
-            self.open_appointment(id);
-        } else if let Some(id) = select.or(band_select) {
-            self.act("calendar.select", json!({ "id": id }));
+        if let Some((id, occurrence)) = open.or(band_open) {
+            self.open_appointment(id, occurrence);
+        } else if let Some((id, occurrence)) = select.or(band_select) {
+            self.act("calendar.select", select_params(id, occurrence));
         } else if let Some(start) = new_at {
             self.appointment = Some(AppointmentForm::new_at(start, false, off));
         } else if clicked_empty {
@@ -613,16 +808,25 @@ impl MailUi {
                 clip_text(&inner, pos2(x, r.top() + 19.0), w, &one_line(&a.location), font(11.0), t.text_dim);
             }
         }
-        if a.reminder.is_some() && r.width() > 60.0 && !one_row {
-            icons::paint(&inner, Rect::from_min_size(pos2(r.right() - 16.0, r.bottom() - 16.0), vec2(11.0, 11.0)), Icon::Bell, t.text_faint);
+        // At its bottom right: a loop when it repeats (struck through when this one was changed
+        // on its own), and a bell when it has a reminder.
+        let mut x_icon = r.right() - 16.0;
+        let y_icon = if one_row { r.center().y - 5.5 } else { r.bottom() - 16.0 };
+        if a.recurring && r.width() > 48.0 {
+            icons::paint(&inner, Rect::from_min_size(pos2(x_icon, y_icon), vec2(11.0, 11.0)), recur_icon(a), t.text_dim);
+            x_icon -= 15.0;
         }
-        let resp = ui.interact(r, egui::Id::new(("cal-appt", place, id)), Sense::click());
+        if a.reminder.is_some() && r.width() > 60.0 && !one_row {
+            icons::paint(&inner, Rect::from_min_size(pos2(x_icon, y_icon), vec2(11.0, 11.0)), Icon::Bell, t.text_faint);
+        }
+        let resp = ui.interact(r, egui::Id::new(("cal-appt", place, id, a.occurrence)), Sense::click());
         let off = self.session.tz_offset_min;
         let (s, e) = (time::civil(a.start, off), time::civil(a.end, off));
         let r = &self.session.region;
         let when = if a.all_day { "All day".to_string() } else { format!("{} - {}", r.time(&s), r.time(&e)) };
         let place = if a.location.is_empty() { String::new() } else { format!("\n{}", one_line(&a.location)) };
-        resp.on_hover_text(format!("{when}\n{}{place}\nShow as: {}", one_line(&a.subject), show_as(a.busy)))
+        let repeats = if a.recurrence.is_some() { format!("\n{}", a.pattern_words()) } else { String::new() };
+        resp.on_hover_text(format!("{when}\n{}{place}\nShow as: {}{repeats}", one_line(&a.subject), show_as(a.busy)))
     }
 
     /// The month view: six weeks, each day with what is on it.
@@ -641,9 +845,9 @@ impl MailUi {
             p.text(pos2(rect.left() + w * i as f32 + 8.0, head.center().y), Align2::LEFT_CENTER, name, font(11.5), t.text_dim);
         }
         let items = self.session.calendar.items.clone();
-        let selected = self.session.calendar.selected;
-        let mut open: Option<u64> = None;
-        let mut select: Option<Option<u64>> = None;
+        let (selected, occurrence) = (self.session.calendar.selected, self.session.calendar.occurrence);
+        let mut open: Option<(u64, Option<i64>)> = None;
+        let mut select: Option<Option<(u64, Option<i64>)>> = None;
         let mut new_on: Option<i64> = None;
         let mut go: Option<i64> = None;
         for (i, day) in days.iter().enumerate() {
@@ -682,9 +886,9 @@ impl MailUi {
                     pos2(cell.left() + 3.0, cell.top() + 22.0 + MONTH_LINE * k as f32),
                     vec2(cell.width() - 6.0, MONTH_LINE - 2.0),
                 );
-                let resp = ui.interact(r, egui::Id::new(("cal-month-appt", *day, *id)), Sense::click());
+                let resp = ui.interact(r, egui::Id::new(("cal-month-appt", *day, *id, a.occurrence)), Sense::click());
                 let whole = a.all_day || a.end.saturating_sub(a.start) >= DAY;
-                let chosen = selected == Some(*id);
+                let chosen = selected == Some(*id) && (occurrence.is_none() || a.occurrence == occurrence);
                 if whole {
                     p.rect_filled(r, 2.0, if a.busy == Busy::OutOfOffice { t.away.gamma_multiply(0.3) } else { t.accent.gamma_multiply(0.2) });
                 } else if resp.hovered() {
@@ -701,11 +905,16 @@ impl MailUi {
                     x += text_width(&p, &when, font(11.0)) + 5.0;
                 }
                 let subject = if a.subject.trim().is_empty() { "(No subject)".to_string() } else { one_line(&a.subject) };
-                clip_text(&p, pos2(x, r.center().y - 7.5), r.right() - x - 2.0, &subject, font(11.5), t.text);
+                let mut right = r.right() - 2.0;
+                if a.recurring && r.width() > 80.0 {
+                    right -= 14.0;
+                    icons::paint(&p, Rect::from_min_size(pos2(right + 2.0, r.center().y - 5.0), vec2(10.0, 10.0)), recur_icon(a), t.text_dim);
+                }
+                clip_text(&p, pos2(x, r.center().y - 7.5), right - x, &subject, font(11.5), t.text);
                 if resp.double_clicked() {
-                    open = Some(*id);
+                    open = Some((*id, a.occurrence));
                 } else if resp.clicked() {
-                    select = Some(Some(*id));
+                    select = Some(Some((*id, a.occurrence)));
                 }
             }
             if on.len() > fits {
@@ -732,26 +941,43 @@ impl MailUi {
                 select = Some(None);
             }
         }
-        if let Some(id) = open {
-            self.open_appointment(id);
+        if let Some((id, occurrence)) = open {
+            self.open_appointment(id, occurrence);
         } else if let Some(day) = go {
             self.act("calendar.view", json!({ "view": "day" }));
             self.go_to_day(day);
         } else if let Some(sel) = select {
-            self.act("calendar.select", json!({ "id": sel }));
+            match sel {
+                Some((id, occurrence)) => self.act("calendar.select", select_params(id, occurrence)),
+                None => self.act("calendar.select", json!({ "id": null })),
+            }
         } else if let Some(start) = new_on {
             // A day of the month makes an all-day event, as Outlook's does.
             self.appointment = Some(AppointmentForm::new_at(start, true, off));
         }
     }
 
-    /// Open the appointment `id` in its window.
-    pub(crate) fn open_appointment(&mut self, id: u64) {
+    /// Open the appointment `id` in its window: one occurrence of a series, which the window
+    /// can switch to the whole series, or the whole appointment.
+    pub(crate) fn open_appointment(&mut self, id: u64, occurrence: Option<i64>) {
         let off = self.session.tz_offset_min;
-        if let Some((_, a)) = self.session.calendar.items.iter().find(|(i, _)| *i == id) {
-            self.appointment = Some(AppointmentForm::of(Some(id), a, off));
-            self.act("calendar.select", json!({ "id": id }));
+        let shown = self
+            .session
+            .calendar
+            .items
+            .iter()
+            .find(|(i, a)| *i == id && (occurrence.is_none() || a.occurrence == occurrence))
+            .map(|(_, a)| a.clone());
+        let Some(a) = shown else { return };
+        let mut form = AppointmentForm::of(Some(id), &a, off);
+        if a.occurrence.is_some() {
+            match self.session.appointment(id) {
+                Ok(series) => form.other = Some(Box::new(AppointmentForm::of(Some(id), &series, off))),
+                Err(e) => self.session.status = e.to_string(),
+            }
         }
+        self.appointment = Some(form);
+        self.act("calendar.select", select_params(id, a.occurrence));
     }
 
     /// A new appointment at the next half hour of the day chosen.
@@ -786,8 +1012,41 @@ impl MailUi {
                     .collect()
             })
             .unwrap_or_default();
-        let title = if form.id.is_some() { "Appointment" } else { "New Appointment" };
+        // The pattern as typed, in words, with the days it first falls on; or why it cannot be.
+        let preview = self.repeat_preview(&form);
+        let title = match (form.id, form.occurrence) {
+            (None, _) => "New Appointment",
+            (Some(_), Some(_)) => "Appointment Occurrence",
+            (Some(_), None) if form.recurring => "Appointment Series",
+            (Some(_), None) => "Appointment",
+        };
+        let mut switch = false;
         let shown = crate::dialog::Dialog::new("appointment", title, Icon::NewAppointment).show(ctx, &t, |ui| {
+            // Opened on one occurrence: this one alone, or the whole series, with no question first.
+            if form.other.is_some() || form.occurrence.is_some() {
+                ui.horizontal(|ui| {
+                    let alone = form.occurrence.is_some();
+                    if ui.selectable_label(alone, "This occurrence").clicked() && !alone {
+                        switch = true;
+                    }
+                    if ui.selectable_label(!alone, "The whole series").clicked() && alone {
+                        switch = true;
+                    }
+                });
+                ui.add_space(4.0);
+            }
+            if form.occurrence.is_some() && !form.pattern.is_empty() {
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                    icons::paint(ui.painter(), r, Icon::Recur, t.text_dim);
+                    ui.label(
+                        egui::RichText::new(format!("One occurrence of a series that {}", lower_first(&form.pattern)))
+                            .font(font(12.0))
+                            .color(t.text_dim),
+                    );
+                });
+                ui.add_space(4.0);
+            }
             if !clashes.is_empty() {
                 let words = format!("At the same time: {}", clashes.join(", "));
                 crate::dialog::callout(ui, &t, t.flag, |ui| {
@@ -834,6 +1093,10 @@ impl MailUi {
                     }
                 });
                 ui.end_row();
+                if form.occurrence.is_none() {
+                    let week_start = self.session.region.week_start;
+                    repeat_rows(ui, &t, &mut form.repeat, week_start, preview.as_ref());
+                }
             });
             ui.add_space(8.0);
             match form.span(off) {
@@ -853,7 +1116,8 @@ impl MailUi {
                 });
             }
             crate::dialog::foot(ui, &t, |ui| {
-                if form.id.is_some() && ui.add(crate::dialog::danger(&t, "Delete")).on_hover_text("Moves it to Deleted Items").clicked() {
+                let deletes = if form.occurrence.is_some() { "Deletes this occurrence alone" } else { "Moves it to Deleted Items" };
+                if form.id.is_some() && ui.add(crate::dialog::danger(&t, "Delete")).on_hover_text(deletes).clicked() {
                     ask = Some(Ask::Delete);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -869,6 +1133,10 @@ impl MailUi {
         if shown.closed || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             ask = Some(Ask::Close);
         }
+        if switch && ask.is_none() {
+            self.appointment = Some(form.switched());
+            return;
+        }
         let result = match ask {
             None => {
                 self.appointment = Some(form);
@@ -876,12 +1144,196 @@ impl MailUi {
             }
             Some(Ask::Close) => return,
             Some(Ask::Save) => self.execute(if form.id.is_some() { "calendar.change" } else { "calendar.new" }, &form.params()),
-            Some(Ask::Delete) => self.execute("calendar.delete", &json!({ "id": form.id })),
+            Some(Ask::Delete) => self.execute("calendar.delete", &form.delete_params()),
         };
         if let Err(e) = result {
             form.said = Some(e);
             self.appointment = Some(form);
         }
+    }
+}
+
+/// The parameters `calendar.select` takes for an appointment or one occurrence of it.
+fn select_params(id: u64, occurrence: Option<i64>) -> Value {
+    match occurrence {
+        Some(day) => json!({ "id": id, "occurrence": ymd(&date_of(day)) }),
+        None => json!({ "id": id }),
+    }
+}
+
+/// The mark of a series, struck through on an occurrence changed on its own.
+fn recur_icon(a: &Appointment) -> Icon {
+    let changed = a.occurrence.is_some_and(|d| a.recurrence.as_ref().is_some_and(|r| r.exception_on(d).is_some()));
+    if changed { Icon::RecurChanged } else { Icon::Recur }
+}
+
+fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(first) => first.to_lowercase().chain(c).collect(),
+        None => String::new(),
+    }
+}
+
+/// A day as "Mon 12 Oct".
+fn short_day(day: i64) -> String {
+    let c = date_of(day);
+    let name = WEEKDAYS.get(usize::try_from(c.weekday).unwrap_or(0)).copied().unwrap_or("");
+    format!("{name} {} {}", c.day, c.month_name().chars().take(3).collect::<String>())
+}
+
+/// What the Repeats rows say under the pattern: in words with its first days, or the reason
+/// it cannot be saved.
+type Preview = Result<Option<(String, Vec<i64>)>, String>;
+
+impl MailUi {
+    /// The pattern of `form` as the engine would make it, not saved.
+    pub(crate) fn repeat_preview(&self, form: &AppointmentForm) -> Option<Preview> {
+        if form.occurrence.is_some() || form.repeat.repeats == Repeats::Never {
+            return None;
+        }
+        let off = self.session.tz_offset_min;
+        let (start, end) = form.span(off)?;
+        let a = Appointment {
+            subject: String::new(),
+            location: String::new(),
+            start,
+            end: end.max(start),
+            all_day: form.all_day,
+            busy: form.busy,
+            reminder: None,
+            recurring: false,
+            meeting: false,
+            recurrence: None,
+            occurrence: None,
+        };
+        Some(match self.session.repeat_preview(&form.repeat.param(), &a) {
+            Ok(Some(r)) => {
+                let first = r.start_day;
+                let next: Vec<i64> = r.days(first, first.saturating_add(800)).into_iter().take(4).collect();
+                let mut words = format!("Occurs {}", r.words());
+                match r.end {
+                    End::Never => {}
+                    End::After(n) => words.push_str(&format!(", {n} times")),
+                    End::On(day) => words.push_str(&format!(", until {}", short_day(day))),
+                }
+                Ok(Some((words, next)))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        })
+    }
+}
+
+/// The rows of the appointment window's grid that say how it repeats.
+fn repeat_rows(ui: &mut Ui, t: &crate::theme::Tokens, f: &mut RepeatForm, week_start: u32, preview: Option<&Preview>) {
+    let label = |ui: &mut Ui, text: &str| {
+        ui.label(egui::RichText::new(text).color(t.text_dim));
+    };
+    label(ui, "Repeats");
+    let name = REPEATS.iter().find(|(r, _)| *r == f.repeats).map_or("", |(_, n)| *n);
+    egui::ComboBox::from_id_salt("appt-repeats").selected_text(name).width(180.0).show_ui(ui, |ui| {
+        for (r, name) in REPEATS {
+            ui.selectable_value(&mut f.repeats, *r, *name);
+        }
+    });
+    ui.end_row();
+    if f.repeats == Repeats::Never {
+        return;
+    }
+    let unit = match f.repeats {
+        Repeats::Daily => Some(("day", "days", 999)),
+        Repeats::Weekly => Some(("week", "weeks", 99)),
+        Repeats::Monthly => Some(("month", "months", 99)),
+        _ => None,
+    };
+    if let Some((one, many, most)) = unit {
+        label(ui, "Every");
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut f.interval).range(1..=most).speed(0.1));
+            ui.label(if f.interval == 1 { one } else { many });
+        });
+        ui.end_row();
+    }
+    if f.repeats == Repeats::Weekly {
+        label(ui, "On");
+        ui.horizontal(|ui| {
+            for i in 0..7u32 {
+                let d = (week_start + i) % 7;
+                let bit = 1u8 << d;
+                let on = f.days & bit != 0;
+                let name = WEEKDAYS.get(d as usize).copied().unwrap_or("");
+                // A week has at least one day: the last one cannot be taken off.
+                if ui.selectable_label(on, name).clicked() && (!on || f.days != bit) {
+                    f.days ^= bit;
+                }
+            }
+        });
+        ui.end_row();
+    }
+    if matches!(f.repeats, Repeats::Monthly | Repeats::Yearly) {
+        label(ui, "On");
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut f.month_by, MonthBy::Date, "Day");
+                ui.add_enabled(f.month_by == MonthBy::Date, egui::DragValue::new(&mut f.day).range(1..=31).speed(0.1));
+            });
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut f.month_by, MonthBy::Weekday, "The");
+                ui.add_enabled_ui(f.month_by == MonthBy::Weekday, |ui| {
+                    let nth = NTH.iter().find(|(n, _)| *n == f.nth).map_or("first", |(_, w)| *w);
+                    egui::ComboBox::from_id_salt("appt-nth").selected_text(nth).width(80.0).show_ui(ui, |ui| {
+                        for (n, w) in NTH {
+                            ui.selectable_value(&mut f.nth, *n, *w);
+                        }
+                    });
+                    let which = NTH_DAYS.iter().find(|(m, _)| *m == f.nth_days).map_or("day", |(_, w)| *w);
+                    egui::ComboBox::from_id_salt("appt-nth-days").selected_text(which).width(110.0).show_ui(ui, |ui| {
+                        for (m, w) in NTH_DAYS {
+                            ui.selectable_value(&mut f.nth_days, *m, *w);
+                        }
+                    });
+                });
+            });
+            ui.radio_value(&mut f.month_by, MonthBy::LastDay, "The last day of the month");
+        });
+        ui.end_row();
+    }
+    label(ui, "Ends");
+    ui.vertical(|ui| {
+        ui.radio_value(&mut f.ends, Ends::Never, "Never");
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.ends, Ends::After, "After");
+            ui.add_enabled(f.ends == Ends::After, egui::DragValue::new(&mut f.count).range(1..=recur::MAX_COUNT).speed(0.2));
+            ui.label("times");
+        });
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.ends, Ends::On, "On");
+            ui.add_enabled(
+                f.ends == Ends::On,
+                LineEdit::new(&mut f.until, egui::Id::new("appt-until")).desired_width(110.0).char_limit(10).hint("YYYY-MM-DD", None),
+            );
+        });
+    });
+    ui.end_row();
+    match preview {
+        Some(Ok(Some((words, next)))) => {
+            ui.label("");
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(words).font(font(12.0)).color(t.text));
+                if !next.is_empty() {
+                    let days: Vec<String> = next.iter().map(|d| short_day(*d)).collect();
+                    ui.label(egui::RichText::new(format!("First on {}", days.join(", "))).font(font(12.0)).color(t.text_dim));
+                }
+            });
+            ui.end_row();
+        }
+        Some(Err(e)) => {
+            ui.label("");
+            ui.label(egui::RichText::new(one_line(e)).font(font(12.0)).color(t.danger));
+            ui.end_row();
+        }
+        Some(Ok(None)) | None => {}
     }
 }
 

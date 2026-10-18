@@ -6,9 +6,14 @@
 //! in UTC. An item that lacks them is read from PidTagStartDate and PidTagEndDate
 //! ([MS-OXPROPS] 2.1271 and 2.684), which Outlook writes beside them. What is written here is
 //! what [MS-OXOCAL] 3.1.4.1 asks a client to set for an appointment that is not a meeting.
+//!
+//! A recurring appointment is one item with a pattern (`recur`), shown as one occurrence on
+//! each day the pattern falls on. An occurrence changed on its own is an exception: kept in
+//! the pattern and, as [MS-OXOCAL] 2.2.10 asks, as a hidden attached item of its own.
 
 use crate::props::{NameId, NamedKey, PropValue, pid, pset};
-use crate::{Item, time};
+use crate::recur::{self, Exception, Recurrence};
+use crate::{Attachment, Item, time};
 
 /// PSETID_Appointment {00062002-0000-0000-C000-000000000046} ([MS-OXPROPS] 1.3.2).
 pub const PSETID_APPOINTMENT: [u8; 16] = [0x02, 0x20, 0x06, 0x00, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
@@ -28,7 +33,30 @@ mod lid {
     pub const STATE_FLAGS: u32 = 0x8217;
     pub const RECURRING: u32 = 0x8223;
     pub const IS_RECURRING: u32 = 0x8E2C;
+    pub const FEXCEPTIONAL_BODY: u32 = 0x8206;
+    pub const EXCEPTION_REPLACE_TIME: u32 = 0x8228;
+    pub const RECURRENCE_TYPE: u32 = 0x8231;
+    pub const RECURRENCE_PATTERN: u32 = 0x8232;
+    pub const TIME_ZONE_STRUCT: u32 = 0x8233;
+    pub const TIME_ZONE_DESCRIPTION: u32 = 0x8234;
+    pub const CLIP_START: u32 = 0x8235;
+    pub const CLIP_END: u32 = 0x8236;
 }
+
+/// Properties of an exception's attachment ([MS-OXOCAL] 2.2.10.1, [MS-OXPROPS]).
+mod att {
+    pub const FLAGS: u16 = 0x3714;
+    pub const EXCEPTION_REPLACE_TIME: u16 = 0x7FF9;
+    pub const EXCEPTION_START_TIME: u16 = 0x7FFB;
+    pub const EXCEPTION_END_TIME: u16 = 0x7FFC;
+    /// afException: the attachment is a changed occurrence.
+    pub const AF_EXCEPTION: i32 = 0x2;
+    /// The message class of an exception's own item ([MS-OXOCAL] 2.2.10.1.1).
+    pub const CLASS: &str = "IPM.OLE.CLASS.{00061055-0000-0000-C000-000000000046}";
+}
+
+/// [MS-OXOCAL] 2.2.1.14: the ClipEnd of a series that never ends, 31 August 4500 at 23:59.
+const CLIP_NEVER: i64 = 0x0CB3_4557_A3DD_4000;
 
 /// Property ids of the common property set ([MS-OXCMSG], [MS-OXORMDR]).
 mod common {
@@ -111,10 +139,16 @@ pub struct Appointment {
     pub busy: Busy,
     /// Minutes before the start a reminder is given, when one is set.
     pub reminder: Option<i32>,
-    /// It repeats; only its first time is known here until recurrence patterns are read.
+    /// It repeats. Its pattern is `recurrence` when it could be read; when it could not, only
+    /// its first time is shown, and the pattern is kept as it was.
     pub recurring: bool,
     /// A meeting: it has attendees ([MS-OXOCAL] 2.2.1.10, asfMeeting).
     pub meeting: bool,
+    /// How it repeats ([MS-OXOCAL] 2.2.1.44.5). On a series, `start` and `end` are those of its
+    /// first occurrence.
+    pub recurrence: Option<Recurrence>,
+    /// For one occurrence of a series: the local day it was first planned on.
+    pub occurrence: Option<i64>,
 }
 
 fn key(guid: [u8; 16], id: u32) -> NamedKey {
@@ -188,6 +222,10 @@ impl Appointment {
             .then(|| i32_of(named(item, pset::PSETID_COMMON, common::REMINDER_DELTA)).unwrap_or(15).clamp(0, 60 * 24 * 7 * 52));
         let recurring = bool_of(named(item, a, lid::RECURRING)).or_else(|| bool_of(named(item, a, lid::IS_RECURRING))).unwrap_or(false);
         let meeting = i32_of(named(item, a, lid::STATE_FLAGS)).is_some_and(|f| f & 1 != 0);
+        let recurrence = match named(item, a, lid::RECUR) {
+            Some(PropValue::Binary(b)) if recurring => Recurrence::read(b),
+            _ => None,
+        };
         Some(Self {
             subject: item.subject(),
             location,
@@ -198,7 +236,162 @@ impl Appointment {
             reminder,
             recurring,
             meeting,
+            recurrence,
+            occurrence: None,
         })
+    }
+
+    /// Minutes the series' own time is ahead of UTC, as its first occurrence shows it: the
+    /// pattern's times are local ([MS-OXOCAL] 2.2.1.44.5), the start is UTC. 0 when there is no
+    /// pattern, or the two do not agree on a time zone that can be.
+    /// Of the series itself, not one occurrence of it, which may have been moved.
+    pub fn series_offset(&self) -> i64 {
+        let Some(r) = &self.recurrence else { return 0 };
+        let local = recur::minutes_of_day(r.start_day).saturating_add(i64::from(r.start_offset));
+        let off = local.saturating_sub(self.start.div_euclid(MINUTE));
+        if off.abs() <= 16 * 60 { off } else { 0 }
+    }
+
+    /// UTC FILETIME ticks of local minutes since 1601 in the series' time.
+    fn utc(&self, local: i64) -> i64 {
+        local.saturating_sub(self.series_offset()).saturating_mul(MINUTE)
+    }
+
+    /// Local minutes since 1601 in the series' time of UTC FILETIME ticks.
+    fn local(&self, utc: i64) -> i64 {
+        utc.div_euclid(MINUTE).saturating_add(self.series_offset())
+    }
+
+    /// The local day, in the series' time, that `utc` falls on.
+    pub fn series_day(&self, utc: i64) -> i64 {
+        recur::day_of_minutes(self.local(utc))
+    }
+
+    /// When the occurrence first planned on `day` was planned for, UTC; `None` when the series
+    /// does not fall on that day.
+    pub fn planned(&self, day: i64) -> Option<(i64, i64)> {
+        let r = self.recurrence.as_ref()?;
+        if !r.falls_on(day) {
+            return None;
+        }
+        let start = self.utc(recur::minutes_of_day(day).saturating_add(i64::from(r.start_offset)));
+        Some((start, start.saturating_add(self.end.saturating_sub(self.start))))
+    }
+
+    /// The occurrence first planned on `day` as it is now, changed or not; `None` when it was
+    /// deleted or the series does not fall on that day.
+    pub fn occurrence_of(&self, day: i64) -> Option<Self> {
+        let r = self.recurrence.as_ref()?;
+        let (from, to) = match r.exception_on(day) {
+            Some(e) => (self.utc(e.start), self.utc(e.end).saturating_add(1)),
+            None if r.taken_out(day) => return None,
+            None => {
+                let (start, end) = self.planned(day)?;
+                (start, end.saturating_add(1))
+            }
+        };
+        self.occurrences(from, to).into_iter().find(|o| o.occurrence == Some(day))
+    }
+
+    /// One occurrence of the series, first planned on `day`.
+    fn instance(&self, day: i64, start: i64, end: i64) -> Self {
+        let mut a = self.clone();
+        a.occurrence = Some(day);
+        a.recurring = true;
+        a.start = start;
+        a.end = end.clamp(start, start.saturating_add(MAX_DAYS.saturating_mul(DAY)));
+        a
+    }
+
+    /// What is shown of it in `[from, to)`: itself, or each occurrence of a series as it falls
+    /// now, earliest first, those deleted left out and those changed as they were changed.
+    pub fn occurrences(&self, from: i64, to: i64) -> Vec<Self> {
+        let Some(r) = &self.recurrence else {
+            return if self.overlaps(from, to) { vec![self.clone()] } else { Vec::new() };
+        };
+        let length = self.end.saturating_sub(self.start);
+        let first = self.series_day(from.saturating_sub(length));
+        let last = self.series_day(to).saturating_add(1);
+        let mut out = Vec::new();
+        for day in r.days(first, last) {
+            if r.taken_out(day) {
+                continue;
+            }
+            let start = self.utc(recur::minutes_of_day(day).saturating_add(i64::from(r.start_offset)));
+            let a = self.instance(day, start, start.saturating_add(length));
+            if a.overlaps(from, to) {
+                out.push(a);
+            }
+        }
+        for e in &r.exceptions {
+            let mut a = self.instance(recur::day_of_minutes(e.original), self.utc(e.start), self.utc(e.end));
+            if let Some(s) = &e.subject {
+                a.subject = s.clone();
+            }
+            if let Some(l) = &e.location {
+                a.location = l.clone();
+            }
+            if let Some(b) = e.busy {
+                a.busy = Busy::of(b);
+            }
+            if let Some(all) = e.sub_type {
+                a.all_day = all != 0;
+            }
+            a.reminder = match (e.reminder_set, e.reminder_delta) {
+                (Some(false), _) => None,
+                (Some(true), delta) => Some(delta.or(self.reminder).unwrap_or(15).clamp(0, 60 * 24 * 7 * 52)),
+                (None, Some(delta)) if self.reminder.is_some() => Some(delta.clamp(0, 60 * 24 * 7 * 52)),
+                (None, _) => self.reminder,
+            };
+            if a.overlaps(from, to) {
+                out.push(a);
+            }
+        }
+        out.sort_by_key(|a| (a.start, std::cmp::Reverse(a.end)));
+        out
+    }
+
+    /// The occurrence first planned on `day` changed to be as `to` is: its times, subject,
+    /// place, how it is shown and its reminder, each kept as its own only where it differs
+    /// from the series'. `false` when this is not a series that falls on `day`.
+    pub fn change_occurrence(&mut self, day: i64, to: &Self) -> bool {
+        let Some((planned, _)) = self.planned(day) else { return false };
+        let (start, end, original) = (self.local(to.start), self.local(to.end.max(to.start)), self.local(planned));
+        let differs = |a: &str, b: &str| (a != b).then(|| b.to_string());
+        let e = Exception {
+            start,
+            end,
+            original,
+            subject: differs(&self.subject, &to.subject),
+            location: differs(&self.location, &to.location),
+            busy: (self.busy != to.busy).then(|| to.busy.code()),
+            sub_type: (self.all_day != to.all_day).then(|| u32::from(to.all_day)),
+            reminder_set: (self.reminder.is_some() != to.reminder.is_some()).then_some(to.reminder.is_some()),
+            reminder_delta: to.reminder.filter(|m| Some(*m) != self.reminder),
+            ..Exception::default()
+        };
+        match self.recurrence.as_mut() {
+            Some(r) => {
+                r.set_exception(e);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The occurrence first planned on `day` deleted. `false` when this is not a series that
+    /// falls on `day`.
+    pub fn delete_occurrence(&mut self, day: i64) -> bool {
+        if self.planned(day).is_none() {
+            return false;
+        }
+        match self.recurrence.as_mut() {
+            Some(r) => {
+                r.delete_occurrence(day);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Minutes it lasts.
@@ -233,8 +426,17 @@ impl Appointment {
         if named(item, a, lid::STATE_FLAGS).is_none() {
             set_named(item, a, lid::STATE_FLAGS, PropValue::Int32(0));
         }
-        if named(item, a, lid::RECUR).is_none() {
-            set_named(item, a, lid::RECURRING, PropValue::Bool(false));
+        match &self.recurrence {
+            Some(r) => self.write_recurrence(item, r),
+            // A pattern not read here is kept as it was.
+            None if self.recurring && named(item, a, lid::RECUR).is_some() => {}
+            None => {
+                for id in [lid::RECUR, lid::RECURRENCE_TYPE, lid::RECURRENCE_PATTERN, lid::CLIP_START, lid::CLIP_END] {
+                    remove_named(item, a, id);
+                }
+                set_named(item, a, lid::RECURRING, PropValue::Bool(false));
+                item.attachments.retain(|at| !is_exception(at));
+            }
         }
         match self.reminder {
             Some(minutes) => {
@@ -252,6 +454,98 @@ impl Appointment {
         }
     }
 
+    /// The pattern and what [MS-OXOCAL] 3.1.4.1.2 asks be set beside it, and an attached item
+    /// for each changed occurrence ([MS-OXOCAL] 2.2.10.1), those of occurrences no longer
+    /// changed taken away.
+    fn write_recurrence(&self, item: &mut Item, r: &Recurrence) {
+        let a = PSETID_APPOINTMENT;
+        let off = self.series_offset();
+        set_named(item, a, lid::RECUR, PropValue::Binary(r.write()));
+        set_named(item, a, lid::RECURRING, PropValue::Bool(true));
+        set_named(item, a, lid::RECURRENCE_TYPE, PropValue::Int32(r.freq.recurrence_type()));
+        set_named(item, a, lid::RECURRENCE_PATTERN, PropValue::String(self.pattern_words()));
+        set_named(item, a, lid::CLIP_START, PropValue::Time(self.utc(recur::minutes_of_day(r.start_day))));
+        let clip_end = match r.end {
+            recur::End::Never => CLIP_NEVER,
+            _ => self.utc(recur::minutes_of_day(r.end_day)),
+        };
+        set_named(item, a, lid::CLIP_END, PropValue::Time(clip_end));
+        // The zone the pattern's times are in, as a TimeZoneStruct ([MS-OXOCAL] 2.2.1.39) with
+        // no daylight saving: only where the item does not already say which zone it is.
+        if named(item, a, lid::TIME_ZONE_STRUCT).is_none() {
+            let bias = i32::try_from(-off).unwrap_or(0);
+            let mut tz = Vec::with_capacity(48);
+            tz.extend_from_slice(&bias.to_le_bytes());
+            tz.extend_from_slice(&[0u8; 44]);
+            set_named(item, a, lid::TIME_ZONE_STRUCT, PropValue::Binary(tz));
+            let (h, m) = (off.abs() / 60, off.abs() % 60);
+            let sign = if off < 0 { '-' } else { '+' };
+            set_named(item, a, lid::TIME_ZONE_DESCRIPTION, PropValue::String(format!("(UTC{sign}{h:02}:{m:02})")));
+        }
+        // An attachment for each changed occurrence, found again by when it was first planned.
+        let replaced: Vec<i64> = r.exceptions.iter().map(|e| self.utc(e.original)).collect();
+        item.attachments.retain(|at| !is_exception(at) || at.props.time(att::EXCEPTION_REPLACE_TIME).is_some_and(|t| replaced.contains(&t)));
+        for (e, at_time) in r.exceptions.iter().zip(&replaced) {
+            let day = recur::day_of_minutes(e.original);
+            let Some(shown) = self.occurrences(self.utc(e.start), self.utc(e.end).saturating_add(1)).into_iter().find(|o| o.occurrence == Some(day))
+            else {
+                continue;
+            };
+            let found = item.attachments.iter().position(|at| is_exception(at) && at.props.time(att::EXCEPTION_REPLACE_TIME) == Some(*at_time));
+            let at = match found.and_then(|i| item.attachments.get_mut(i)) {
+                Some(at) => at,
+                None => {
+                    item.attachments.push(Attachment::default());
+                    let Some(at) = item.attachments.last_mut() else { continue };
+                    at
+                }
+            };
+            at.props.set(pid::ATTACH_METHOD, PropValue::Int32(5));
+            at.props.set(pid::ATTACHMENT_HIDDEN, PropValue::Bool(true));
+            at.props.set(att::FLAGS, PropValue::Int32(att::AF_EXCEPTION));
+            at.props.set(pid::RENDERING_POSITION, PropValue::Int32(-1));
+            at.props.set_str(pid::DISPLAY_NAME, &shown.subject);
+            at.props.set(att::EXCEPTION_REPLACE_TIME, PropValue::Time(*at_time));
+            // [MS-OXOCAL] 2.2.10.1.2 and 2.2.10.1.3: in the series' own time.
+            at.props.set(att::EXCEPTION_START_TIME, PropValue::Time(e.start.saturating_mul(MINUTE)));
+            at.props.set(att::EXCEPTION_END_TIME, PropValue::Time(e.end.saturating_mul(MINUTE)));
+            let mut inner = at.embedded.take().map_or_else(Item::default, |b| *b);
+            inner.props.set_str(pid::MESSAGE_CLASS, att::CLASS);
+            let mut one = shown.clone();
+            one.recurrence = None;
+            one.recurring = false;
+            one.occurrence = None;
+            one.write(&mut inner);
+            inner.props.set_str(pid::MESSAGE_CLASS, att::CLASS);
+            set_named(&mut inner, a, lid::EXCEPTION_REPLACE_TIME, PropValue::Time(*at_time));
+            set_named(&mut inner, a, lid::FEXCEPTIONAL_BODY, PropValue::Bool(e.exceptional_body));
+            at.embedded = Some(Box::new(inner));
+        }
+    }
+
+    /// The pattern as PidLidRecurrencePattern says it ([MS-OXOCAL] 2.2.1.46).
+    pub fn pattern_words(&self) -> String {
+        let Some(r) = &self.recurrence else { return String::new() };
+        // The series' own times, kept in its pattern: an occurrence changed on its own may start
+        // at another.
+        let clock = |minutes: u32| (minutes / 60 % 24, minutes % 60);
+        let (first, last) = (clock(r.start_offset), clock(r.end_offset));
+        let date = |d: i64| {
+            let c = time::civil(time::from_unix(d.saturating_mul(86_400)), 0);
+            format!("{:04}-{:02}-{:02}", c.year, c.month, c.day)
+        };
+        let mut words = format!("Occurs {} effective {}", r.words(), date(r.start_day));
+        match r.end {
+            recur::End::Never => {}
+            recur::End::After(n) => words.push_str(&format!(" {n} times")),
+            recur::End::On(d) => words.push_str(&format!(" until {}", date(d))),
+        }
+        if !self.all_day {
+            words.push_str(&format!(" from {:02}:{:02} to {:02}:{:02}", first.0, first.1, last.0, last.1));
+        }
+        words
+    }
+
     /// A new appointment item.
     pub fn item(&self) -> Item {
         let mut it = Item::default();
@@ -261,6 +555,12 @@ impl Appointment {
         self.write(&mut it);
         it
     }
+}
+
+/// Whether an attachment is a changed occurrence of its series ([MS-OXOCAL] 2.2.10.1.1).
+pub fn is_exception(at: &Attachment) -> bool {
+    at.props.i32(att::FLAGS).is_some_and(|f| f & att::AF_EXCEPTION != 0)
+        || at.embedded.as_ref().is_some_and(|e| e.message_class().eq_ignore_ascii_case(att::CLASS))
 }
 
 /// How many days a view shows, and from which.
@@ -444,6 +744,8 @@ mod tests {
             reminder: Some(30),
             recurring: false,
             meeting: false,
+            recurrence: None,
+            occurrence: None,
         };
         let item = a.item();
         assert!(is_appointment(&item));
@@ -499,6 +801,108 @@ mod tests {
             assert!(parse_local(bad, 0).is_none(), "{bad}");
         }
         assert!(parse_local("2028-02-29", 0).is_some());
+    }
+
+    /// A weekly series on Tuesdays at 09:00 for half an hour, at UTC+02:00, from 2026-10-06.
+    fn weekly() -> Appointment {
+        let off = 120;
+        let start = parse_local("2026-10-06 09:00", off).unwrap();
+        let day = day_of(start, off);
+        let r = Recurrence::new(recur::Freq::Weekly, recur::Rule::Week { days: 1 << 2 }, 1, recur::End::After(5), day, 540, 570, 1);
+        Appointment {
+            subject: "Stand-up".into(),
+            location: "Room 1".into(),
+            start,
+            end: start + 30 * MINUTE,
+            all_day: false,
+            busy: Busy::Busy,
+            reminder: Some(10),
+            recurring: true,
+            meeting: false,
+            recurrence: Some(r),
+            occurrence: None,
+        }
+    }
+
+    #[test]
+    fn a_series_is_shown_on_each_day_it_falls_on() {
+        let off = 120;
+        let a = weekly();
+        assert_eq!(a.series_offset(), 120);
+        let all = a.occurrences(parse_local("2026-10-01", off).unwrap(), parse_local("2026-12-01", off).unwrap());
+        let days: Vec<i64> = all.iter().map(|o| day_of(o.start, off)).collect();
+        let tue = |d: &str| day_of(at(&format!("{d} 12:00")), 0);
+        assert_eq!(days, ["2026-10-06", "2026-10-13", "2026-10-20", "2026-10-27", "2026-11-03"].map(tue).to_vec(), "five, as it ends");
+        assert!(all.iter().all(|o| o.recurring && o.occurrence == Some(day_of(o.start, off)) && o.minutes() == 30));
+        assert_eq!(time::civil(all[2].start, off).hour, 9, "at nine where it was made");
+        // Only those in the range, one ending at its start is not in it.
+        let one = a.occurrences(parse_local("2026-10-13 09:30", off).unwrap(), parse_local("2026-10-20 09:01", off).unwrap());
+        assert_eq!(one.len(), 1);
+        // Read back from the item as written.
+        let item = a.item();
+        let back = Appointment::of(&item).unwrap();
+        assert_eq!(back, a);
+        assert!(
+            back.pattern_words().starts_with("Occurs every week on Tuesday effective 2026-10-06 5 times from 09:00 to 09:30"),
+            "{}",
+            back.pattern_words()
+        );
+        assert!(named(&item, PSETID_APPOINTMENT, lid::TIME_ZONE_STRUCT).is_some());
+    }
+
+    #[test]
+    fn one_occurrence_is_changed_or_deleted_and_the_rest_are_not() {
+        let off = 120;
+        let mut a = weekly();
+        let second = day_of(parse_local("2026-10-13", off).unwrap(), off);
+        let third = second + 7;
+        let mut moved = a.occurrences(parse_local("2026-10-13", off).unwrap(), parse_local("2026-10-14", off).unwrap()).remove(0);
+        moved.start = parse_local("2026-10-14 15:00", off).unwrap();
+        moved.end = moved.start + 60 * MINUTE;
+        moved.subject = "Stand-up, moved".into();
+        assert!(a.change_occurrence(second, &moved));
+        assert!(a.delete_occurrence(third));
+        assert!(!a.delete_occurrence(second + 1), "not a day it falls on");
+        let mut item = a.item();
+        let shown = Appointment::of(&item).unwrap().occurrences(parse_local("2026-10-01", off).unwrap(), parse_local("2026-12-01", off).unwrap());
+        let said: Vec<(String, u32, &str)> =
+            shown.iter().map(|o| (format!("{}", time::civil(o.start, off).day), time::civil(o.start, off).hour, o.subject.as_str())).collect();
+        assert_eq!(
+            said,
+            [("6".into(), 9, "Stand-up"), ("14".into(), 15, "Stand-up, moved"), ("27".into(), 9, "Stand-up"), ("3".into(), 9, "Stand-up")]
+        );
+        assert_eq!(shown[1].location, "Room 1", "what was not changed is the series'");
+        assert_eq!(shown[1].occurrence, Some(second));
+        // The changed one has a hidden attached item of its own, as Outlook keeps it.
+        let ex: Vec<&Attachment> = item.attachments.iter().filter(|at| is_exception(at)).collect();
+        assert_eq!(ex.len(), 1);
+        let inner = ex[0].embedded.as_ref().unwrap();
+        assert_eq!(inner.subject(), "Stand-up, moved");
+        assert_eq!(ex[0].props.time(att::EXCEPTION_REPLACE_TIME), a.planned(second).map(|p| p.0));
+        assert_eq!(Appointment::of(inner).map(|i| i.start), Some(shown[1].start));
+        // Changed back to a plain appointment, the pattern and the attachment go.
+        let mut plain = Appointment::of(&item).unwrap();
+        plain.recurrence = None;
+        plain.recurring = false;
+        plain.write(&mut item);
+        assert!(item.attachments.is_empty());
+        assert_eq!(Appointment::of(&item).unwrap().occurrences(0, i64::MAX).len(), 1);
+    }
+
+    #[test]
+    fn a_pattern_that_cannot_be_read_is_kept_and_shown_once() {
+        let mut item = weekly().item();
+        set_named(&mut item, PSETID_APPOINTMENT, lid::RECUR, PropValue::Binary(vec![0xFF; 7]));
+        let a = Appointment::of(&item).unwrap();
+        assert!(a.recurring && a.recurrence.is_none());
+        assert_eq!(a.occurrences(0, i64::MAX).len(), 1);
+        a.write(&mut item);
+        assert_eq!(named(&item, PSETID_APPOINTMENT, lid::RECUR), Some(&PropValue::Binary(vec![0xFF; 7])));
+        // A start that does not agree with its pattern on any time zone is taken as UTC.
+        let mut odd = weekly();
+        odd.start += 5 * DAY;
+        assert_eq!(odd.series_offset(), 0);
+        assert!(odd.occurrences(i64::MIN, i64::MAX).len() <= 5);
     }
 
     #[test]

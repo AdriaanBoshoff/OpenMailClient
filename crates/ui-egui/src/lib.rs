@@ -184,7 +184,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     },
     UiCommand { id: "ui.bodyFormat", label: "Read as Plain Text", params: r#"{"format": "formatted" | "plain"}; none switches"# },
     UiCommand { id: "ui.about", label: "About OpenMailClient", params: "" },
-    UiCommand { id: "ui.appointment", label: "New Appointment", params: r#"{"id": an appointment's id to open it; none for a new one}"# },
+    UiCommand {
+        id: "ui.appointment",
+        label: "New Appointment",
+        params: r#"{"id": an appointment's id to open it; none for a new one, "occurrence": "YYYY-MM-DD" to open one occurrence of a series (default: the one chosen)}"#,
+    },
     UiCommand { id: "ui.quit", label: "Exit", params: "" },
 ];
 
@@ -803,10 +807,20 @@ impl MailUi {
             }
             "ui.appointment" => match number("id") {
                 Some(id) => {
-                    if !self.session.calendar.items.iter().any(|(i, _)| *i == id) {
+                    // One occurrence: the one named, or the one chosen.
+                    let occurrence = match params.get("occurrence").and_then(Value::as_str) {
+                        Some(text) => Some(
+                            openmailclient_model::calendar::parse_local(text, 0)
+                                .map(|t| openmailclient_model::calendar::day_of(t, 0))
+                                .ok_or_else(|| "\"occurrence\" is a date written YYYY-MM-DD".to_string())?,
+                        ),
+                        None if self.session.calendar.selected == Some(id) => self.session.calendar.occurrence,
+                        None => None,
+                    };
+                    if !self.session.calendar.items.iter().any(|(i, a)| *i == id && (occurrence.is_none() || a.occurrence == occurrence)) {
                         return Err("That appointment is not among those shown".to_string());
                     }
-                    self.open_appointment(id);
+                    self.open_appointment(id, occurrence);
                 }
                 None if self.session.is_enabled("calendar.new") => self.new_appointment(),
                 None => return Err("No data file open has a calendar that can be written".to_string()),

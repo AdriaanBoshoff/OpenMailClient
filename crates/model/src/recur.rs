@@ -598,6 +598,45 @@ impl Recurrence {
         self.walk_days(from, to, MAX_WALK, true)
     }
 
+    /// The occurrence first planned on `day` changed as `e` says, in the place of any change
+    /// made to it before ([MS-OXOCAL] 2.2.1.44.5: its day among the deleted ones, the day it
+    /// now falls on among the modified ones).
+    pub fn set_exception(&mut self, e: Exception) {
+        let day = day_of_minutes(e.original);
+        self.exceptions.retain(|x| day_of_minutes(x.original) != day);
+        self.exceptions.push(e);
+        self.exceptions.sort_by_key(|x| x.start);
+        if !self.deleted.contains(&day) {
+            self.deleted.push(day);
+            self.deleted.sort_unstable();
+        }
+        self.remark();
+    }
+
+    /// The occurrence first planned on `day` deleted, with any change made to it.
+    pub fn delete_occurrence(&mut self, day: i64) {
+        self.exceptions.retain(|x| day_of_minutes(x.original) != day);
+        if !self.deleted.contains(&day) {
+            self.deleted.push(day);
+            self.deleted.sort_unstable();
+        }
+        self.remark();
+    }
+
+    /// Every occurrence as first planned again.
+    pub fn clear_exceptions(&mut self) {
+        self.exceptions.clear();
+        self.deleted.clear();
+        self.modified.clear();
+    }
+
+    fn remark(&mut self) {
+        let mut days: Vec<i64> = self.exceptions.iter().map(|x| day_of_minutes(x.start)).collect();
+        days.sort_unstable();
+        days.dedup();
+        self.modified = days;
+    }
+
     /// Whether the occurrence of `day` was deleted or changed.
     pub fn taken_out(&self, day: i64) -> bool {
         self.deleted.contains(&day)
