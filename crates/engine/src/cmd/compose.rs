@@ -209,6 +209,12 @@ pub(super) fn start_to(s: &mut Session, to: String) {
     s.compose = Some(Draft { kind: "New", to, ..Draft::default() });
 }
 
+/// Start writing `draft`, setting aside any message that was being written.
+pub(super) fn start_with(s: &mut Session, draft: Draft) {
+    set_aside(s);
+    s.compose = Some(draft);
+}
+
 fn new(s: &mut Session, _: &Value) -> CmdResult {
     set_aside(s);
     s.compose = Some(Draft { kind: "New", ..Draft::default() });

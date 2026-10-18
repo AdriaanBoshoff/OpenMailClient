@@ -237,7 +237,7 @@ fn today(s: &mut Session, _: &Value) -> CmdResult {
     ok()
 }
 
-fn date_param(s: &Session, p: &Value, key: &str) -> Result<Option<i64>, EngineError> {
+pub(super) fn date_param(s: &Session, p: &Value, key: &str) -> Result<Option<i64>, EngineError> {
     match p_str(p, key) {
         None => Ok(None),
         Some(text) => calendar::parse_local(text, s.tz_offset_min)
@@ -268,12 +268,12 @@ fn previous(s: &mut Session, _: &Value) -> CmdResult {
     step(s, -1)
 }
 
-fn stamp(s: &Session, t: i64) -> String {
+pub(super) fn stamp(s: &Session, t: i64) -> String {
     let c = openmailclient_model::time::civil(t, s.tz_offset_min);
     format!("{:04}-{:02}-{:02} {:02}:{:02}", c.year, c.month, c.day, c.hour, c.minute)
 }
 
-fn day_text(day: i64) -> String {
+pub(super) fn day_text(day: i64) -> String {
     let c = openmailclient_model::time::civil(calendar::day_start(day, 0), 0);
     format!("{:04}-{:02}-{:02}", c.year, c.month, c.day)
 }
@@ -431,7 +431,7 @@ fn changed(s: &Session, p: &Value, was: Option<&Appointment>) -> Result<Appointm
     Ok(a)
 }
 
-fn writable_calendar(s: &Session) -> Result<(usize, FolderId), EngineError> {
+pub(super) fn writable_calendar(s: &Session) -> Result<(usize, FolderId), EngineError> {
     let (store, folder) = calendar_folder(s).ok_or_else(|| EngineError::BadParams("no data file open has a Calendar folder".into()))?;
     if !s.stores.get(store).is_some_and(|st| st.writable()) {
         return Err(EngineError::BadParams("the data file with the calendar cannot be written".into()));
@@ -446,7 +446,11 @@ fn new(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(pattern) = repeat_param(s, p, &a, off)? {
         set_pattern(&mut a, pattern, off);
     }
-    let id = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.add(folder, a.item())?;
+    // Its id for life, by which a copy of it (a calendar file, a server's) is known again.
+    let mut item = a.item();
+    let seed = s.calendar.items.len() as u64 ^ (a.start as u64).rotate_left(17) ^ a.subject.len() as u64;
+    calendar::set_global_id(&mut item, &calendar::new_global_id(s.time_now(), seed));
+    let id = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.add(folder, item)?;
     s.calendar.day = calendar::day_of(a.start, s.tz_offset_min);
     s.calendar.selected = Some(id.0);
     s.calendar.occurrence = a.recurrence.as_ref().map(|r| r.start_day);

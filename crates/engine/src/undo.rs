@@ -18,13 +18,16 @@ pub enum Step {
     Removed { what: &'static str, store: usize, folder: FolderId, was: u64, item: Box<Item> },
     /// A message that was being written was discarded; it is the newest of those set aside.
     Discarded,
+    /// Items were put in `folder` from a file at once: `added` are new, and each of `updated`
+    /// was brought up to date from what it was.
+    Imported { what: &'static str, store: usize, folder: FolderId, added: Vec<u64>, updated: Vec<(u64, Box<Item>)> },
 }
 
 impl Step {
     /// The command that did it, as its label reads.
     pub fn what(&self) -> &'static str {
         match self {
-            Self::Edited { what, .. } | Self::Moved { what, .. } | Self::Removed { what, .. } => what,
+            Self::Edited { what, .. } | Self::Moved { what, .. } | Self::Removed { what, .. } | Self::Imported { what, .. } => what,
             Self::Discarded => "Discard",
         }
     }
@@ -87,6 +90,19 @@ impl Session {
                 };
                 self.renumber(store, from, was, back);
                 (store, from, back)
+            }
+            Step::Imported { store, folder, added, updated, .. } => {
+                // All of it is taken back that still can be; what is gone is gone already.
+                let st = self.stores.get_mut(store).ok_or(StoreError::NoFolder).map_err(gone)?;
+                for id in added {
+                    let _ = st.remove(folder, ItemId(id));
+                }
+                for (id, before) in updated {
+                    let _ = st.update(folder, ItemId(id), *before);
+                }
+                self.refresh_folders(store);
+                self.reload_calendar()?;
+                return Ok(what);
             }
             Step::Removed { store, folder, was, mut item, .. } => {
                 crate::cmd::imap_sync::back(self, store, &mut item);

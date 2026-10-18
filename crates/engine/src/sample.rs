@@ -407,7 +407,15 @@ fn appointments(now: i64) -> Vec<Item> {
     birthday.reminder = None;
     list.push(fair);
     list.push(birthday);
-    list.iter().map(Appointment::item).collect()
+    // Each with its id for life, as one made here has.
+    list.iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let mut item = a.item();
+            openmailclient_model::calendar::set_global_id(&mut item, &openmailclient_model::calendar::new_global_id(now, i as u64));
+            item
+        })
+        .collect()
 }
 
 /// The banner proof in the print shop's mail: our own drawing, made here pixel by pixel. A dark

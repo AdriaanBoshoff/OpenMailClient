@@ -149,6 +149,28 @@ impl App {
                         self.run("compose.attach", json!({ "path": path }));
                     }
                 }
+                UiRequest::OpenCalendar => {
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Open calendar")
+                        .add_filter("iCalendar file", &["ics", "ical", "ifb"])
+                        .add_filter("All files", &["*"])
+                        .pick_file();
+                    if let Some(path) = picked
+                        && let Err(e) = self.ui.execute("ui.openCalendar", &json!({ "path": path }))
+                    {
+                        self.ui.session.status = e;
+                    }
+                }
+                UiRequest::SaveCalendar => {
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Save calendar")
+                        .set_file_name("Calendar.ics")
+                        .add_filter("iCalendar file", &["ics"])
+                        .save_file();
+                    if let Some(path) = picked {
+                        self.run("calendar.saveAs", json!({ "path": path }));
+                    }
+                }
                 UiRequest::OpenLink(address) => {
                     self.ui.session.status = match open_in_browser(&address) {
                         Ok(()) => "Opened in the browser".to_string(),

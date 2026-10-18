@@ -10,6 +10,7 @@ mod accounts;
 mod alert;
 mod body;
 mod calendar;
+mod calendar_file;
 mod dialog;
 mod faces;
 pub mod icons;
@@ -77,6 +78,10 @@ pub enum UiRequest {
     SaveAttachment(usize),
     SaveAllAttachments,
     Attach,
+    /// Pick a calendar file (.ics) to open (`ui.openCalendar`).
+    OpenCalendar,
+    /// Pick where the calendar is saved as a calendar file (`calendar.saveAs`).
+    SaveCalendar,
     /// Hand a web address to the system's browser. Queued only when the person presses Open in
     /// the link dialog, with an address the engine has checked.
     OpenLink(String),
@@ -100,6 +105,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.saveAsDialog", label: "Save As…", params: "" },
     UiCommand { id: "ui.exportDialog", label: "Export to a Data File…", params: "" },
     UiCommand { id: "ui.printDialog", label: "Print to PDF…", params: "" },
+    UiCommand { id: "ui.openCalendarDialog", label: "Open Calendar…", params: "" },
+    UiCommand { id: "ui.saveCalendarDialog", label: "Save Calendar…", params: "" },
+    UiCommand {
+        id: "ui.openCalendar",
+        label: "Open Calendar",
+        params: r#"{"path": a calendar file, or "attachment": the number of an attachment of the open message} opens the window on what it holds (calendar.import), every event chosen; {"import": true, "only": [event numbers] (default: those chosen)} adds them and shows the calendar; {"close": true} closes it"#,
+    },
     UiCommand {
         id: "ui.printPreview",
         label: "Print…",
@@ -288,6 +300,7 @@ pub struct MailUi {
     pub(crate) follow_system: bool,
     pub(crate) themes_window: Option<themes::ThemesWindow>,
     pub(crate) import_window: Option<import::ImportWindow>,
+    pub(crate) calendar_file: Option<calendar_file::CalendarFileWindow>,
     /// Exit was asked for once while changes were unsaved.
     quit_asked: bool,
     /// Messages are read as plain text even when they have a formatted body.
@@ -516,6 +529,7 @@ impl MailUi {
             follow_system: false,
             themes_window: None,
             import_window: None,
+            calendar_file: None,
             quit_asked: false,
             plain_bodies: false,
             body_doc: None,
@@ -734,6 +748,9 @@ impl MailUi {
             "ui.saveAsDialog" => self.requests.push(UiRequest::SaveAs),
             "ui.exportDialog" => self.requests.push(UiRequest::Export),
             "ui.printDialog" => self.requests.push(UiRequest::Print),
+            "ui.openCalendarDialog" => self.requests.push(UiRequest::OpenCalendar),
+            "ui.saveCalendarDialog" => self.requests.push(UiRequest::SaveCalendar),
+            "ui.openCalendar" => return self.calendar_file_command(params),
             "ui.printPreview" => {
                 if params.get("close").and_then(Value::as_bool) == Some(true) {
                     self.preview = None;
@@ -1048,6 +1065,7 @@ impl MailUi {
         }
         self.themes_window(&ctx);
         self.import_window(&ctx);
+        self.calendar_file_window(&ctx);
         self.prompt_window(&ctx);
         self.accounts_window(&ctx);
         self.link_window(&ctx);
@@ -1074,6 +1092,7 @@ impl MailUi {
             || self.appointment.is_some()
             || self.themes_window.is_some()
             || self.import_window.is_some()
+            || self.calendar_file.is_some()
     }
 
     fn shortcuts(&mut self, ui: &mut Ui) {

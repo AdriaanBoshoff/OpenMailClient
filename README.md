@@ -1,8 +1,8 @@
 # OpenMailClient
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M5%20in%20progress-orange)
-![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-58%20of%20121%20%C2%B7%2047%25-yellow)
-![tests](https://img.shields.io/badge/tests-539%20passing-brightgreen)
+![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-62%20of%20123%20%C2%B7%2050%25-yellow)
+![tests](https://img.shields.io/badge/tests-555%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -37,6 +37,8 @@ Every picture is the app drawing its own invented sample mailbox, headless, with
 | **Account Settings.** IMAP or POP3 over TLS, servers found from the address. | **Print** on a printer or to PDF, the message body alone if you like. |
 | ![Opening an attachment whose name reads as a PDF but is a web page: it can be saved, not opened](docs/images/openmailclient-attachment.png) | ![A recurring appointment's window on the whole series: weekly on Monday and Wednesday, eight times, said in words with the first days it falls on; behind it, each occurrence with a loop and a changed one with the loop struck through](docs/images/openmailclient-recurrence.png) |
 | **Opening an attachment.** A file passing for another kind is only saved. | **Recurring appointments.** One occurrence or the whole series, the pattern in words as you choose it. |
+| ![Open Calendar: a calendar file's events shown before they are added, each with its time, place and pattern, chosen one by one](docs/images/openmailclient-open-calendar.png) | |
+| **Open Calendar.** Each event shown and chosen; one you have already is brought up to date. | |
 
 ## Progress
 
@@ -54,7 +56,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | M3b | **The do-later batch**: journalled changes, a save into the data file where it is, and what M2 and M3 left | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
 | M3c | **Proof in Outlook, 4K-page writing**: files we write open in Outlook Classic (done); 4K-page data files written (done); changes saved on their own (done); a changed message's size (done); files from before M3c.1 (done); hidden items exported from an `.ost` (done); compressed 4K-page blocks (done) | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
 | M4 | **Accounts**: IMAP, POP3 and SMTP; protocol clients tested against a fake server (done); TLS with checked certificates, passwords in the system's credential store (done); a server's own certificate trusted on the owner's word, for that server only (done); accounts added, tested and kept (done); mail sent and kept in Sent Items (done); mail received by POP3 and IMAP, F9 (done); new mail told of at the corner of the screen and with a sound of our own, Send/Receive on a timer, its progress in a window of its own with a way to stop it (done); Delay Delivery and Expires After, a held message going at its minute (done); Account Settings in the window, the servers found from the address and its domain's DNS records (done); each account in a data file of its own (done); pictures on a server downloaded when asked for, over HTTPS only (done); attachments opened or saved on a double-click, a program or script only saved (done); checked against a real server (done). OAuth sign-in is M7 | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
-| M5 | **Calendar, People and Tasks**: the Calendar's day, work week, week and month views, appointments made, changed and deleted (done); Import from Outlook: accounts and their mail, calendar, contacts and tasks (done); recurring appointments, one occurrence changed alone (done); `.ics`, CalDAV sync (as with Nextcloud), time zones, meetings, People and Tasks (next, in that order) | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
+| M5 | **Calendar, People and Tasks**: the Calendar's day, work week, week and month views, appointments made, changed and deleted (done); Import from Outlook: accounts and their mail, calendar, contacts and tasks (done); recurring appointments, one occurrence changed alone (done); `.ics` calendar files opened and saved (done); CalDAV sync (as with Nextcloud), time zones, meetings, People and Tasks (next, in that order) | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
 | M6 | **MCP server, control channel, web build** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M7 | **Third-party sign-in**: Gmail, Outlook.com and Microsoft 365, Yahoo and others through OAuth 2.0 (XOAUTH2, OAUTHBEARER), signed in through the system's browser, tokens in the system's credential store; until then such accounts sign in with an app password | ![after release](https://img.shields.io/badge/-after%20release-lightgrey) |
 
@@ -69,12 +71,12 @@ read, a reader we can try without driving a window, a printer we may use).
 | Area | Done | | |
 |---|---|---|---|
 | Mail | 36 of 68 | `██████████░░░░░░░░░░` | 52% |
-| File | 11 of 16 | `█████████████░░░░░░░` | 68% |
+| File | 12 of 16 | `███████████████░░░░░` | 75% |
 | Message window | 6 of 18 | `██████░░░░░░░░░░░░░░` | 33% |
-| Calendar | 5 of 9 | `███████████░░░░░░░░░` | 55% |
+| Calendar | 8 of 11 | `██████████████░░░░░░` | 72% |
 | People | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
 | Tasks | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
-| **All** | **58 of 121** | `█████████░░░░░░░░░░░` | **47%** |
+| **All** | **62 of 123** | `██████████░░░░░░░░░░` | **50%** |
 
 ### File formats and protocols
 
@@ -83,6 +85,7 @@ read, a reader we can try without driving a window, a printer we may use).
 | `.pst`, `.ost` (ANSI, Unicode, 4K pages) | yes | a whole mailbox as a new Unicode, ANSI or 4K-page `.pst`; changes to an open `.pst` of any of the three are kept by Save Changes, and the file stays the kind it was (Outlook Classic opens them and sees what was written) |
 | `.msg`, `.oft` | yes | yes |
 | `.eml` | yes | yes |
+| `.ics` | yes, each event shown before it is added; one opened again brings what is there up to date | yes, the calendar, a range of days or one appointment, with its series |
 | `.pdf` | | yes, a message (Memo Style) or a folder's list (Table Style), printed |
 | IMAP, POP3, SMTP | accounts are set up and tested in Account Settings, mail is sent and received into each account's own data file, checked against a real server; every IMAP folder is taken down, what is sent is put in the server's Sent folder, read, flagged, moved and deleted messages go both ways, folders renamed, moved and deleted are followed both ways, and drafts are kept on the server as they are written (M4) | the same |
 
@@ -122,6 +125,10 @@ read, a reader we can try without driving a window, a printer we may use).
   group headings and the selected row. It prints on any printer the system has, with copies and a
   page range, on a thread of its own, or saves the pages as a PDF file; the name and message
   details and the page header and footer can each be left off, down to the message body alone.
+- **Calendar files.** An `.ics` file, or one attached to a message, is shown event by event before
+  anything is added; an event the calendar has already is brought up to date instead of added
+  twice, and one Undo takes all of it back. The calendar, a range of days or one appointment is
+  saved as an `.ics` file, or sent by mail as a file and a list.
 - **Import from Outlook.** Every IMAP and POP3 account of the Outlook profiles, with its servers and
   without its password, and the profiles' data files: shown first, then copied without changing
   Outlook's own files, an `.ost` made a `.pst` of our own.
@@ -138,7 +145,7 @@ read, a reader we can try without driving a window, a printer we may use).
   on screen beyond what egui shapes; metafiles that copy with a mask or see-through; the
   printer's own settings (trays, two-sided). Each is scheduled in
   [ROADMAP.md](ROADMAP.md#do-later-from-m2).
-- `.ics`, CalDAV sync, time zones and meetings in the Calendar; People and Tasks.
+- CalDAV sync, time zones and meetings in the Calendar; People and Tasks.
 - The MCP server, the control channel and the web build.
 
 ## Run it

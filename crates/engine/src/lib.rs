@@ -33,6 +33,8 @@ mod tests_arrival;
 #[cfg(test)]
 mod tests_calendar;
 #[cfg(test)]
+mod tests_calendar_file;
+#[cfg(test)]
 mod tests_import;
 #[cfg(test)]
 mod tests_pictures;

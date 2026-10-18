@@ -283,7 +283,7 @@ impl Appointment {
     pub fn occurrence_of(&self, day: i64) -> Option<Self> {
         let r = self.recurrence.as_ref()?;
         let (from, to) = match r.exception_on(day) {
-            Some(e) => (self.utc(e.start), self.utc(e.end).saturating_add(1)),
+            Some(e) => return Some(self.changed(e)),
             None if r.taken_out(day) => return None,
             None => {
                 let (start, end) = self.planned(day)?;
@@ -291,6 +291,30 @@ impl Appointment {
             }
         };
         self.occurrences(from, to).into_iter().find(|o| o.occurrence == Some(day))
+    }
+
+    /// The occurrence `e` changed, as it is now.
+    fn changed(&self, e: &Exception) -> Self {
+        let mut a = self.instance(recur::day_of_minutes(e.original), self.utc(e.start), self.utc(e.end));
+        if let Some(s) = &e.subject {
+            a.subject = s.clone();
+        }
+        if let Some(l) = &e.location {
+            a.location = l.clone();
+        }
+        if let Some(b) = e.busy {
+            a.busy = Busy::of(b);
+        }
+        if let Some(all) = e.sub_type {
+            a.all_day = all != 0;
+        }
+        a.reminder = match (e.reminder_set, e.reminder_delta) {
+            (Some(false), _) => None,
+            (Some(true), delta) => Some(delta.or(self.reminder).unwrap_or(15).clamp(0, 60 * 24 * 7 * 52)),
+            (None, Some(delta)) if self.reminder.is_some() => Some(delta.clamp(0, 60 * 24 * 7 * 52)),
+            (None, _) => self.reminder,
+        };
+        a
     }
 
     /// One occurrence of the series, first planned on `day`.
@@ -324,25 +348,12 @@ impl Appointment {
             }
         }
         for e in &r.exceptions {
-            let mut a = self.instance(recur::day_of_minutes(e.original), self.utc(e.start), self.utc(e.end));
-            if let Some(s) = &e.subject {
-                a.subject = s.clone();
+            // Only one that may fall in the window is made: making each is a copy of the series.
+            let (start, end) = (self.utc(e.start), self.utc(e.end));
+            if start >= to || (end <= from && !(end <= start && start >= from)) {
+                continue;
             }
-            if let Some(l) = &e.location {
-                a.location = l.clone();
-            }
-            if let Some(b) = e.busy {
-                a.busy = Busy::of(b);
-            }
-            if let Some(all) = e.sub_type {
-                a.all_day = all != 0;
-            }
-            a.reminder = match (e.reminder_set, e.reminder_delta) {
-                (Some(false), _) => None,
-                (Some(true), delta) => Some(delta.or(self.reminder).unwrap_or(15).clamp(0, 60 * 24 * 7 * 52)),
-                (None, Some(delta)) if self.reminder.is_some() => Some(delta.clamp(0, 60 * 24 * 7 * 52)),
-                (None, _) => self.reminder,
-            };
+            let a = self.changed(e);
             if a.overlaps(from, to) {
                 out.push(a);
             }
@@ -486,11 +497,7 @@ impl Appointment {
         let replaced: Vec<i64> = r.exceptions.iter().map(|e| self.utc(e.original)).collect();
         item.attachments.retain(|at| !is_exception(at) || at.props.time(att::EXCEPTION_REPLACE_TIME).is_some_and(|t| replaced.contains(&t)));
         for (e, at_time) in r.exceptions.iter().zip(&replaced) {
-            let day = recur::day_of_minutes(e.original);
-            let Some(shown) = self.occurrences(self.utc(e.start), self.utc(e.end).saturating_add(1)).into_iter().find(|o| o.occurrence == Some(day))
-            else {
-                continue;
-            };
+            let shown = self.changed(e);
             let found = item.attachments.iter().position(|at| is_exception(at) && at.props.time(att::EXCEPTION_REPLACE_TIME) == Some(*at_time));
             let at = match found.and_then(|i| item.attachments.get_mut(i)) {
                 Some(at) => at,
@@ -555,6 +562,117 @@ impl Appointment {
         self.write(&mut it);
         it
     }
+}
+
+/// PSETID_Meeting {6ED8DA90-450B-101B-98DA-00AA003F1305} ([MS-OXPROPS] 1.3.2).
+pub const PSETID_MEETING: [u8; 16] = [0x90, 0xDA, 0xD8, 0x6E, 0x0B, 0x45, 0x1B, 0x10, 0x98, 0xDA, 0x00, 0xAA, 0x00, 0x3F, 0x13, 0x05];
+
+/// PidLidGlobalObjectId and PidLidCleanGlobalObjectId ([MS-OXOCAL] 2.2.1.27 and 2.2.1.28).
+mod meeting {
+    pub const GLOBAL_OBJECT_ID: u32 = 0x0003;
+    pub const CLEAN_GLOBAL_OBJECT_ID: u32 = 0x0023;
+}
+
+/// The Byte Array ID that begins every GlobalObjectId ([MS-OXOCAL] 2.2.1.27).
+const GOID_HEAD: [u8; 16] = [0x04, 0x00, 0x00, 0x00, 0x82, 0x00, 0xE0, 0x00, 0x74, 0xC5, 0xB7, 0x10, 0x1A, 0x82, 0xE0, 0x08];
+/// What the data of a GlobalObjectId made from an iCalendar UID begins with
+/// ([MS-OXCICAL] 2.1.3.1.1.20.26): "vCal-Uid" and the version 1.
+const VCAL_UID: &[u8; 12] = b"vCal-Uid\x01\x00\x00\x00";
+/// Longest UID kept, in bytes.
+pub const MAX_UID: usize = 1_000;
+
+/// A GlobalObjectId ([MS-OXOCAL] 2.2.1.27) with no instance date and no creation time: the
+/// head, the date, the creation time, the reserved bytes, the size, then `data`.
+fn goid(data: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(40 + data.len());
+    v.extend_from_slice(&GOID_HEAD);
+    v.extend_from_slice(&[0u8; 4 + 8 + 8]);
+    v.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_le_bytes());
+    v.extend_from_slice(data);
+    v
+}
+
+/// The id an appointment keeps for the whole of its life, by which a copy of it elsewhere (a
+/// calendar file, a server, a meeting request) is known again: PidLidCleanGlobalObjectId, or
+/// PidLidGlobalObjectId with its instance date taken out ([MS-OXOCAL] 2.2.1.28).
+pub fn global_id(item: &Item) -> Option<Vec<u8>> {
+    let read = |id| match named(item, PSETID_MEETING, id) {
+        Some(PropValue::Binary(b)) if b.len() >= 40 && b.starts_with(&GOID_HEAD) => Some(b.clone()),
+        _ => None,
+    };
+    if let Some(clean) = read(meeting::CLEAN_GLOBAL_OBJECT_ID) {
+        return Some(clean);
+    }
+    let mut id = read(meeting::GLOBAL_OBJECT_ID)?;
+    for b in id.get_mut(16..20).into_iter().flatten() {
+        *b = 0;
+    }
+    Some(id)
+}
+
+/// `id` kept as the appointment's own, as both PidLidGlobalObjectId and
+/// PidLidCleanGlobalObjectId: an appointment that is not one occurrence has no instance date
+/// in either.
+pub fn set_global_id(item: &mut Item, id: &[u8]) {
+    set_named(item, PSETID_MEETING, meeting::GLOBAL_OBJECT_ID, PropValue::Binary(id.to_vec()));
+    set_named(item, PSETID_MEETING, meeting::CLEAN_GLOBAL_OBJECT_ID, PropValue::Binary(id.to_vec()));
+}
+
+/// A new GlobalObjectId, made at `now` (FILETIME ticks): sixteen bytes of data from `now` and
+/// `seed`, as Outlook's own are sixteen bytes that are not repeated.
+pub fn new_global_id(now: i64, seed: u64) -> Vec<u8> {
+    let mut data = [0u8; 16];
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for (i, b) in data.iter_mut().enumerate() {
+        for x in now.to_le_bytes().iter().chain(seed.to_le_bytes().iter()).chain(std::iter::once(&(i as u8))) {
+            h = (h ^ u64::from(*x)).wrapping_mul(0x0100_0000_01b3);
+        }
+        *b = (h >> 24) as u8;
+    }
+    let mut id = goid(&data);
+    if let Some(at) = id.get_mut(24..32) {
+        at.copy_from_slice(&now.to_le_bytes());
+    }
+    id
+}
+
+/// The iCalendar UID of a GlobalObjectId ([MS-OXCICAL] 2.1.3.1.1.20.26): the UID it was made
+/// from, when it was made from one; else its bytes in hexadecimal.
+pub fn uid_of_global_id(id: &[u8]) -> String {
+    let data = id.get(40..).unwrap_or_default();
+    if let Some(rest) = data.strip_prefix(VCAL_UID.as_slice()) {
+        let text = rest.split(|b| *b == 0).next().unwrap_or_default();
+        if let Ok(t) = std::str::from_utf8(text)
+            && !t.is_empty()
+        {
+            return t.to_string();
+        }
+    }
+    id.iter().map(|b| format!("{b:02X}")).collect()
+}
+
+/// The GlobalObjectId of an iCalendar UID ([MS-OXCICAL] 2.1.3.1.1.20.26): the bytes it spells
+/// when it is one written in hexadecimal, its instance date taken out; else one that wraps it.
+pub fn global_id_of_uid(uid: &str) -> Vec<u8> {
+    let hex = uid.trim();
+    if hex.len() >= 80 && hex.len().is_multiple_of(2) && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let bytes: Vec<u8> = (0..hex.len() / 2).filter_map(|i| hex.get(i * 2..i * 2 + 2)).filter_map(|h| u8::from_str_radix(h, 16).ok()).collect();
+        if bytes.starts_with(&GOID_HEAD) {
+            let mut bytes = bytes;
+            for b in bytes.get_mut(16..20).into_iter().flatten() {
+                *b = 0;
+            }
+            return bytes;
+        }
+    }
+    let mut end = uid.len().min(MAX_UID);
+    while !uid.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut data = VCAL_UID.to_vec();
+    data.extend_from_slice(uid.get(..end).unwrap_or_default().as_bytes());
+    data.push(0);
+    goid(&data)
 }
 
 /// Whether an attachment is a changed occurrence of its series ([MS-OXOCAL] 2.2.10.1.1).
@@ -733,6 +851,32 @@ mod tests {
     }
 
     #[test]
+    fn an_icalendar_uid_and_a_global_object_id_are_each_made_from_the_other() {
+        let id = global_id_of_uid("abc-123@example.test");
+        assert!(id.starts_with(&GOID_HEAD));
+        assert_eq!(uid_of_global_id(&id), "abc-123@example.test");
+        let mut item = Item::default();
+        set_global_id(&mut item, &id);
+        assert_eq!(global_id(&item), Some(id));
+        // An Outlook-made id goes out as hexadecimal and comes back as the same bytes.
+        let made = new_global_id(at("2026-10-18 09:00"), 7);
+        assert_ne!(made, new_global_id(at("2026-10-18 09:00"), 8));
+        let hex = uid_of_global_id(&made);
+        assert!(hex.starts_with("040000008200E00074C5B7101A82E008"));
+        assert_eq!(global_id_of_uid(&hex), made);
+        // One occurrence's id is known by its series' once its date is taken out.
+        let mut one = made.clone();
+        one[16..20].copy_from_slice(&[0x07, 0xEA, 10, 18]);
+        let mut item = Item::default();
+        set_named(&mut item, PSETID_MEETING, meeting::GLOBAL_OBJECT_ID, PropValue::Binary(one));
+        assert_eq!(global_id(&item), Some(made));
+        // Hostile ones: too long, not a GlobalObjectId, cut short.
+        assert_eq!(uid_of_global_id(&global_id_of_uid(&"é".repeat(MAX_UID))).len(), MAX_UID);
+        assert_eq!(uid_of_global_id(&[1, 2]), "0102");
+        assert!(global_id_of_uid(&"04".repeat(50)).starts_with(&GOID_HEAD));
+    }
+
+    #[test]
     fn an_appointment_is_written_and_read_back_as_mapi_lays_it_out() {
         let a = Appointment {
             subject: "Dentist".into(),
@@ -848,6 +992,28 @@ mod tests {
             back.pattern_words()
         );
         assert!(named(&item, PSETID_APPOINTMENT, lid::TIME_ZONE_STRUCT).is_some());
+    }
+
+    #[test]
+    fn a_series_with_the_most_changed_occurrences_all_at_one_time_is_written_and_shown_quickly() {
+        // Regression: each changed occurrence was found by making every other one, a copy of
+        // the series each, so writing this took over a minute.
+        let started = std::time::Instant::now();
+        let mut a = weekly();
+        let first = a.recurrence.as_ref().unwrap().start_day;
+        a.recurrence = Some(Recurrence::new(recur::Freq::Daily, recur::Rule::Day, 1, recur::End::Never, first, 540, 570, 1));
+        let mut to = a.clone();
+        to.recurrence = None;
+        to.subject = "All at once".into();
+        for i in 0..i64::from(recur::MAX_COUNT) {
+            assert!(a.change_occurrence(first + i, &to));
+        }
+        let item = a.item();
+        let back = Appointment::of(&item).unwrap();
+        assert_eq!(back.recurrence.as_ref().unwrap().exceptions.len(), recur::MAX_COUNT as usize);
+        assert_eq!(back.occurrences(a.start, a.end).len(), recur::MAX_COUNT as usize);
+        assert_eq!(back.occurrence_of(first + 500).unwrap().subject, "All at once");
+        assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
     }
 
     #[test]

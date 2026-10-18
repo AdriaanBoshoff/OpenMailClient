@@ -5,6 +5,7 @@
 pub mod canvas;
 mod emf;
 pub mod html;
+pub mod ics;
 pub mod links;
 pub mod metafile;
 pub mod rich;

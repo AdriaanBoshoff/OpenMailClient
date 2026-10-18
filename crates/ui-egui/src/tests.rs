@@ -2620,3 +2620,37 @@ fn a_series_is_made_in_the_appointment_window_and_one_occurrence_changed() {
     assert!(ui.repeat_preview(&never).is_some());
     assert!(ui.execute("ui.appointment", &json!({ "id": id, "occurrence": "nonsense" })).is_err());
 }
+
+#[test]
+fn a_calendar_file_is_shown_before_its_events_are_added() {
+    let dir = std::env::temp_dir().join(format!("omc-ui-ics-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("club.ics");
+    let long = "A very long name for an evening of quizzes and music at the club ".repeat(4);
+    let file = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nX-WR-CALNAME:Club\r\n\
+         BEGIN:VEVENT\r\nUID:one\r\nDTSTART:20261012T170000Z\r\nDTEND:20261012T180000Z\r\nSUMMARY:{long}\r\nLOCATION:Hall\r\nATTENDEE:mailto:a@example.test\r\nRRULE:FREQ=WEEKLY;COUNT=4\r\nEND:VEVENT\r\n\
+         BEGIN:VEVENT\r\nUID:two\r\nDTSTART;VALUE=DATE:20261020\r\nSUMMARY:Club outing\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    std::fs::write(&path, file).unwrap();
+    let mut ui = MailUi::new(Session::with_sample());
+    let calendar = ui.session.find_folder(0, openmailclient_model::FolderKind::Calendar).unwrap();
+    let before = ui.session.stores[0].list(calendar).unwrap().len();
+    let shown = ui.execute("ui.openCalendar", &json!({ "path": path })).unwrap();
+    assert_eq!(shown["events"], 2);
+    assert!(ui.modal_open());
+    draw_window(&mut ui, egui::vec2(1100.0, 760.0));
+    draw_window(&mut ui, egui::vec2(320.0, 240.0));
+    assert_eq!(ui.session.stores[0].list(calendar).unwrap().len(), before, "nothing is added before it is asked for");
+    // The second alone: it is added, and the calendar is shown at it.
+    ui.execute("ui.openCalendar", &json!({ "import": true, "only": [1] })).unwrap();
+    assert!(ui.calendar_file.is_none());
+    assert_eq!(ui.session.stores[0].list(calendar).unwrap().len(), before + 1);
+    assert_eq!(ui.session.module, openmailclient_engine::Module::Calendar);
+    assert!(ui.session.calendar.items.iter().any(|(_, a)| a.subject == "Club outing"));
+    assert!(ui.execute("ui.openCalendar", &json!({ "import": true })).is_err(), "the window is closed");
+    assert!(ui.execute("ui.openCalendar", &json!({ "path": dir.join("none.ics") })).is_err());
+    assert!(ui.calendar_file.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}

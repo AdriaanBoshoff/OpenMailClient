@@ -64,6 +64,8 @@ const CALENDAR_HOME: &[Group] = &[
             with(big(Icon::MonthView, "Month", "calendar.view"), r#"{"view":"month"}"#),
         ],
     ),
+    ("Manage Calendars", &[big(Icon::Calendar, "Open\nCalendar", "ui.openCalendarDialog")]),
+    ("Share", &[big(Icon::Mail, "E-mail\nCalendar", "calendar.email"), small(Icon::Save, "Save Calendar", "ui.saveCalendarDialog")]),
     ("Actions", &[small(Icon::Open, "Open", "ui.openAppointment"), small(Icon::Delete, "Delete", "calendar.delete")]),
 ];
 
@@ -146,6 +148,7 @@ impl MailUi {
             "ui.prompt" => true,
             "ui.openAppointment" => self.session.calendar.selected.is_some(),
             "ui.appointment" => self.session.is_enabled("calendar.new"),
+            "ui.saveCalendarDialog" => self.session.is_enabled("calendar.saveAs"),
             c if c.starts_with("ui.") => true,
             c => match menu_of(c) {
                 Some("categorize" | "followup") => self.session.is_enabled("mail.flag"),
@@ -527,7 +530,10 @@ impl MailUi {
             Open,
             Save,
             Cancel,
+            AddToCalendar,
         }
+        // A calendar file is opened here, its events shown before they are added.
+        let calendar = ask.name.to_ascii_lowercase().ends_with(".ics") && ask.refused.is_none();
         let mut done: Option<Answer> = None;
         let shown = crate::dialog::Dialog::new("attachment", "Opening an attachment", Icon::Clip).width(440.0).show(ctx, &t, |ui| {
             let words = |text: &str, size: f32, color: Color32| egui::Label::new(crate::seen_line(text, font(size), color)).wrap();
@@ -555,6 +561,7 @@ impl MailUi {
             match &ask.refused {
                 Some(refused) => ui.add(words(refused, 13.0, t.text)),
                 None if ask.message => ui.add(words("The attached message opens here, as a message.", 12.0, t.text_dim)),
+                None if calendar => ui.add(words("Its events are shown first, and you choose which are added to your calendar.", 12.0, t.text_dim)),
                 None => ui.add(words(
                     "It opens in the program your system uses for this kind of file, as a read-only copy that is cleared away when OpenMailClient closes. Only open files from people you trust.",
                     12.0,
@@ -576,7 +583,11 @@ impl MailUi {
                     if ui.add(crate::dialog::plain("Save As…")).clicked() {
                         done = Some(Answer::Save);
                     }
-                    if ui.add_enabled(ask.refused.is_none(), crate::dialog::primary(&t, "Open")).clicked() {
+                    if calendar {
+                        if ui.add(crate::dialog::primary(&t, "Add to Calendar…")).clicked() {
+                            done = Some(Answer::AddToCalendar);
+                        }
+                    } else if ui.add_enabled(ask.refused.is_none(), crate::dialog::primary(&t, "Open")).clicked() {
                         done = Some(Answer::Open);
                     }
                 });
@@ -590,6 +601,11 @@ impl MailUi {
         match answer {
             Answer::Cancel => {}
             Answer::Save => self.requests.push(crate::UiRequest::SaveAttachment(ask.index)),
+            Answer::AddToCalendar => {
+                if let Err(e) = self.calendar_file_command(&json!({ "attachment": ask.index })) {
+                    self.session.status = e;
+                }
+            }
             // The engine makes the copy and checks the attachment again; the person said yes.
             Answer::Open => match self.execute("file.openAttachment", &json!({ "index": ask.index, "confirm": true })) {
                 Ok(result) => {
@@ -659,7 +675,7 @@ impl MailUi {
         let side = Rect::from_min_size(rect.min, vec2(256.0, rect.height()));
         p.rect_filled(rect, 0.0, t.surface);
         p.rect_filled(side, 0.0, t.accent);
-        let entries: [(Icon, &str, &str, Value); 13] = [
+        let entries: [(Icon, &str, &str, Value); 15] = [
             (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
             (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
             (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
@@ -669,6 +685,8 @@ impl MailUi {
             (Icon::Clip, "Save All Attachments…", "ui.saveAllAttachmentsDialog", Value::Null),
             (Icon::Print, "Print…", "ui.printPreview", Value::Null),
             (Icon::Save, "Export to a Data File…", "ui.exportDialog", Value::Null),
+            (Icon::Calendar, "Open Calendar…", "ui.openCalendarDialog", Value::Null),
+            (Icon::Calendar, "Save Calendar…", "ui.saveCalendarDialog", Value::Null),
             (Icon::Close, "Close Data File", "file.closeStore", Value::Null),
             (Icon::Import, "Import from Outlook…", "ui.importOutlook", Value::Null),
             (Icon::People, "Account Settings…", "ui.accountSettings", Value::Null),
@@ -684,6 +702,7 @@ impl MailUi {
                 "ui.printPreview" => self.session.is_enabled("file.print"),
                 "ui.exportDialog" => self.session.is_enabled("file.export"),
                 "ui.importOutlook" => self.session.is_enabled("file.importOutlook"),
+                "ui.saveCalendarDialog" => self.session.is_enabled("calendar.saveAs"),
                 c if c.starts_with("ui.") => true,
                 c => self.session.is_enabled(c),
             };

@@ -4,6 +4,7 @@
 mod account;
 mod arrival;
 pub mod calendar;
+mod calendar_file;
 pub(crate) mod compose;
 mod file;
 mod folder;
@@ -58,6 +59,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(arrival::commands());
         v.extend(progress::commands());
         v.extend(calendar::commands());
+        v.extend(calendar_file::commands());
         v
     })
 }
