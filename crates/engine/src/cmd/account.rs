@@ -25,7 +25,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Info",
             shortcut: "",
-            params: r#"{"email", "kind": "imap" (the default) or "pop3", "incoming": {"host", "port", "security": "tls" (the default), "starttls" or "none"}, "outgoing": the same for SMTP (the incoming host over TLS when not given), "name", "displayName": the name mail is sent under, "user": the sign-in name (the address when not given), "signInToSend" (true), "leaveOnServer" (POP3, true), "password": kept in the system's credential store, never given back}; returns {"id", "account", "passwordKept"}"#,
+            params: r#"{"email", "kind": "imap" (the default) or "pop3", "incoming": {"host", "port", "security": "tls" (the default), "starttls" or "none"}, "outgoing": the same for SMTP (the incoming host over TLS when not given), "name", "displayName": the name mail is sent under, "user": the sign-in name (the address when not given), "signInToSend" (true), "leaveOnServer" (POP3, true), "caldav": the https: address of a CalDAV server whose calendars are kept in step, signed in to with the same name and password ("" for none), "password": kept in the system's credential store, never given back}; returns {"id", "account", "passwordKept"}"#,
             enabled: always,
             run: add,
         },
@@ -75,7 +75,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{"id", "fingerprint": the SHA-256 of a certificate one of the account's servers showed in this run and that was not trusted, as account.list or a test gives it; null forgets the one trusted, "server": "incoming", "outgoing" or "both" (the default: each server of the account that showed it)}; the certificate is then taken for that server only, and only while it shows exactly that one; returns {"trusted": [the servers]}"#,
+            params: r#"{"id", "fingerprint": the SHA-256 of a certificate one of the account's servers showed in this run and that was not trusted, as account.list or a test gives it; null forgets the one trusted, "server": "incoming", "outgoing", "calendar" (its CalDAV server) or "both" (the default: each server of the account that showed it)}; the certificate is then taken for that server only, and only while it shows exactly that one; returns {"trusted": [the servers]}"#,
             enabled: has_accounts,
             run: trust_certificate,
         },
@@ -171,6 +171,10 @@ fn list(s: &mut Session, _: &Value) -> CmdResult {
                 let shown: Vec<Value> = s.certificates.of(&server.host).iter().map(accounts::shown).collect();
                 v[key]["certificates"] = json!(shown);
             }
+            if let Some(dav) = &a.caldav {
+                let shown: Vec<Value> = s.certificates.of(&dav.host()).iter().map(accounts::shown).collect();
+                v["caldav"]["certificates"] = json!(shown);
+            }
             v
         })
         .collect();
@@ -197,17 +201,23 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "account": value, "passwordKept": kept }))
 }
 
+/// Where the account's own data file is, or is to be made; `None` where the host keeps no folder
+/// for them and it has none yet.
+pub(crate) fn account_path(s: &Session, account: &Account) -> Option<std::path::PathBuf> {
+    match (&account.data_file, &s.account_dir) {
+        (Some(p), _) => Some(p.clone()),
+        (None, Some(dir)) => Some(dir.join(accounts::data_file_name(account))),
+        (None, None) => None,
+    }
+}
+
 /// The data file the account `at` keeps its mail in, opened, as Outlook keeps one for each
 /// account so that its mail is never mixed with another's: made, with the folders a mailbox
 /// has, the first time it is needed, in the program's own folder. `None` where the host keeps
 /// no such folder and the account has no data file yet: its mail then goes where new mail goes.
 pub(crate) fn account_store(s: &mut Session, at: usize) -> Result<Option<usize>, EngineError> {
     let Some(account) = s.accounts.get(at) else { return Ok(None) };
-    let path = match (&account.data_file, &s.account_dir) {
-        (Some(p), _) => p.clone(),
-        (None, Some(dir)) => dir.join(accounts::data_file_name(account)),
-        (None, None) => return Ok(None),
-    };
+    let Some(path) = account_path(s, account) else { return Ok(None) };
     let name = account.name.clone();
     let real = std::fs::canonicalize(&path).ok();
     let open = s.stores.iter().position(|st| real.is_some() && st.path().and_then(|p| std::fs::canonicalize(p).ok()) == real);
@@ -219,6 +229,10 @@ pub(crate) fn account_store(s: &mut Session, at: usize) -> Result<Option<usize>,
                     std::fs::create_dir_all(dir)?;
                 }
                 let mut mailbox = openmailclient_model::MemStore::with_default_folders(&name);
+                // As Outlook makes one for an account: its calendar, people and tasks beside its mail.
+                for (folder, class) in [("Calendar", "IPF.Appointment"), ("Contacts", "IPF.Contact"), ("Tasks", "IPF.Task")] {
+                    mailbox.push_folder(None, folder, class);
+                }
                 crate::io::save_store(&mut mailbox, &path, crate::io::new_store_id(s.now))?;
             }
             match crate::io::open_path(&path)? {
@@ -278,10 +292,11 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
 fn trust_certificate(s: &mut Session, p: &Value) -> CmdResult {
     let at = find(s, p)?;
     let which = match p.get("server").and_then(Value::as_str) {
-        None | Some("both") => &["incoming", "outgoing"][..],
+        None | Some("both") => &["incoming", "outgoing", "calendar"][..],
         Some("incoming") => &["incoming"][..],
         Some("outgoing") => &["outgoing"][..],
-        Some(_) => return Err(EngineError::BadParams("\"server\" is \"incoming\", \"outgoing\" or \"both\"".into())),
+        Some("calendar") => &["calendar"][..],
+        Some(_) => return Err(EngineError::BadParams("\"server\" is \"incoming\", \"outgoing\", \"calendar\" or \"both\"".into())),
     };
     let fingerprint = match p.get("fingerprint") {
         Some(Value::Null) => None,
@@ -295,10 +310,17 @@ fn trust_certificate(s: &mut Session, p: &Value) -> CmdResult {
     let mut done = Vec::new();
     let mut refused = None;
     for key in which {
-        let server = if *key == "incoming" { &account.incoming } else { &account.outgoing };
+        let (host, trusted) = match *key {
+            "incoming" => (account.incoming.host.clone(), account.incoming.trusted),
+            "outgoing" => (account.outgoing.host.clone(), account.outgoing.trusted),
+            _ => match &account.caldav {
+                Some(dav) => (dav.host(), dav.trusted),
+                None => continue,
+            },
+        };
         let ok = match fingerprint {
             // Only what the server itself showed, and was not revoked, can be trusted.
-            Some(f) => match s.certificates.of(&server.host).into_iter().find(|seen| seen.fingerprint == f) {
+            Some(f) => match s.certificates.of(&host).into_iter().find(|seen| seen.fingerprint == f) {
                 Some(seen) if seen.trustable => true,
                 Some(seen) => {
                     refused = Some(format!("the certificate of {} cannot be trusted: {}", seen.host, seen.reason));
@@ -306,10 +328,10 @@ fn trust_certificate(s: &mut Session, p: &Value) -> CmdResult {
                 }
                 None => false,
             },
-            None => server.trusted.is_some(),
+            None => trusted.is_some(),
         };
         if ok {
-            done.push((*key, server.host.clone()));
+            done.push((*key, host));
         }
     }
     if done.is_empty() {
@@ -320,8 +342,15 @@ fn trust_certificate(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some(a) = s.accounts.get_mut(at) {
         for (key, host) in &done {
-            let server = if *key == "incoming" { &mut a.incoming } else { &mut a.outgoing };
-            server.trusted = fingerprint;
+            match *key {
+                "incoming" => a.incoming.trusted = fingerprint,
+                "outgoing" => a.outgoing.trusted = fingerprint,
+                _ => {
+                    if let Some(dav) = a.caldav.as_mut() {
+                        dav.trusted = fingerprint;
+                    }
+                }
+            }
             if let Some(f) = fingerprint {
                 s.certificates.forget(host, f);
             }

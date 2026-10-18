@@ -6,12 +6,14 @@
 //! answered as an error. [`Fake::script`] instead plays back fixed bytes, for hostile-server
 //! tests.
 
+mod dav;
 mod http;
 mod imap;
 mod pop3;
 mod smtp;
 
 use crate::{About, Connector, End, Endpoint, Fingerprint, NetError, Protocol, Security, Seen, Stream, pipe};
+pub use dav::{DavCalendar, DavObject, HOME as DAV_HOME, PRINCIPAL as DAV_PRINCIPAL};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A message held by the fake server.
@@ -126,6 +128,20 @@ pub struct State {
     pub answers_only: Option<Vec<String>>,
     /// What the fake name server has, by name: records of every kind.
     pub records: Vec<(String, crate::dns::Record)>,
+    /// The host the fake CalDAV server answers at; other HTTPS hosts get `pages`.
+    pub dav_host: String,
+    /// Its calendars, and the counter each change raises, of which sync tokens are made.
+    pub calendars: Vec<DavCalendar>,
+    pub dav_changes: u64,
+    /// It keeps sync tokens ([RFC 6578]); a token older than `dav_forget_before` is forgotten.
+    pub dav_sync: bool,
+    pub dav_forget_before: u64,
+    /// A sync lists no more than this many changes at once, and says there are more (507).
+    pub dav_page: Option<usize>,
+    /// `/.well-known/caldav` sends the client on to `/dav/` ([RFC 6764] 5).
+    pub dav_well_known: bool,
+    /// A PUT is answered without the new ETag, as some servers answer it.
+    pub dav_no_etag: bool,
 }
 
 impl Default for State {
@@ -150,6 +166,14 @@ impl Default for State {
             next_validity: 100,
             answers_only: None,
             records: Vec::new(),
+            dav_host: "dav.example.test".into(),
+            calendars: vec![DavCalendar::new("/dav/calendars/pat/personal/", "Personal")],
+            dav_changes: 1,
+            dav_sync: true,
+            dav_forget_before: 0,
+            dav_page: None,
+            dav_well_known: true,
+            dav_no_etag: false,
         }
     }
 }
@@ -239,6 +263,7 @@ impl Connector for Fake {
         let protocol = to.protocol;
         let tls = to.security == Security::Tls;
         let host = to.host.clone();
+        let dav = protocol == Protocol::Https && host == lock(&self.state).dav_host;
         std::thread::spawn(move || {
             let _ = match mode {
                 Mode::Script(bytes) => script(server, &bytes),
@@ -246,6 +271,7 @@ impl Connector for Fake {
                     Protocol::Imap => imap::serve(server, &state, tls),
                     Protocol::Pop3 => pop3::serve(server, &state, tls),
                     Protocol::Smtp => smtp::serve(server, &state, tls),
+                    Protocol::Https if dav => dav::serve(server, &state),
                     Protocol::Https => http::serve(server, &state, &host),
                 },
             };

@@ -831,6 +831,11 @@ fn close_store(s: &mut Session, p: &Value) -> CmdResult {
     }
     s.stores.remove(idx);
     s.arrived.closed(idx);
+    s.calendar.chosen = match s.calendar.chosen {
+        Some((c, f)) if c < idx => Some((c, f)),
+        Some((c, f)) if c > idx => Some((c - 1, f)),
+        _ => None,
+    };
     // The steps name data files by their place in the list, which has just changed.
     s.undo.clear();
     if idx < s.folders.len() {

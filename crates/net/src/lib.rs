@@ -13,6 +13,7 @@
 
 pub mod cert;
 mod conn;
+pub mod dav;
 pub mod dns;
 pub mod find;
 pub mod http;
@@ -220,6 +221,8 @@ pub(crate) fn one_line(what: &'static str, text: &str) -> Result<(), NetError> {
 mod tests;
 #[cfg(test)]
 mod tests_cert;
+#[cfg(test)]
+mod tests_dav;
 #[cfg(test)]
 mod tests_dns;
 #[cfg(test)]

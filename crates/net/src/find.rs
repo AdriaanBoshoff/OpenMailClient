@@ -337,7 +337,7 @@ pub fn published(xml: &[u8], email: &str) -> Option<Found> {
 /// Whether XML nests elements no deeper than `most`. Comments, CDATA, processing
 /// instructions and declarations are passed over whole, and quoted attribute values are read as
 /// such, so nothing in them can hide an element; where it cannot tell, it counts one more.
-fn shallow(xml: &[u8], most: usize) -> bool {
+pub(crate) fn shallow(xml: &[u8], most: usize) -> bool {
     let after = |at: usize, end: &[u8]| xml.get(at..).and_then(|rest| rest.windows(end.len()).position(|w| w == end)).map(|n| at + n + end.len());
     let (mut at, mut depth) = (0usize, 0usize);
     while let Some(n) = xml.get(at..).and_then(|rest| rest.iter().position(|b| *b == b'<')) {

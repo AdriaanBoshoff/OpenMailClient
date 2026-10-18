@@ -2654,3 +2654,53 @@ fn a_calendar_file_is_shown_before_its_events_are_added() {
     assert!(ui.calendar_file.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// My Calendars lists every calendar of the data files open, and choosing one shows it; a
+/// server's colours that make no sense are left for the theme's.
+#[test]
+fn my_calendars_lists_every_calendar_and_shows_the_one_chosen() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("mail.select", &json!({ "folder": "Calendar" })).unwrap();
+    ui.execute("folder.new", &json!({ "name": "Team" })).unwrap();
+    ui.execute("nav.module", &json!({ "module": "calendar" })).unwrap();
+    let listed = openmailclient_engine::cmd::calendar::calendars(&ui.session);
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    assert_eq!(listed.iter().filter(|c| c["shown"] == json!(true)).count(), 1);
+    let team = listed.iter().find(|c| c["name"] == json!("Team")).unwrap().clone();
+    ui.execute("calendar.new", &json!({ "subject": "Only in Team", "start": "2030-01-02 10:00" })).unwrap();
+    ui.execute("calendar.open", &json!({ "store": team["store"], "folder": team["folder"] })).unwrap();
+    let listed = openmailclient_engine::cmd::calendar::calendars(&ui.session);
+    assert_eq!(listed.iter().find(|c| c["shown"] == json!(true)).unwrap()["name"], json!("Team"));
+    assert!(ui.session.calendar.items.iter().all(|(_, a)| a.subject != "Only in Team"), "each calendar has its own appointments");
+    for size in [egui::vec2(1280.0, 800.0), egui::vec2(320.0, 240.0), egui::vec2(1.0, 1.0)] {
+        draw_window(&mut ui, size);
+    }
+    for (text, ok) in
+        [("#CC3333", true), ("#cc3333ff", true), ("#CC33", false), ("CC3333", false), ("#ZZ3333", false), ("#Ω33333", false), ("", false)]
+    {
+        assert_eq!(crate::calendar::hex_color(text).is_some(), ok, "{text}");
+    }
+}
+
+/// The CalDAV address is a field of the account's form: shown as kept, sent as typed, and
+/// emptied to have none.
+#[test]
+fn an_accounts_caldav_server_is_a_field_of_its_form() {
+    let mut ui = MailUi::new(Session::with_sample());
+    let account = json!({ "email": "pat@example.test", "incoming": { "host": "mail.example.test" }, "caldav": "https://dav.example.test/cal/" });
+    ui.execute("account.add", &account).unwrap();
+    let listed = ui.execute("account.list", &Value::Null).unwrap();
+    let form = crate::accounts::Form::of(&listed["accounts"][0]);
+    assert_eq!(form.caldav, "https://dav.example.test/cal/");
+    let mut form = form;
+    form.caldav = "  ".into();
+    let p = form.params().unwrap();
+    assert_eq!(p["caldav"], json!(""));
+    ui.execute("account.edit", &p).unwrap();
+    assert!(ui.session.accounts[0].caldav.is_none(), "emptied: none");
+    form.caldav = "http://dav.example.test/".into();
+    assert!(ui.execute("account.edit", &form.params().unwrap()).is_err(), "only https: is taken");
+    assert_eq!(crate::accounts::url_host("https://pat@dav.example.test:8443/cal/"), "dav.example.test");
+    assert_eq!(crate::accounts::url_host("https://[::1]/x"), "[::1]");
+    assert_eq!(crate::accounts::url_host("not one"), "");
+}

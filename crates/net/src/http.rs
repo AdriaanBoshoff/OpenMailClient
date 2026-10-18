@@ -92,7 +92,7 @@ pub fn address(url: &str) -> Result<Address, NetError> {
 }
 
 /// A name or address of this machine or of a private network.
-fn is_local(host: &str) -> bool {
+pub(crate) fn is_local(host: &str) -> bool {
     use std::net::IpAddr;
     let name = host.trim_end_matches('.');
     if name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") || name.ends_with(".internal") || !name.contains(['.', ':']) {
@@ -219,7 +219,7 @@ fn once(with: &dyn Connector, at: &Address, limit: usize, accept: &str) -> Resul
         _ => return Err(NetError::Refused(format!("the web server answered {code}"))),
     }
     let bytes = if chunked {
-        chunks(&mut conn, limit)?
+        chunks(&mut conn, limit, "the picture")?
     } else if let Some(length) = length {
         if length > limit {
             return Err(NetError::TooLarge("the picture"));
@@ -232,7 +232,7 @@ fn once(with: &dyn Connector, at: &Address, limit: usize, accept: &str) -> Resul
 }
 
 /// A chunked body ([RFC 9112] 7.1): each chunk's size in hexadecimal, then the chunk.
-fn chunks(conn: &mut Conn, limit: usize) -> Result<Vec<u8>, NetError> {
+pub(crate) fn chunks(conn: &mut Conn, limit: usize, what: &'static str) -> Result<Vec<u8>, NetError> {
     let mut out = Vec::new();
     for _ in 0..MAX_CHUNKS {
         let line = conn.line()?;
@@ -243,7 +243,7 @@ fn chunks(conn: &mut Conn, limit: usize) -> Result<Vec<u8>, NetError> {
             return Ok(out);
         }
         if size > limit.saturating_sub(out.len()) || size > MAX_LINE * 1024 {
-            return Err(NetError::TooLarge("the picture"));
+            return Err(NetError::TooLarge(what));
         }
         out.extend(conn.exact(size)?);
         // The line end after the chunk.

@@ -32,6 +32,9 @@ pub struct Shown {
     pub occurrence: Option<i64>,
     /// Items of the folder that could not be read.
     pub unreadable: usize,
+    /// The calendar chosen to be shown (`calendar.open`); while it is there, it is the one
+    /// shown and written to.
+    pub chosen: Option<(usize, FolderId)>,
 }
 
 const VIEW_PARAMS: &str = r#"{"view": "day" | "workWeek" | "week" | "month"}"#;
@@ -49,6 +52,26 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             params: VIEW_PARAMS,
             enabled: always,
             run: view,
+        },
+        CommandSpec {
+            id: "calendar.calendars",
+            label: "My Calendars",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{}; returns {"calendars": [{"store", "file", "folder", "name", "shown", "account": the account whose CalDAV server it is kept in step with, or null, "color", "readOnly"}]}"#,
+            enabled: always,
+            run: list_calendars,
+        },
+        CommandSpec {
+            id: "calendar.open",
+            label: "Open Calendar",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"store", "folder"}, as calendar.calendars gives them; that calendar is shown, and new appointments go in it"#,
+            enabled: has_calendar,
+            run: open,
         },
         CommandSpec { id: "calendar.today", label: "Today", tab: "Home", group: "Go To", shortcut: "", params: "", enabled: always, run: today },
         CommandSpec {
@@ -126,11 +149,85 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
     ]
 }
 
-/// The store and Calendar folder appointments are kept in: the current store's, or else the
-/// first store's that has one.
+/// The store and Calendar folder appointments are kept in: the one chosen, else the current
+/// store's, or else the first store's that has one.
 pub(crate) fn calendar_folder(s: &Session) -> Option<(usize, FolderId)> {
+    if let Some((store, folder)) = s.calendar.chosen
+        && is_calendar(s, store, folder)
+    {
+        return Some((store, folder));
+    }
     let current = s.current.map(|(store, _)| store);
     current.into_iter().chain(0..s.stores.len()).find_map(|store| s.find_folder(store, FolderKind::Calendar).map(|f| (store, f)))
+}
+
+fn is_calendar(s: &Session, store: usize, folder: FolderId) -> bool {
+    s.folders.get(store).is_some_and(|f| f.iter().any(|x| x.id == folder && x.kind == FolderKind::Calendar))
+}
+
+/// Calendar folders listed at most.
+const MAX_CALENDARS: usize = 500;
+
+/// Every calendar of the data files open, as the folder pane lists them under My Calendars.
+pub fn calendars(s: &Session) -> Vec<Value> {
+    let shown = calendar_folder(s);
+    let mut out = Vec::new();
+    // Paths are only looked at when some calendar is kept in step with a server: the window
+    // asks for this list as it is drawn.
+    let davs: Vec<(&crate::accounts::Account, std::path::PathBuf)> = s
+        .accounts
+        .iter()
+        .filter(|a| a.caldav.is_some())
+        .filter_map(|a| Some((a, std::fs::canonicalize(super::account::account_path(s, a)?).ok()?)))
+        .collect();
+    for (store, folders) in s.folders.iter().enumerate() {
+        let file = s.stores.get(store).map(|st| st.display_name()).unwrap_or_default();
+        let has_calendar = folders.iter().any(|f| f.kind == FolderKind::Calendar);
+        let path = if davs.is_empty() || !has_calendar {
+            None
+        } else {
+            s.stores.get(store).and_then(|st| st.path()).and_then(|p| std::fs::canonicalize(p).ok())
+        };
+        let owner = path.and_then(|path| davs.iter().find(|(_, p)| *p == path).map(|(a, _)| *a));
+        for f in folders.iter().filter(|f| f.kind == FolderKind::Calendar).take(MAX_CALENDARS.saturating_sub(out.len())) {
+            // Kept in step with a server: whose, and what it lets be changed.
+            let dav = owner.and_then(|a| a.caldav.as_ref().and_then(|d| d.calendars.iter().find(|c| c.here == f.id.0)).map(|c| (a, c)));
+            out.push(json!({
+                "store": store,
+                "file": file,
+                "folder": f.id.0,
+                "name": f.name,
+                "shown": shown == Some((store, f.id)),
+                "account": dav.map(|(a, _)| a.id.clone()),
+                "color": dav.map(|(_, c)| c.color.clone()).filter(|c| !c.is_empty()),
+                "readOnly": dav.is_some_and(|(_, c)| c.read_only),
+            }));
+        }
+    }
+    out
+}
+
+fn list_calendars(s: &mut Session, _: &Value) -> CmdResult {
+    Ok(json!({ "calendars": calendars(s) }))
+}
+
+fn open(s: &mut Session, p: &Value) -> CmdResult {
+    let store = p_u64(p, "store")
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| EngineError::BadParams("\"store\" is a data file's number, as calendar.calendars gives it".into()))?;
+    let folder = FolderId(
+        p_u64(p, "folder").ok_or_else(|| EngineError::BadParams("\"folder\" is a Calendar folder's id, as calendar.calendars gives it".into()))?,
+    );
+    if !is_calendar(s, store, folder) {
+        return Err(EngineError::BadParams("that is not a calendar of a data file open".into()));
+    }
+    s.calendar.chosen = Some((store, folder));
+    s.calendar.selected = None;
+    s.calendar.occurrence = None;
+    s.reload_calendar()?;
+    s.status =
+        format!("Showing {}", s.folders.get(store).and_then(|f| f.iter().find(|x| x.id == folder)).map(|f| f.name.clone()).unwrap_or_default());
+    ok()
 }
 
 const CHANGE_PARAMS: &str = r#"{"id" (default: the one chosen), any of those calendar.new takes, and "occurrence": "YYYY-MM-DD", the day one occurrence of a series was first planned on, to change that one alone (default: the one chosen, when "id" is not given), or "series": true; an occurrence keeps its place among the others, and a series whose time changes has its occurrences as planned again"}"#;

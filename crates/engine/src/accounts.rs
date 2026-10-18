@@ -361,6 +361,102 @@ impl Received {
     }
 }
 
+/// Calendars kept in step with a CalDAV server ([RFC 4791]), signed in to with the account's
+/// own name and password.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DavSetup {
+    /// Where the server is, as the owner named it: `https:` only.
+    pub url: String,
+    /// A certificate of the server's own the owner trusted, for its host only.
+    pub trusted: Option<Fingerprint>,
+    /// The server's calendars as they were when last kept in step.
+    pub calendars: Vec<DavCal>,
+}
+
+/// A calendar of a CalDAV server, and the folder here it is kept in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DavCal {
+    /// Its path on the server.
+    pub href: String,
+    pub name: String,
+    /// `#RRGGBB`, or empty.
+    pub color: String,
+    /// Its sync token when last kept in step ([RFC 6578]); empty when the server keeps none.
+    pub token: String,
+    /// The folder of the account's data file it is kept in.
+    pub here: u64,
+    /// Nothing changed here is put there.
+    pub read_only: bool,
+}
+
+/// Calendars of one server kept in step at most.
+pub const MAX_DAV_CALENDARS: usize = 100;
+
+impl DavSetup {
+    pub fn to_json(&self) -> Value {
+        let calendars: Vec<Value> = self
+            .calendars
+            .iter()
+            .map(|c| json!({ "href": c.href, "name": c.name, "color": c.color, "token": c.token, "here": c.here, "readOnly": c.read_only }))
+            .collect();
+        json!({ "url": self.url, "trusted": self.trusted.map(|f| f.to_string()), "calendars": calendars })
+    }
+
+    /// As the settings file keeps it; what makes no sense is left out.
+    fn from_settings(v: Option<&Value>) -> Option<Self> {
+        let v = v?;
+        let url = openmailclient_net::dav::Url::parse(v.get("url").and_then(Value::as_str)?).ok()?.text();
+        let mut calendars: Vec<DavCal> = Vec::new();
+        for c in v.get("calendars").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().take(MAX_DAV_CALENDARS) {
+            let Some(href) = c.get("href").and_then(Value::as_str) else { continue };
+            let plain = href.starts_with('/') && href.len() <= 2048 && href.bytes().all(|b| (0x21..0x7F).contains(&b));
+            if !plain || calendars.iter().any(|x| x.href == href) {
+                continue;
+            }
+            let short = |key: &str, max: usize| c.get(key).and_then(|t| kept_text(t, max)).unwrap_or_default().to_string();
+            calendars.push(DavCal {
+                href: href.to_string(),
+                name: short("name", 200),
+                color: short("color", 16),
+                token: short("token", 1000),
+                here: c.get("here").and_then(Value::as_u64).unwrap_or(0),
+                read_only: c.get("readOnly").and_then(Value::as_bool).unwrap_or(false),
+            });
+        }
+        let trusted = v.get("trusted").and_then(Value::as_str).and_then(Fingerprint::parse);
+        Some(Self { url, trusted, calendars })
+    }
+
+    /// The server's host.
+    pub fn host(&self) -> String {
+        openmailclient_net::dav::Url::parse(&self.url).map(|u| u.host).unwrap_or_default()
+    }
+}
+
+/// The CalDAV server an edit leaves: the one given (`"caldav"`: its address, or
+/// `{"url"}`; `""` or `false` for none), else the one before. Another address starts over;
+/// a certificate trusted stays only for the same host.
+fn caldav(p: &Value, was: Option<&DavSetup>) -> Result<Option<DavSetup>, EngineError> {
+    let url = match p.get("caldav") {
+        None | Some(Value::Null) => return Ok(was.cloned()),
+        Some(Value::Bool(false)) => return Ok(None),
+        Some(Value::String(u)) if u.trim().is_empty() => return Ok(None),
+        Some(Value::String(u)) => u.as_str(),
+        Some(v) => match v.get("url").and_then(Value::as_str) {
+            Some(u) if u.trim().is_empty() => return Ok(None),
+            Some(u) => u,
+            None => return Err(bad("\"caldav\" is a calendar server's https: address, or {\"url\"}")),
+        },
+    };
+    let parsed = openmailclient_net::dav::Url::parse(url).map_err(|e| bad(e.to_string()))?;
+    let url = parsed.text();
+    Ok(Some(match was {
+        Some(w) if w.url == url => w.clone(),
+        Some(w) if w.host() == parsed.host => DavSetup { url, trusted: w.trusted, calendars: Vec::new() },
+        _ => DavSetup { url, ..DavSetup::default() },
+    }))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
     /// What its password is kept under; never changes once made.
@@ -388,6 +484,8 @@ pub struct Account {
     /// made in the program's own folder the first time it is needed. Set only by the program
     /// and the settings file, never by a command.
     pub data_file: Option<std::path::PathBuf>,
+    /// The CalDAV server the account's calendars are kept in step with, when it has one.
+    pub caldav: Option<DavSetup>,
 }
 
 pub(crate) fn security_name(s: Security) -> &'static str {
@@ -526,6 +624,7 @@ impl Account {
                 .map(|w| w.received.clone())
                 .unwrap_or_default(),
             data_file: was.and_then(|w| w.data_file.clone()),
+            caldav: caldav(p, was.and_then(|w| w.caldav.as_ref()))?,
             email,
             kind,
             incoming,
@@ -549,6 +648,7 @@ impl Account {
             "leaveOnServer": self.leave_on_server,
             "sentOnServer": self.sent_on_server,
             "dataFile": self.data_file.as_ref().map(|p| p.display().to_string()),
+            "caldav": self.caldav.as_ref().map(DavSetup::to_json),
         })
     }
 
@@ -606,6 +706,7 @@ pub fn from_settings(v: &Value) -> (Vec<Account>, u32) {
                 let trusted = |key: &str| a.get(key).and_then(|s| s.get("trusted")).and_then(Value::as_str).and_then(Fingerprint::parse);
                 account.incoming.trusted = trusted("incoming");
                 account.outgoing.trusted = trusted("outgoing");
+                account.caldav = DavSetup::from_settings(a.get("caldav"));
                 out.push(account);
             }
             _ => ignored += 1,

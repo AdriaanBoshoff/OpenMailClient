@@ -3,6 +3,7 @@
 
 mod account;
 mod arrival;
+pub(crate) mod caldav;
 pub mod calendar;
 mod calendar_file;
 pub(crate) mod compose;
@@ -60,6 +61,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(progress::commands());
         v.extend(calendar::commands());
         v.extend(calendar_file::commands());
+        v.extend(caldav::commands());
         v
     })
 }

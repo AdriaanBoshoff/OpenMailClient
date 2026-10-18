@@ -478,26 +478,74 @@ impl MailUi {
             self.go_to_day(day);
         }
 
-        // The calendars there are: for now, the one the appointments are in.
+        // Every calendar of the data files open, those kept in step with a server in its
+        // colour; a click shows that one.
         let y = y0 + 18.0 + cell * 6.0 + 22.0;
         p.text(pos2(rect.left() + 14.0, y), Align2::LEFT_CENTER, "My Calendars", bold(12.5), t.text);
-        let name = self
-            .session
-            .calendar
-            .folder
-            .and_then(|(store, folder)| {
-                let f = self.session.folders.get(store)?.iter().find(|f| f.id == folder)?;
-                let st = self.session.stores.get(store)?;
-                Some(format!("{} - {}", one_line(&f.name), one_line(&st.display_name())))
-            })
-            .unwrap_or_else(|| "No calendar in the data files open".to_string());
-        let r = Rect::from_min_size(pos2(rect.left() + 26.0, y + 14.0), vec2(12.0, 12.0));
-        p.rect_filled(r, 2.0, t.accent);
-        icons::paint(&p, r.shrink(1.5), Icon::Check, t.on_accent);
-        clip_text(&p, pos2(r.right() + 8.0, r.top() - 1.0), rect.right() - r.right() - 18.0, &name, font(12.0), t.text_dim);
+        let calendars = openmailclient_engine::cmd::calendar::calendars(&self.session);
+        let mut y = y + 14.0;
+        if calendars.is_empty() {
+            clip_text(&p, pos2(rect.left() + 26.0, y - 1.0), rect.width() - 36.0, "No calendar in the data files open", font(12.0), t.text_dim);
+            y += 20.0;
+        }
+        // The data file each is in, only where they are in more than one.
+        let files = calendars.first().is_some_and(|f| calendars.iter().any(|c| c["store"] != f["store"]));
+        let mut open = None;
+        for c in &calendars {
+            if y + 16.0 > rect.bottom() {
+                break;
+            }
+            let (Some(store), Some(folder)) = (c["store"].as_u64(), c["folder"].as_u64()) else { continue };
+            let shown = c["shown"].as_bool() == Some(true);
+            let row = Rect::from_min_size(pos2(rect.left() + 18.0, y - 3.0), vec2(rect.width() - 26.0, 18.0));
+            let resp = ui.interact(row, egui::Id::new(("cal-list", store, folder)), Sense::click());
+            if resp.hovered() {
+                p.rect_filled(row, 3.0, t.hover);
+            }
+            let (color, mark) = match c["color"].as_str().and_then(hex_color) {
+                Some(c) => (c, if luminance(c) > 0.5 { Color32::BLACK } else { Color32::WHITE }),
+                None => (t.accent, t.on_accent),
+            };
+            let r = Rect::from_min_size(pos2(rect.left() + 26.0, y), vec2(12.0, 12.0));
+            if shown {
+                p.rect_filled(r, 2.0, color);
+                icons::paint(&p, r.shrink(1.5), Icon::Check, mark);
+            } else {
+                p.rect_stroke(r, 2.0, (1.5, color), egui::StrokeKind::Inside);
+            }
+            let name = format!("{} - {}", one_line(c["name"].as_str().unwrap_or("")), one_line(c["file"].as_str().unwrap_or("")));
+            let words = if files { name.clone() } else { one_line(c["name"].as_str().unwrap_or("")) };
+            clip_text(
+                &p,
+                pos2(r.right() + 8.0, r.top() - 1.0),
+                rect.right() - r.right() - 18.0,
+                &words,
+                font(12.0),
+                if shown { t.text } else { t.text_dim },
+            );
+            let read_only = c["readOnly"].as_bool() == Some(true);
+            let hover = match (c["account"].is_string(), read_only) {
+                (true, true) => format!(
+                    "{name}
+Kept in step with a calendar server, which lets it be read only"
+                ),
+                (true, false) => format!(
+                    "{name}
+Kept in step with a calendar server at each Send/Receive"
+                ),
+                _ => name,
+            };
+            if resp.on_hover_text(hover).clicked() && !shown {
+                open = Some((store, folder));
+            }
+            y += 20.0;
+        }
+        if let Some((store, folder)) = open {
+            self.act("calendar.open", json!({ "store": store, "folder": folder }));
+        }
         if self.session.calendar.unreadable > 0 {
             let words = format!("{} items could not be read", self.session.calendar.unreadable);
-            clip_text(&p, pos2(rect.left() + 26.0, y + 34.0), rect.width() - 36.0, &words, font(11.0), t.danger);
+            clip_text(&p, pos2(rect.left() + 26.0, y + 2.0), rect.width() - 36.0, &words, font(11.0), t.danger);
         }
     }
 
@@ -1343,4 +1391,17 @@ fn chevron(p: &Painter, c: egui::Pos2, back: bool, color: Color32) {
     let s = Stroke::new(1.6, color);
     p.line_segment([pos2(c.x - 3.0 * d, c.y - 5.5), pos2(c.x + 2.5 * d, c.y)], s);
     p.line_segment([pos2(c.x + 2.5 * d, c.y), pos2(c.x - 3.0 * d, c.y + 5.5)], s);
+}
+
+/// `#RRGGBB` as a colour; a server's colour may carry alpha after it (`#RRGGBBAA`), which is left out.
+pub(crate) fn hex_color(text: &str) -> Option<Color32> {
+    let hex = text.trim().strip_prefix('#')?;
+    let byte = |i: usize| hex.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
+    (hex.len() == 6 || hex.len() == 8).then_some(())?;
+    Some(Color32::from_rgb(byte(0)?, byte(2)?, byte(4)?))
+}
+
+/// How light a colour is, 0 to 1, near enough to choose a mark's colour over it.
+fn luminance(c: Color32) -> f32 {
+    (0.2126 * f32::from(c.r()) + 0.7152 * f32::from(c.g()) + 0.0722 * f32::from(c.b())) / 255.0
 }

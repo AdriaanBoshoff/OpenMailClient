@@ -45,7 +45,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "Send / Receive",
             group: "Send & Receive",
             shortcut: "F9",
-            params: r#"{"wait": false to do it on threads of their own}; sends what is in the Outbox, then takes new mail down from every account; returns {"send", "receive"} as mail.sendAll and account.receive give them"#,
+            params: r#"{"wait": false to do it on threads of their own}; sends what is in the Outbox, then takes new mail down from every account and keeps the calendars of those with a CalDAV server in step; returns {"send", "receive", "calendars"} as mail.sendAll, account.receive and calendar.sync give them"#,
             enabled: has_accounts,
             run: send_receive,
         },
@@ -71,7 +71,16 @@ fn send_receive(s: &mut Session, p: &Value) -> CmdResult {
     if wait && !status.is_empty() {
         s.status = format!("{status}; {}", s.status);
     }
-    Ok(json!({ "send": send, "receive": receive }))
+    // Calendars go with mail; a calendar server that cannot be reached stops no mail.
+    let calendars = if s.accounts.iter().any(|a| a.caldav.is_some()) {
+        let status = s.status.clone();
+        let done = super::caldav::sync_from(s, None, wait).unwrap_or_else(|e| json!({ "said": e.to_string() }));
+        s.status = if wait { format!("{status}; {}", s.status) } else { status };
+        done
+    } else {
+        Value::Null
+    };
+    Ok(json!({ "send": send, "receive": receive, "calendars": calendars }))
 }
 
 fn receive(s: &mut Session, p: &Value) -> CmdResult {

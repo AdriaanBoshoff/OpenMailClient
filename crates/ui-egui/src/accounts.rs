@@ -39,6 +39,8 @@ pub(crate) struct Form {
     pub sent_on_server: bool,
     /// The data file its mail is kept in, where it has one of its own.
     pub data_file: String,
+    /// The CalDAV server its calendars are kept in step with, or empty.
+    pub caldav: String,
     /// Each server with a certificate of its own the owner trusted: which, its host and the
     /// certificate's fingerprint.
     pub trusted: Vec<(&'static str, String, String)>,
@@ -68,13 +70,14 @@ impl Form {
             leave: true,
             sent_on_server: true,
             data_file: String::new(),
+            caldav: String::new(),
             trusted: Vec::new(),
             shown: Vec::new(),
         }
     }
 
     /// The form for an account as `account.list` gives it.
-    fn of(a: &Value) -> Self {
+    pub(crate) fn of(a: &Value) -> Self {
         let text = |key: &str| a.get(key).and_then(Value::as_str).map(one_line).unwrap_or_default();
         let sec = |v: Option<&Value>| {
             let s = v.and_then(|v| v.get("security")).and_then(Value::as_str).unwrap_or("tls");
@@ -87,11 +90,13 @@ impl Form {
         let user = text("user");
         let mut trusted = Vec::new();
         let mut shown: Vec<Value> = Vec::new();
-        for side in ["incoming", "outgoing"] {
-            if let Some(f) = a.get(side).and_then(|v| v.get("trusted")).and_then(Value::as_str) {
-                trusted.push((side, host(side), one_line(f)));
+        let caldav = a.get("caldav").and_then(|v| v.get("url")).and_then(Value::as_str).map(one_line).unwrap_or_default();
+        for (side, key) in [("incoming", "incoming"), ("outgoing", "outgoing"), ("calendar", "caldav")] {
+            if let Some(f) = a.get(key).and_then(|v| v.get("trusted")).and_then(Value::as_str) {
+                let host = if key == "caldav" { url_host(&caldav) } else { host(key) };
+                trusted.push((side, host, one_line(f)));
             }
-            for c in a.get(side).and_then(|v| v.get("certificates")).and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+            for c in a.get(key).and_then(|v| v.get("certificates")).and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
                 if !shown.iter().any(|s| s["fingerprint"] == c["fingerprint"] && s["host"] == c["host"]) {
                     shown.push(c.clone());
                 }
@@ -117,6 +122,7 @@ impl Form {
             leave: a.get("leaveOnServer").and_then(Value::as_bool) != Some(false),
             sent_on_server: a.get("sentOnServer").and_then(Value::as_bool) != Some(false),
             data_file: a.get("dataFile").and_then(Value::as_str).map(one_line).unwrap_or_default(),
+            caldav,
             trusted,
             shown,
         }
@@ -134,7 +140,7 @@ impl Form {
     }
 
     /// The fields as `account.add` and `account.edit` take them, the password left out.
-    fn params(&self) -> Result<Value, String> {
+    pub(crate) fn params(&self) -> Result<Value, String> {
         let port = |text: &str, which: &str| -> Result<Value, String> {
             let text = text.trim();
             if text.is_empty() {
@@ -158,6 +164,8 @@ impl Form {
             "signInToSend": self.sign_in,
             "leaveOnServer": self.leave,
             "sentOnServer": self.sent_on_server,
+            // Empty: none.
+            "caldav": self.caldav.trim(),
         });
         if let (Some(id), Some(map)) = (&self.id, p.as_object_mut()) {
             map.insert("id".into(), json!(id));
@@ -552,6 +560,10 @@ impl MailUi {
                                 port(ui, &mut f.out_port, "out-port");
                             });
                             ui.end_row();
+                            label(ui, &t, "Calendars (CalDAV)");
+                            field(ui, &mut f.caldav, "caldav", "https://… or none", 2000)
+                                .on_hover_text("A CalDAV server whose calendars are kept in step with this account's, signed in to the same way");
+                            ui.end_row();
                         });
 
                         section(ui, &t, "Signing in", "account-sign-in", |ui| {
@@ -652,7 +664,11 @@ impl MailUi {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         let short: String = fingerprint.chars().take(23).collect();
-                        let which = if *side == "incoming" { "Incoming" } else { "Outgoing" };
+                        let which = match *side {
+                            "incoming" => "Incoming",
+                            "outgoing" => "Outgoing",
+                            _ => "Calendar",
+                        };
                         ui.label(
                             egui::RichText::new(format!("{which} server: a certificate of its own is trusted for {host} ({short}…)"))
                                 .font(font(11.5))
@@ -876,4 +892,17 @@ fn mark(ui: &mut egui::Ui, t: &Tokens, good: bool) -> egui::Response {
         p.line_segment([c + vec2(3.0, -3.0), c + vec2(-3.0, 3.0)], ink);
     }
     response
+}
+
+/// The host of an `https:` address as typed, or empty.
+pub(crate) fn url_host(url: &str) -> String {
+    let rest = url.trim().strip_prefix("https://").unwrap_or("");
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host = rest.get(..end).unwrap_or("");
+    let host = host.rsplit('@').next().unwrap_or(host);
+    // A port after the last colon, unless the host is in brackets.
+    match host.rfind(':') {
+        Some(i) if !host.ends_with(']') => host.get(..i).unwrap_or(host).to_string(),
+        _ => host.to_string(),
+    }
 }
