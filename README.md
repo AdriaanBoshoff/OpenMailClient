@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M5%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-62%20of%20123%20%C2%B7%2050%25-yellow)
-![tests](https://img.shields.io/badge/tests-595%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-599%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -142,7 +142,9 @@ read, a reader we can try without driving a window, a printer we may use).
   invitation any mail program shows as one. An invitation you get has a bar that says when and
   where, what else you have then, and Accept, Tentative or Decline; it goes in your calendar only
   once you answer, and answers and cancellations count only from the person they must come from.
-  The organizer sees who answered how, and can send updates or call the meeting off.
+  The organizer sees who answered how, and can send updates or call the meeting off. Meetings
+  go both ways with Outlook: its requests, sent as a calendar alone or kept in a data file by
+  their properties, are read and answered, and ours carry what Outlook reads.
 - **Import from Outlook.** Every IMAP and POP3 account of the Outlook profiles, with its servers and
   without its password, and the profiles' data files: shown first, then copied without changing
   Outlook's own files, an `.ost` made a `.pst` of our own.
@@ -184,6 +186,10 @@ Without a window:
 
 ```bash
 cargo run --release -p openmailclient-cli -- inspect path/to/archive.pst --check
+```
+
+```bash
+cargo run --release -p openmailclient-cli -- inspect path/to/message.msg --props
 ```
 
 ```bash

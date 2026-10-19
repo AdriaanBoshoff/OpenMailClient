@@ -178,3 +178,21 @@ fn a_meeting_message_carries_its_calendar_as_another_way_to_read_it() {
     item.props.set_str(pid::MESSAGE_CLASS, "IPM.Note");
     assert!(String::from_utf8(write(&item)).unwrap().contains("invite.ics"));
 }
+
+#[test]
+fn a_meeting_sent_as_its_calendar_alone_says_what_it_says_in_its_body() {
+    // As Outlook sends one: no other way of reading it than the calendar, lines folded with tabs.
+    let eml = "From: Sam <sam@example.test>\r\nTo: pat@example.test\r\nSubject: Planning\r\nContent-Type: text/calendar; method=REQUEST;\r\n\tcharset=\"utf-8\"\r\n\r\nBEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nDESCRIPTION;LANGUAGE=en:Plans for the\r\n\t next quarter\\, in Room 2\\n\\nSam\\n\r\nSUMMARY:Planning\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let item = parse(eml.as_bytes()).unwrap();
+    assert_eq!(item.message_class(), "IPM.Schedule.Meeting.Request");
+    assert_eq!(item.body_text().trim_end(), "Plans for the next quarter, in Room 2\n\nSam");
+    // A quoted colon in a parameter is not where the value starts.
+    assert_eq!(crate::write::calendar_text(b"DESCRIPTION;ALTREP=\"cid:a:b\":Words\r\n", "DESCRIPTION").as_deref(), Some("Words"));
+    assert_eq!(crate::write::calendar_text(b"DESCRIPTIONS:no\r\nSUMMARY:x\r\n", "DESCRIPTION"), None);
+    assert_eq!(crate::write::calendar_text(b"DESCRIPTION:\\", "DESCRIPTION"), None);
+    assert_eq!(crate::write::calendar_text(b"", "DESCRIPTION"), None);
+    assert_eq!(crate::write::calendar_text(&[0xFF; 300], "DESCRIPTION"), None);
+    // Long words are cut, not kept whole.
+    let long = format!("DESCRIPTION:{}\r\n", "é".repeat(50_000));
+    assert_eq!(crate::write::calendar_text(long.as_bytes(), "DESCRIPTION").unwrap().chars().count(), 20_000);
+}

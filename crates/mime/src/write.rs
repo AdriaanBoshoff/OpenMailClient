@@ -186,6 +186,44 @@ pub fn calendar_method(data: &[u8]) -> Option<&'static str> {
     ["PUBLISH", "REQUEST", "REPLY", "CANCEL", "COUNTER", "DECLINECOUNTER", "REFRESH", "ADD"].into_iter().find(|m| *m == method)
 }
 
+/// The value of a calendar's first property `name` (DESCRIPTION, SUMMARY…), its lines unfolded
+/// (RFC 5545 3.1, a line end then a space or a tab) and its escapes read (3.3.11); `None` when
+/// it has none or an empty one. At most 64 KB of the calendar is read and 20 000 characters kept.
+pub fn calendar_text(data: &[u8], name: &str) -> Option<String> {
+    const MAX_READ: usize = 64 << 10;
+    const MAX_KEPT: usize = 20_000;
+    let text = String::from_utf8_lossy(data.get(..data.len().min(MAX_READ)).unwrap_or_default()).replace("\r\n", "\n");
+    let unfolded = text.replace("\n ", "").replace("\n\t", "");
+    let line = unfolded
+        .lines()
+        .find(|l| l.get(..name.len()).is_some_and(|h| h.eq_ignore_ascii_case(name)) && matches!(l.as_bytes().get(name.len()), Some(b':' | b';')))?;
+    // The value follows the first colon outside a quoted parameter value (3.1.1).
+    let mut quoted = false;
+    let at = line.char_indices().find(|&(_, c)| {
+        if c == '"' {
+            quoted = !quoted;
+        }
+        c == ':' && !quoted
+    })?;
+    let mut out = String::new();
+    let mut chars = line.get(at.0 + 1..)?.chars();
+    while let Some(c) = chars.next() {
+        if out.chars().count() >= MAX_KEPT {
+            break;
+        }
+        match (c, c == '\\') {
+            (_, true) => match chars.next() {
+                Some('n' | 'N') => out.push('\n'),
+                Some(other) => out.push(other),
+                None => {}
+            },
+            (c, false) => out.push(c),
+        }
+    }
+    let out = out.trim_end().to_string();
+    (!out.is_empty()).then_some(out)
+}
+
 fn calendar_part(data: &[u8], method: &str) -> String {
     let mut out = format!("Content-Type: text/calendar; charset=\"utf-8\"; method={method}\r\nContent-Transfer-Encoding: base64\r\n\r\n");
     let b64 = base64::engine::general_purpose::STANDARD.encode(data);

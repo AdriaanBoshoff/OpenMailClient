@@ -54,6 +54,17 @@ pub mod class {
     pub const DECLINED: &str = "IPM.Schedule.Meeting.Resp.Neg";
 }
 
+/// A meeting's request, answer or cancellation marked as about the meeting `global_id` names,
+/// as Outlook marks one ([MS-OXOCAL] 2.2.6.1): its GlobalObjectId, that it is a meeting (and one
+/// received), its sequence and the answer it stands at. What else it holds is left.
+pub fn dress(item: &mut Item, global_id: &[u8], sequence: i32, received: bool, response: Response) {
+    let a = PSETID_APPOINTMENT;
+    crate::calendar::set_global_id(item, global_id);
+    set_named(item, a, lid::STATE_FLAGS, PropValue::Int32(AS_MEETING | if received { AS_RECEIVED } else { 0 }));
+    set_named(item, a, lid::SEQUENCE, PropValue::Int32(sequence.max(0)));
+    set_named(item, a, lid::RESPONSE_STATUS, PropValue::Int32(response.code()));
+}
+
 /// Whether an item is a meeting's request, answer or cancellation, by its class.
 pub fn is_meeting_message(item: &Item) -> bool {
     item.message_class().to_ascii_lowercase().starts_with("ipm.schedule.meeting.")

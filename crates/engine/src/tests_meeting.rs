@@ -266,3 +266,168 @@ fn hostile_meeting_params_are_errors_that_change_nothing() {
     assert!(s.run("calendar.sendInvitations", &json!({ "id": 999_999 })).is_err());
     assert!(fake.state().submitted.is_empty());
 }
+
+/// A meeting's id as Outlook writes it for a UID: its GlobalObjectId in hexadecimal.
+const OUTLOOK_UID: &str = "040000008200E00074C5B7101A82E00800000000B0206F3BB95FDD010000000000000000100000004C54A336181ADC4B955995B304583205";
+
+/// A request in the shape Outlook sends one: the calendar alone with no other way of reading it,
+/// lines folded with a tab, the zone named as Windows names it and given by its standard time
+/// alone, the UID a GlobalObjectId and the words in DESCRIPTION. Written by hand from that shape;
+/// every name, address and word in it is ours.
+fn outlook_request() -> String {
+    let (uid_a, uid_b) = OUTLOOK_UID.split_at(73);
+    [
+        "From: \"Sam Reyes\" <sam@example.test>",
+        "To: <pat@example.test>",
+        "Subject: Planning",
+        "Date: Mon, 19 Oct 2026 11:01:46 +0200",
+        "Message-ID: <000401dd5fa8$7a65cfa0$6f316ee0$@example.test>",
+        "MIME-Version: 1.0",
+        "Content-Type: text/calendar; method=REQUEST;",
+        "\tcharset=\"utf-8\"",
+        "Content-Transfer-Encoding: 7bit",
+        "",
+        "BEGIN:VCALENDAR",
+        "PRODID:-//Example//Example Calendar 1.0//EN",
+        "VERSION:2.0",
+        "METHOD:REQUEST",
+        "BEGIN:VTIMEZONE",
+        "TZID:South Africa Standard Time",
+        "BEGIN:STANDARD",
+        "DTSTART:16010101T000000",
+        "TZOFFSETFROM:+0200",
+        "TZOFFSETTO:+0200",
+        "END:STANDARD",
+        "END:VTIMEZONE",
+        "BEGIN:VEVENT",
+        "ATTENDEE;CN=pat@example.test;RSVP=TRUE:mailto:pat@exam",
+        "\tple.test",
+        "CLASS:PUBLIC",
+        "CREATED:20261019T090925Z",
+        "DESCRIPTION:Plans for the next quarter\\n\\n",
+        "DTEND;TZID=\"South Africa Standard Time\":20261019T120000",
+        "DTSTAMP:20261019T090146Z",
+        "DTSTART;TZID=\"South Africa Standard Time\":20261019T113000",
+        "LAST-MODIFIED:20261019T090925Z",
+        "ORGANIZER;CN=\"Sam Reyes\":mailto:sam@example.test",
+        "PRIORITY:5",
+        "SEQUENCE:0",
+        "SUMMARY;LANGUAGE=en-za:Planning",
+        "TRANSP:OPAQUE",
+        &format!("UID:{uid_a}"),
+        &format!("\t{uid_b}"),
+        "X-ALT-DESC;FMTTYPE=text/html:<html><body><p>Plans for the next quarter</p></b",
+        "\tody></html>",
+        "X-MICROSOFT-CDO-BUSYSTATUS:BUSY",
+        "X-MICROSOFT-DISALLOW-COUNTER:FALSE",
+        "END:VEVENT",
+        "END:VCALENDAR",
+        "",
+    ]
+    .join("\r\n")
+}
+
+#[test]
+fn a_request_from_outlook_is_read_answered_and_kept_as_outlook_keeps_one() {
+    use openmailclient_model::calendar::{self, Appointment};
+    use openmailclient_model::meeting::{self, Meeting, Response};
+    let fake = Fake::default();
+    let mut s = session(&fake);
+    fake.state().mailbox("INBOX").unwrap().add(outlook_request().as_bytes(), &[]);
+    run(&mut s, "account.receive", Value::Null);
+    run(&mut s, "folder.select", json!({ "folder": "Inbox" }));
+    let at = s.rows.iter().position(|r| r.subject == "Planning").unwrap();
+    run(&mut s, "mail.select", json!({ "index": at }));
+    let open = s.open.clone().unwrap();
+    assert_eq!(open.message_class(), meeting::class::REQUEST);
+    // What it says is in its calendar alone, and is its body.
+    assert_eq!(open.body_text().trim(), "Plans for the next quarter");
+    // Kept as Outlook keeps a request: the meeting's id, when it is, received and not answered.
+    assert_eq!(calendar::global_id(&open).unwrap(), calendar::global_id_of_uid(OUTLOOK_UID));
+    let a = Appointment::of(&open).unwrap();
+    assert_eq!(a.start, openmailclient_model::time::from_civil(2026, 10, 19, 9, 30, 0, 0), "11:30 South Africa time");
+    assert_eq!(a.end, openmailclient_model::time::from_civil(2026, 10, 19, 10, 0, 0, 0));
+    let m = Meeting::of(&open).unwrap();
+    assert!(m.received && m.response == Response::NotResponded, "{m:?}");
+    let asked = run(&mut s, "calendar.invitation", Value::Null);
+    assert_eq!(asked["method"], "REQUEST");
+    assert_eq!(asked["meeting"]["organizer"]["untrusted_content"]["address"], "sam@example.test", "{asked}");
+
+    // As Outlook keeps it in a data file or a .msg: no calendar, its properties alone.
+    let mut stored = open.clone();
+    stored.attachments.clear();
+    s.open = Some(stored);
+    let again = run(&mut s, "calendar.invitation", Value::Null);
+    for key in ["method", "start", "end", "response"] {
+        assert_eq!(again[key], asked[key], "{key}: {again}");
+    }
+    assert_eq!(again["meeting"]["organizer"]["untrusted_content"], asked["meeting"]["organizer"]["untrusted_content"]);
+    assert_eq!(again["untrusted_content"]["description"], "Plans for the next quarter");
+
+    // Answered: the reply names the meeting by Outlook's own id, so Outlook knows it again.
+    run(&mut s, "mail.select", json!({ "index": at }));
+    run(&mut s, "calendar.respond", json!({ "response": "accept" }));
+    let (to, subject, cal) = went(&fake, 0);
+    assert_eq!(to, ["sam@example.test"]);
+    assert_eq!(subject, "Accepted: Planning");
+    assert!(cal.contains("METHOD:REPLY\r\n") && cal.contains("PARTSTAT=ACCEPTED"), "{cal}");
+    assert_eq!(line_of(&cal, "UID:"), format!("UID:{OUTLOOK_UID}"));
+}
+
+#[test]
+fn answers_and_cancellations_kept_by_outlook_are_read_from_their_properties() {
+    use openmailclient_model::calendar;
+    use openmailclient_model::meeting::{self, Response};
+    let fake = Fake::default();
+    let mut s = session(&fake);
+    let id = calendar::global_id_of_uid(OUTLOOK_UID);
+    for (class, method) in [
+        (meeting::class::ACCEPTED, "REPLY"),
+        (meeting::class::TENTATIVE, "REPLY"),
+        (meeting::class::DECLINED, "REPLY"),
+        (meeting::class::CANCELED, "CANCEL"),
+    ] {
+        let mut msg = openmailclient_model::Item::new_mail();
+        msg.props.set_str(openmailclient_model::pid::MESSAGE_CLASS, class);
+        msg.set_sender("June Okafor", "june@example.test");
+        msg.set_body_text("See you there");
+        meeting::dress(&mut msg, &id, 2, true, Response::None);
+        s.open = Some(msg);
+        let got = run(&mut s, "calendar.invitation", Value::Null);
+        assert_eq!(got["method"], method, "{class}: {got}");
+        assert_eq!(got["untrusted_content"]["uid"], OUTLOOK_UID, "{class}");
+        if method == "REPLY" {
+            assert_eq!(got["attendee"]["untrusted_content"]["address"], "june@example.test");
+            assert_eq!(got["untrusted_content"]["comment"], "See you there");
+        }
+    }
+    // One with no meeting's id in it is no meeting that can be read.
+    let mut bare = openmailclient_model::Item::new_mail();
+    bare.props.set_str(openmailclient_model::pid::MESSAGE_CLASS, meeting::class::REQUEST);
+    s.open = Some(bare);
+    assert!(s.run("calendar.invitation", &Value::Null).is_err());
+}
+
+#[test]
+fn an_invitation_we_send_is_kept_with_the_properties_outlook_reads() {
+    use openmailclient_model::calendar;
+    use openmailclient_model::meeting::Meeting;
+    let fake = Fake::default();
+    let mut s = session(&fake);
+    let made = run(
+        &mut s,
+        "calendar.newMeeting",
+        json!({ "subject": "Review", "start": "2026-10-20 10:00", "end": "2026-10-20 11:00", "attendees": ["june@example.test"] }),
+    );
+    run(&mut s, "calendar.sendInvitations", json!({ "id": made["id"] }));
+    let (_, _, cal) = went(&fake, 0);
+    let uid = line_of(&cal, "UID:").trim_start_matches("UID:").to_string();
+    // The message kept in Sent Items carries the meeting's id and is marked a meeting, not received.
+    run(&mut s, "folder.select", json!({ "folder": "Sent Items" }));
+    let at = s.rows.iter().position(|r| r.subject == "Review").unwrap();
+    run(&mut s, "mail.select", json!({ "index": at }));
+    let sent = s.open.clone().unwrap();
+    assert_eq!(calendar::global_id(&sent).unwrap(), calendar::global_id_of_uid(&uid));
+    let m = Meeting::of(&sent).unwrap();
+    assert!(!m.received, "{m:?}");
+}

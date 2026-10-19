@@ -24,7 +24,9 @@ const USAGE: &str = "usage:
   openmailclient-cli parity                        Outlook Classic feature checklist (Markdown)
   openmailclient-cli inspect <file> [--check]      folders of a .pst/.ost, or the header of a .msg/.eml;
                                               --check also loads every item and counts failures,
-                                              and holds the file's structure against the format
+                                              and holds the file's structure against the format;
+                                              --props lists every property of a .msg/.eml, its
+                                              recipients' and attachments' too
   openmailclient-cli convert <in> <out>            .msg/.oft/.eml to .msg/.oft/.eml, or a .pst/.ost to a new .pst
   openmailclient-cli run [--template sample] [--open <file>]... [--cmd id[=json]]... [--save <out>]
                                               run commands in order; --save writes the open item,
@@ -56,6 +58,9 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some("inspect") => {
             let path = rest.iter().find(|a| !a.starts_with("--")).ok_or(USAGE)?;
+            if rest.iter().any(|a| a == "--props") {
+                return props(Path::new(path));
+            }
             inspect(Path::new(path), rest.iter().any(|a| a == "--check"))
         }
         Some("convert") => match rest {
@@ -85,6 +90,62 @@ fn describe(item: &Item) -> Value {
             "has_html": item.body_html().is_some(),
         },
     })
+}
+
+/// Every property of a message, its recipients' and its attachments', one to a line: the tag
+/// (or a named property's set and name) and the value, long values cut short. What a message
+/// says is the stranger's, so this is for looking at files on one's own machine.
+fn props(path: &Path) -> Result<(), String> {
+    let Opened::Item(item) = io::open_path(path).map_err(|e| e.to_string())? else {
+        return Err("--props reads a .msg, .oft or .eml".to_string());
+    };
+    fn value(v: &openmailclient_model::props::PropValue) -> String {
+        use openmailclient_model::props::PropValue as V;
+        let hex = |b: &[u8]| {
+            let mut s: String = b.iter().take(96).map(|x| format!("{x:02X}")).collect();
+            if b.len() > 96 {
+                s.push_str(&format!("… ({} bytes)", b.len()));
+            }
+            s
+        };
+        match v {
+            V::String(s) => format!("{:?}", s.chars().take(4000).collect::<String>()),
+            V::Binary(b) => hex(b),
+            V::Time(t) => {
+                let c = openmailclient_model::time::civil(*t, 0);
+                format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC", c.year, c.month, c.day, c.hour, c.minute, c.second)
+            }
+            V::MultiBinary(list) => list.iter().map(|b| hex(b)).collect::<Vec<_>>().join(" | "),
+            other => format!("{other:?}").chars().take(300).collect(),
+        }
+    }
+    let bag = |indent: &str, bag: &openmailclient_model::props::PropBag| {
+        for (id, v) in bag.iter() {
+            println!("{indent}0x{id:04X}  {}", value(v));
+        }
+    };
+    let named = |indent: &str, named: &[(openmailclient_model::props::NamedKey, openmailclient_model::props::PropValue)]| {
+        for (k, v) in named {
+            let set: String = k.guid.iter().map(|x| format!("{x:02X}")).collect();
+            let name = match &k.name {
+                openmailclient_model::props::NameId::Id(n) => format!("0x{n:04X}"),
+                openmailclient_model::props::NameId::Name(s) => format!("{s:?}"),
+            };
+            println!("{indent}{set} {name}  {}", value(v));
+        }
+    };
+    println!("message");
+    bag("  ", &item.props);
+    named("  ", &item.named);
+    for (i, r) in item.recipients.iter().enumerate() {
+        println!("recipient {i}");
+        bag("  ", r);
+    }
+    for (i, a) in item.attachments.iter().enumerate() {
+        println!("attachment {i}");
+        bag("  ", &a.props);
+    }
+    Ok(())
 }
 
 fn depth(folders: &[FolderInfo], f: &FolderInfo) -> usize {

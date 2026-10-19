@@ -863,7 +863,9 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
         let inbox_on = sync.local.is_some().then_some("INBOX").zip(t.uid_validity);
         let mut inbox_kept = true;
         for got in &t.got {
-            let item = item_of(got, now, inbox_on);
+            let mut item = item_of(got, now, inbox_on);
+            // A meeting's message is kept as Outlook keeps one, so a data file of ours shows it.
+            super::meeting::dress(&mut item, &s.zone, true);
             let is_unread = !got.read;
             let id = item.props.str(pid::INTERNET_MESSAGE_ID).map(str::trim).unwrap_or_default().to_string();
             if let Uid::Imap(uid) = &got.uid

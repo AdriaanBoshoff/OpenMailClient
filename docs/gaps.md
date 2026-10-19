@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 113 · 2026-10-19 · ranked: the top of the list is what hurts most.
+**Status:** revision 114 · 2026-10-19 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 114 · 2026-10-19 — M5.7: meetings to and from Outlook.
 - 113 · 2026-10-19 — M5.7: meetings: invitations sent, answered and called off.
 - 112 · 2026-10-19 — M5.6: time zones and daylight saving.
 - 111 · 2026-10-18 — M5.5: calendars kept in step with a CalDAV server.

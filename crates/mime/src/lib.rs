@@ -43,7 +43,15 @@ pub fn parse(data: &[u8]) -> Result<Item, MimeError> {
     message_headers(&headers, &mut item);
     let mut ctx = Ctx { item, parts: 0, have_text: false, have_html: false, classed: false };
     walk(data, 0, &mut ctx);
+    let lone_calendar = ctx.classed && !ctx.have_text && !ctx.have_html;
     let mut item = ctx.item;
+    // A meeting sent as its calendar alone, as Outlook sends one, says what it says in the
+    // calendar's DESCRIPTION (RFC 5545 3.8.1.5): that is its body.
+    if lone_calendar
+        && let Some(text) = item.attachments.iter().find(|a| a.mime() == "text/calendar").and_then(|a| write::calendar_text(&a.data, "DESCRIPTION"))
+    {
+        item.set_body_text(&text);
+    }
     let has_attach = item.visible_attachments().next().is_some();
     item.props.set(pid::HASATTACH, PropValue::Bool(has_attach));
     Ok(item)

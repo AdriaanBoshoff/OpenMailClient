@@ -394,6 +394,7 @@ fn post(s: &mut Session, class: &str, subject: &str, body: &str, to: &[&Attendee
     }
     item.refresh_display_recipients();
     item.attachments.push(Attachment::file("invite.ics", "text/calendar", calendar.into_bytes()));
+    dress(&mut item, &s.zone, false);
     item.props.set(pid::CREATION_TIME, PropValue::Time(s.now));
     item.props.set(pid::CLIENT_SUBMIT_TIME, PropValue::Time(s.now));
     item.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(MSGFLAG_READ));
@@ -470,11 +471,92 @@ fn cancel_meeting(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "told": if told { m.attendees.len() } else { 0 } }))
 }
 
-/// The calendar a meeting's message carries, read.
+/// The calendar a meeting's message carries, read: its iCalendar part, as it comes by mail,
+/// or else what its properties say, as Outlook keeps a meeting's messages in its data files and
+/// `.msg` files with no calendar in them ([MS-OXOCAL] 2.2.6 to 2.2.8).
 fn carried(item: &Item, zone: &openmailclient_model::zone::Zone) -> Option<ics::Calendar> {
-    let a = item.attachments.iter().find(|a| a.embedded.is_none() && a.mime().eq_ignore_ascii_case("text/calendar"))?;
-    let data = a.data.get(..a.data.len().min(MAX_CALENDAR))?;
-    ics::read(data, zone).ok()
+    match item.attachments.iter().find(|a| a.embedded.is_none() && a.mime().eq_ignore_ascii_case("text/calendar")) {
+        Some(a) => ics::read(a.data.get(..a.data.len().min(MAX_CALENDAR))?, zone).ok(),
+        None => of_properties(item),
+    }
+}
+
+/// The longest description or comment read from a meeting's message.
+const MAX_WORDS: usize = 20_000;
+
+/// A meeting's message as Outlook keeps one, read from its properties: the meeting it is about
+/// by its PidLidGlobalObjectId ([MS-OXOCAL] 2.2.1.27); for a request ([MS-OXOCAL] 2.2.6.1) the
+/// appointment, its organizer and its attendees; for an answer (2.2.7.1) who gave it, and how,
+/// by its class; for a cancellation (2.2.8.1) who called it off. One about a single occurrence
+/// is read as about the meeting.
+fn of_properties(item: &Item) -> Option<ics::Calendar> {
+    let uid = calendar::uid_of_global_id(&calendar::global_id(item)?);
+    let class = item.message_class().to_ascii_lowercase();
+    let m = Meeting::of(item);
+    let sequence = m.as_ref().map_or(0, |m| m.sequence);
+    let sender = Attendee::new(&item.sender_name(), &item.sender_email(), Role::Required);
+    let words = || item.body_text().trim_end().chars().take(MAX_WORDS).collect::<String>();
+    let mut cal = ics::Calendar::default();
+    if class == meeting::class::REQUEST.to_ascii_lowercase() {
+        let appointment = Appointment::of(item)?;
+        let (organizer, attendees) = match m {
+            Some(m) => (m.organizer, m.attendees),
+            None => (sender, Vec::new()),
+        };
+        cal.method = Some("REQUEST".into());
+        cal.events.push(ics::Event {
+            uid,
+            appointment,
+            description: words(),
+            categories: Vec::new(),
+            organizer: Some(organizer),
+            attendees,
+            sequence,
+            notes: Vec::new(),
+        });
+    } else if let Some(kind) = class.strip_prefix("ipm.schedule.meeting.resp.") {
+        let mut attendee = sender;
+        attendee.response = match kind {
+            "pos" => Response::Accepted,
+            "tent" => Response::Tentative,
+            "neg" => Response::Declined,
+            _ => return None,
+        };
+        cal.method = Some("REPLY".into());
+        cal.answers.push(ics::Answer { uid, occurrence: None, attendee, sequence, comment: words() });
+    } else if class == meeting::class::CANCELED.to_ascii_lowercase() {
+        cal.method = Some("CANCEL".into());
+        cal.cancelled.push(ics::Cancelled { uid, occurrence: None, sequence, organizer: Some(sender) });
+    } else {
+        return None;
+    }
+    Some(cal)
+}
+
+/// A meeting's message given the properties Outlook gives one ([MS-OXOCAL] 2.2.6.1, 2.2.7.1,
+/// 2.2.8.1), from the calendar it carries: the meeting's GlobalObjectId, when and where it is,
+/// its state and sequence and, for a request that came, that it is not answered yet. Outlook
+/// reads a meeting's message in a data file by these alone, so one we keep opens in Outlook as
+/// the meeting it is. Its class, subject, body and recipients are left as they are.
+pub(crate) fn dress(item: &mut Item, zone: &openmailclient_model::zone::Zone, received: bool) {
+    if !meeting::is_meeting_message(item) || calendar::global_id(item).is_some() {
+        return;
+    }
+    let Some(cal) = carried(item, zone) else { return };
+    let (uid, sequence) = match (cal.events.first(), cal.answers.first(), cal.cancelled.first()) {
+        (Some(e), _, _) => (e.uid.clone(), e.sequence),
+        (None, Some(a), _) => (a.uid.clone(), a.sequence),
+        (None, None, Some(c)) => (c.uid.clone(), c.sequence),
+        _ => return,
+    };
+    let (class, subject) = (item.message_class().to_string(), item.subject());
+    if let Some(e) = cal.events.first() {
+        e.appointment.write(item);
+        item.props.set_str(pid::MESSAGE_CLASS, &class);
+        item.set_subject(&subject);
+    }
+    let response = if received && !cal.events.is_empty() { Response::NotResponded } else { Response::None };
+    meeting::dress(item, &calendar::global_id_of_uid(&uid), sequence, received, response);
 }
 
 fn response_param(p: &Value) -> Result<Response, EngineError> {

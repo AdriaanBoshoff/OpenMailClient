@@ -7,7 +7,7 @@
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 72 of 131 (55%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 595, all passing |
+| Tests | 599, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
@@ -2109,6 +2109,27 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   strict #RRGGBB taken, names cleaned and capped at 60 characters, built-in and repeated names
   left out, and at most 40 kept. Every dialog is drawn in every theme, light and dark, in a large
   window and a tiny one. Do later: themes saved to and read from a file of their own. 4 tests.
+- **2026-10-19** - M5.7: meetings to and from Outlook.
+  A meeting request sent from Outlook Classic to one of our accounts, and one of ours opened
+  in Outlook, were looked at side by side. Outlook sends a request as its calendar alone, a
+  single `text/calendar` part with no text beside it, its lines folded with tabs, its zone
+  named as Windows names it, its UID the meeting's GlobalObjectId in hexadecimal and what it
+  says in DESCRIPTION. Such a request was already known as one, but showed an empty body: what
+  the calendar says is now the message's body (RFC 5545 3.8.1.5). Outlook keeps a meeting's
+  messages in its data files and `.msg` files without any calendar, by their properties alone
+  ([MS-OXOCAL] 2.2.6 to 2.2.8): a request, an answer or a cancellation kept so is now read from
+  its GlobalObjectId, class, sender, times and attendees, so one in an imported data file is
+  answered as one that came by mail. The other way: every meeting message we receive or send
+  is now given the properties Outlook reads (the GlobalObjectId, state flags, sequence, the
+  answer it stands at, when and where), so a data file of ours shows it to Outlook as the
+  meeting it is; our replies name the meeting by Outlook's own id, so Outlook takes them in.
+  `openmailclient-cli inspect file.msg --props` lists every property of a message, for looking
+  at files like these on one's own machine. Better than Outlook: a request's words are kept
+  as text, never its HTML, and an answer read from properties is still taken only from the
+  attendee it names. Hostile input: at most 64 KB of a calendar is read for its words and
+  20 000 characters kept; a quoted colon in a parameter is not taken as the value's start; a
+  meeting message with no GlobalObjectId is no meeting. Do later: a data file of ours with
+  meeting messages opened in Outlook by the M3c.1 checks. 4 tests.
 - **2026-10-19** - M5.7: meetings: invitations sent, answered and called off.
   An appointment can be a meeting: it has attendees, those who must come, those who may and
   rooms or things, typed in the appointment window or given to `calendar.newMeeting` and
