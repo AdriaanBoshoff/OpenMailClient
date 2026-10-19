@@ -3037,6 +3037,7 @@ dependencies = [
  "openmailclient-fonts",
  "openmailclient-formats",
  "openmailclient-layout",
+ "openmailclient-mime",
  "openmailclient-model",
  "openmailclient-net",
  "serde_json",

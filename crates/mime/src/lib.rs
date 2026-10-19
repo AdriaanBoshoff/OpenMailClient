@@ -12,7 +12,7 @@ use header::{Headers, decode_charset, parse_params};
 use openmailclient_model::{Attachment, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, pid};
 
 pub use header::{parse_addresses, parse_date};
-pub use write::write;
+pub use write::{calendar_method, write};
 
 /// Nesting deeper than this is kept as an attachment instead of being walked.
 const MAX_DEPTH: usize = 32;
@@ -41,7 +41,7 @@ pub fn parse(data: &[u8]) -> Result<Item, MimeError> {
     item.props.set_str(pid::MESSAGE_CLASS, "IPM.Note");
     item.props.set_str(pid::TRANSPORT_MESSAGE_HEADERS, &header::bytes_to_string(head));
     message_headers(&headers, &mut item);
-    let mut ctx = Ctx { item, parts: 0, have_text: false, have_html: false };
+    let mut ctx = Ctx { item, parts: 0, have_text: false, have_html: false, classed: false };
     walk(data, 0, &mut ctx);
     let mut item = ctx.item;
     let has_attach = item.visible_attachments().next().is_some();
@@ -104,6 +104,8 @@ struct Ctx {
     parts: usize,
     have_text: bool,
     have_html: bool,
+    /// Classed as a meeting's message by a calendar it carries.
+    classed: bool,
 }
 
 /// Blank line between headers and body ([RFC 5322] 2.1). Returns (headers, body).
@@ -191,6 +193,16 @@ fn walk(data: &[u8], depth: usize, ctx: &mut Ctx) {
     if depth == 0 && decoded.iter().all(u8::is_ascii_whitespace) {
         return;
     }
+    // A meeting's invitation, answer or cancellation, by the calendar it carries (RFC 6047 2.4):
+    // classed as Outlook classes one ([MS-OXOCAL] 2.2.6.1, 2.2.7.1, 2.2.8.1). Whether it is to be
+    // believed, and what is done with it, is the engine's to say.
+    if mime == "text/calendar"
+        && !ctx.classed
+        && let Some(class) = meeting_class(&decoded)
+    {
+        ctx.item.props.set_str(pid::MESSAGE_CLASS, class);
+        ctx.classed = true;
+    }
     let n = ctx.item.attachments.len() + 1;
     let name = filename.unwrap_or_else(|| format!("ATT{n:05}.{}", extension_for(&mime)));
     let mut a = Attachment::file(&name, &mime, decoded);
@@ -201,6 +213,27 @@ fn walk(data: &[u8], depth: usize, ctx: &mut Ctx) {
         }
     }
     ctx.item.attachments.push(a);
+}
+
+/// The message class of a message carrying this calendar, when it is a meeting's.
+fn meeting_class(calendar: &[u8]) -> Option<&'static str> {
+    Some(match write::calendar_method(calendar)? {
+        "REQUEST" => "IPM.Schedule.Meeting.Request",
+        "CANCEL" => "IPM.Schedule.Meeting.Canceled",
+        "REPLY" => {
+            let text = String::from_utf8_lossy(calendar.get(..calendar.len().min(64 << 10)).unwrap_or_default()).to_ascii_uppercase();
+            if text.contains("PARTSTAT=ACCEPTED") {
+                "IPM.Schedule.Meeting.Resp.Pos"
+            } else if text.contains("PARTSTAT=TENTATIVE") {
+                "IPM.Schedule.Meeting.Resp.Tent"
+            } else if text.contains("PARTSTAT=DECLINED") {
+                "IPM.Schedule.Meeting.Resp.Neg"
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    })
 }
 
 fn extension_for(mime: &str) -> &'static str {

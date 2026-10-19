@@ -8,6 +8,7 @@
 //! reminder, and attachments and links stay text.
 
 use openmailclient_model::calendar::{self, Appointment, Busy, DAY, MAX_DAYS, MINUTE};
+use openmailclient_model::meeting::{self, Attendee, Meeting, Response, Role};
 use openmailclient_model::recur::{self, End, Freq, Recurrence, Rule};
 use openmailclient_model::zone::{Daylight, Rule as ZoneRule, Zone};
 use openmailclient_model::{Item, time};
@@ -653,6 +654,12 @@ pub struct Event {
     pub appointment: Appointment,
     pub description: String,
     pub categories: Vec<String>,
+    /// Who called it, when it is a meeting (ORGANIZER, RFC 5545 3.8.4.3).
+    pub organizer: Option<Attendee>,
+    /// Who is asked to it, each with the answer the file gives (ATTENDEE, RFC 5545 3.8.4.1).
+    pub attendees: Vec<Attendee>,
+    /// How many times it was changed and sent again (SEQUENCE, RFC 5545 3.8.7.4).
+    pub sequence: i32,
     /// What of it could not be kept, or was read with a guess.
     pub notes: Vec<String>,
 }
@@ -660,19 +667,83 @@ pub struct Event {
 impl Event {
     /// A new appointment item saying this event, its UID kept as its GlobalObjectId.
     pub fn item(&self) -> Item {
+        self.item_as(&[])
+    }
+
+    /// As `item`, seen by one whose addresses are `me` (see `write_as`).
+    pub fn item_as(&self, me: &[&str]) -> Item {
         let mut it = self.appointment.item();
-        self.write(&mut it);
+        self.write_as(&mut it, me);
         it
     }
 
     /// `item` made to say this event; what else it has (its attachments, properties this
-    /// program does not know) is kept.
+    /// program does not know) is kept. A meeting is kept as one received from its organizer.
     pub fn write(&self, item: &mut Item) {
+        self.write_as(item, &[]);
+    }
+
+    /// As `write`, seen by one whose addresses are `me`: a meeting one of them called is kept
+    /// as theirs, one they are asked to with the answer the file gives them.
+    pub fn write_as(&self, item: &mut Item, me: &[&str]) {
         self.appointment.write(item);
         item.set_body_text(&self.description);
         item.categories = self.categories.clone();
         calendar::set_global_id(item, &calendar::global_id_of_uid(&self.uid));
+        match self.meeting(me) {
+            Some(m) => m.write(item),
+            None if Meeting::of(item).is_some() => meeting::unmake(item),
+            None => {}
+        }
     }
+
+    /// The meeting it is, seen by one whose addresses are `me`; `None` when no one is asked.
+    pub fn meeting(&self, me: &[&str]) -> Option<Meeting> {
+        if self.attendees.is_empty() {
+            return None;
+        }
+        let organizer = self.organizer.clone().unwrap_or_default();
+        let mine = |address: &str| me.iter().any(|m| !m.trim().is_empty() && m.trim().eq_ignore_ascii_case(address.trim()));
+        let organizing = mine(&organizer.address);
+        let attendees: Vec<Attendee> = self
+            .attendees
+            .iter()
+            .filter(|p| organizer.address.is_empty() || !p.is(&organizer.address))
+            .take(meeting::MAX_ATTENDEES)
+            .cloned()
+            .collect();
+        let response = if organizing {
+            Response::Organized
+        } else {
+            attendees.iter().find(|p| mine(&p.address)).map(|p| p.response).filter(|r| r.answered()).unwrap_or(Response::NotResponded)
+        };
+        Some(Meeting { organizer, attendees, response, sequence: self.sequence, received: !organizing, invited: organizing, ..Meeting::default() })
+    }
+}
+
+/// An attendee's answer, as a reply (METHOD:REPLY, RFC 5546 3.2.3) gives it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Answer {
+    /// The meeting's UID.
+    pub uid: String,
+    /// When it answers one occurrence alone: the time that occurrence was planned for, UTC.
+    pub occurrence: Option<i64>,
+    /// Who answers, and how.
+    pub attendee: Attendee,
+    pub sequence: i32,
+    /// What they wrote with it (COMMENT).
+    pub comment: String,
+}
+
+/// A meeting called off (METHOD:CANCEL, RFC 5546 3.2.5).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cancelled {
+    pub uid: String,
+    /// When one occurrence alone is called off: the time it was planned for, UTC.
+    pub occurrence: Option<i64>,
+    pub sequence: i32,
+    /// Who called it off: its organizer, as the message says.
+    pub organizer: Option<Attendee>,
 }
 
 /// What a calendar file holds.
@@ -683,6 +754,10 @@ pub struct Calendar {
     /// Its METHOD (RFC 5546), when it gives one: PUBLISH, REQUEST, REPLY, CANCEL…
     pub method: Option<String>,
     pub events: Vec<Event>,
+    /// The answers a reply gives (METHOD:REPLY).
+    pub answers: Vec<Answer>,
+    /// The meetings or occurrences a cancellation calls off (METHOD:CANCEL).
+    pub cancelled: Vec<Cancelled>,
     /// What of the file as a whole could not be kept.
     pub notes: Vec<String>,
 }
@@ -732,6 +807,22 @@ pub fn read(bytes: &[u8], here: &Zone) -> Result<Calendar, String> {
     }
     let clock = Clock { zones: &zones, here, budget: std::cell::Cell::new(MAX_CHANGES) };
     let uids: Vec<String> = events.iter().enumerate().map(|(i, e)| uid_of(e, i)).collect();
+    // A reply's answers and a cancellation's meetings, each by its UID and, for one occurrence
+    // alone, the time it was planned for.
+    let method = out.method.clone().unwrap_or_default();
+    for (ev, uid) in events.iter().zip(&uids) {
+        let occurrence = ev.prop("RECURRENCE-ID").and_then(|p| clock.at(p)).map(|(t, ..)| t);
+        let sequence = sequence_of(ev);
+        if method == "REPLY" {
+            if let Some(attendee) = ev.all("ATTENDEE").map(person).find(|p| !p.address.is_empty()) {
+                let comment = ev.text("COMMENT", MAX_TEXT).unwrap_or_default();
+                out.answers.push(Answer { uid: uid.clone(), occurrence, attendee, sequence, comment });
+            }
+        } else if method == "CANCEL" {
+            let organizer = ev.prop("ORGANIZER").map(person).filter(|p| !p.address.is_empty());
+            out.cancelled.push(Cancelled { uid: uid.clone(), occurrence, sequence, organizer });
+        }
+    }
     // The occurrences changed in each series (RECURRENCE-ID), by UID.
     let mut changes: std::collections::HashMap<&str, Vec<&Comp>> = std::collections::HashMap::new();
     for (ev, uid) in events.iter().zip(&uids) {
@@ -871,9 +962,18 @@ fn event_of(ev: &Comp, clock: &Clock, uid: &str, notes: &mut Vec<String>) -> Opt
         a.zone = Some(clock.here.clone());
     }
     a.reminder = reminder_of(ev, clock, a.start, a.end);
-    if ev.prop("ATTENDEE").is_some() {
-        note(notes, "its attendees are not kept: it is added as an appointment");
+    let organizer = ev.prop("ORGANIZER").map(person).filter(|p| !p.address.is_empty());
+    let mut attendees: Vec<Attendee> = Vec::new();
+    for p in ev.all("ATTENDEE").map(person) {
+        if attendees.len() >= meeting::MAX_ATTENDEES {
+            note(notes, format!("only its first {} attendees are kept", meeting::MAX_ATTENDEES));
+            break;
+        }
+        if !p.address.is_empty() && !attendees.iter().any(|q| q.is(&p.address)) {
+            attendees.push(p);
+        }
     }
+    a.meeting = !attendees.is_empty();
     if let Some(rule) = ev.prop("RRULE") {
         let series_off = if all_day { i64::from(clock.here.offset_at(start)) } else { off };
         match pattern(&rule.value, &a, s, series_off, clock) {
@@ -910,8 +1010,45 @@ fn event_of(ev: &Comp, clock: &Clock, uid: &str, notes: &mut Vec<String>) -> Opt
         appointment: a,
         description: ev.text("DESCRIPTION", MAX_BODY).unwrap_or_default(),
         categories,
+        organizer,
+        attendees,
+        sequence: sequence_of(ev),
         notes: Vec::new(),
     })
+}
+
+/// An event's SEQUENCE (RFC 5545 3.8.7.4), 0 when it gives none or one that is no number.
+fn sequence_of(ev: &Comp) -> i32 {
+    ev.prop("SEQUENCE").and_then(|p| p.value.trim().parse::<i32>().ok()).unwrap_or(0).clamp(0, 1_000_000)
+}
+
+/// A person an ORGANIZER or ATTENDEE names (RFC 5545 3.2.2, 3.2.3, 3.2.12, 3.2.16), with the
+/// answer its PARTSTAT gives. The address is what follows "mailto:"; anything else (a link of
+/// another kind) is no address.
+fn person(p: &Prop) -> Attendee {
+    let value = p.value.trim();
+    let address = match value.get(..7) {
+        Some(head) if head.eq_ignore_ascii_case("mailto:") => value.get(7..).unwrap_or(""),
+        _ if value.contains('@') && !value.contains(':') => value,
+        _ => "",
+    };
+    let address: String = address.chars().filter(|c| c.is_ascii_graphic() && !matches!(c, '<' | '>' | '"' | ';' | ',')).collect();
+    let upper = |name: &str| p.param(name).map(|v| v.trim().to_ascii_uppercase()).unwrap_or_default();
+    let role = match (upper("CUTYPE").as_str(), upper("ROLE").as_str()) {
+        ("ROOM" | "RESOURCE", _) => Role::Resource,
+        (_, "OPT-PARTICIPANT" | "NON-PARTICIPANT") => Role::Optional,
+        _ => Role::Required,
+    };
+    let mut a = Attendee::new(p.param("CN").unwrap_or(""), &address, role);
+    a.response = match upper("PARTSTAT").as_str() {
+        "ACCEPTED" => Response::Accepted,
+        "TENTATIVE" => Response::Tentative,
+        "DECLINED" => Response::Declined,
+        // No PARTSTAT is NEEDS-ACTION (RFC 5545 3.2.12).
+        "" | "NEEDS-ACTION" => Response::NotResponded,
+        _ => Response::None,
+    };
+    a
 }
 
 /// The local days, in the series' time, a date property (EXDATE, RECURRENCE-ID) names.
@@ -1265,8 +1402,80 @@ pub fn uid(item: &Item) -> String {
     format!("openmailclient-{h:016x}")
 }
 
+/// What a calendar file is sent for (RFC 5546 1.4).
+#[derive(Clone, Debug)]
+pub enum Method<'a> {
+    /// Events to be seen or added; no one is asked to answer.
+    Publish,
+    /// A meeting's invitation, or an update to one.
+    Request,
+    /// A meeting called off.
+    Cancel,
+    /// One attendee's answer, with what they wrote with it.
+    Reply { from: &'a Attendee, comment: &'a str },
+}
+
+impl Method<'_> {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Publish => "PUBLISH",
+            Self::Request => "REQUEST",
+            Self::Cancel => "CANCEL",
+            Self::Reply { .. } => "REPLY",
+        }
+    }
+}
+
+/// A CN parameter (RFC 5545 3.2.2), quoted, of a name with no quotes or line ends in it.
+fn common_name(name: &str) -> String {
+    let name: String = name.chars().filter(|c| !c.is_control() && *c != '"').collect();
+    if name.trim().is_empty() { String::new() } else { format!(";CN=\"{}\"", name.trim()) }
+}
+
+/// An address as a mailto URI, with nothing in it that could end the line or the value.
+fn mailto(address: &str) -> String {
+    let address: String = address.chars().filter(|c| c.is_ascii_graphic() && !matches!(c, '<' | '>' | '"' | ';' | ',')).collect();
+    format!("mailto:{address}")
+}
+
+/// The ORGANIZER, ATTENDEE and SEQUENCE of a meeting ([MS-OXCICAL] 2.1.3.1.1.20.1 and
+/// 2.1.3.1.1.20.31): every attendee, or in a reply the one who answers alone.
+fn people(out: &mut String, item: &Item, method: &Method) {
+    let Some(m) = Meeting::of(item) else { return };
+    if !m.organizer.address.is_empty() {
+        line(out, &format!("ORGANIZER{}:{}", common_name(&m.organizer.name), mailto(&m.organizer.address)));
+    }
+    let partstat = |r: Response| match r {
+        Response::Accepted => "ACCEPTED",
+        Response::Tentative => "TENTATIVE",
+        Response::Declined => "DECLINED",
+        _ => "NEEDS-ACTION",
+    };
+    let attendee = |out: &mut String, p: &Attendee, rsvp: bool| {
+        let (role, kind) = match p.role {
+            Role::Required => ("REQ-PARTICIPANT", ""),
+            Role::Optional => ("OPT-PARTICIPANT", ""),
+            Role::Resource => ("NON-PARTICIPANT", ";CUTYPE=RESOURCE"),
+        };
+        let rsvp = if rsvp && !p.response.answered() { "TRUE" } else { "FALSE" };
+        line(
+            out,
+            &format!("ATTENDEE;ROLE={role}{kind};PARTSTAT={};RSVP={rsvp}{}:{}", partstat(p.response), common_name(&p.name), mailto(&p.address)),
+        );
+    };
+    match method {
+        Method::Reply { from, .. } => attendee(out, from, false),
+        _ => {
+            for p in m.attendees.iter().take(meeting::MAX_ATTENDEES) {
+                attendee(out, p, matches!(method, Method::Request));
+            }
+        }
+    }
+    line(out, &format!("SEQUENCE:{}", m.sequence.max(0)));
+}
+
 /// Writes the parts of one event both a series and its changed occurrences carry.
-fn event_body(out: &mut String, a: &Appointment, item: &Item, uid: &str, now: i64) {
+fn event_body(out: &mut String, a: &Appointment, item: &Item, uid: &str, now: i64, method: &Method) {
     line(out, &format!("UID:{uid}"));
     line(out, &format!("DTSTAMP:{}", utc_text(now)));
     line(out, &format!("SUMMARY:{}", escape(&a.subject)));
@@ -1274,8 +1483,15 @@ fn event_body(out: &mut String, a: &Appointment, item: &Item, uid: &str, now: i6
         line(out, &format!("LOCATION:{}", escape(&a.location)));
     }
     let body = item.body_text();
-    if !body.trim().is_empty() {
+    if !body.trim().is_empty() && !matches!(method, Method::Reply { .. }) {
         line(out, &format!("DESCRIPTION:{}", escape(&cut(&body, MAX_BODY))));
+    }
+    people(out, item, method);
+    match method {
+        Method::Request => line(out, "STATUS:CONFIRMED"),
+        Method::Cancel => line(out, "STATUS:CANCELLED"),
+        Method::Reply { comment, .. } if !comment.trim().is_empty() => line(out, &format!("COMMENT:{}", escape(&cut(comment, MAX_TEXT)))),
+        _ => {}
     }
     if !item.categories.is_empty() {
         line(out, &format!("CATEGORIES:{}", item.categories.iter().take(MAX_LIST).map(|c| escape(c)).collect::<Vec<_>>().join(",")));
@@ -1292,7 +1508,10 @@ fn event_body(out: &mut String, a: &Appointment, item: &Item, uid: &str, now: i6
     line(out, &format!("X-MICROSOFT-CDO-ALLDAYEVENT:{}", if a.all_day { "TRUE" } else { "FALSE" }));
 }
 
-fn alarm(out: &mut String, a: &Appointment) {
+fn alarm(out: &mut String, a: &Appointment, method: &Method) {
+    if !matches!(method, Method::Publish | Method::Request) {
+        return;
+    }
     if let Some(m) = a.reminder {
         line(out, "BEGIN:VALARM");
         line(out, "ACTION:DISPLAY");
@@ -1308,11 +1527,17 @@ fn alarm(out: &mut String, a: &Appointment) {
 /// zone we are in, for an all-day event that is not a series; `now` the time written as each
 /// event's stamp; `name` the calendar's.
 pub fn write(items: &[Item], here: &Zone, now: i64, name: Option<&str>) -> String {
+    write_as(items, here, now, name, &Method::Publish)
+}
+
+/// As `write`, sent for `method`: a meeting's invitation, cancellation or answer (RFC 5546
+/// 3.2), as iMIP carries it in a message (RFC 6047).
+pub fn write_as(items: &[Item], here: &Zone, now: i64, name: Option<&str>, method: &Method) -> String {
     let mut out = String::new();
     line(&mut out, "BEGIN:VCALENDAR");
     line(&mut out, "PRODID:-//OpenMailClient//OpenMailClient//EN");
     line(&mut out, "VERSION:2.0");
-    line(&mut out, "METHOD:PUBLISH");
+    line(&mut out, &format!("METHOD:{}", method.name()));
     line(&mut out, "CALSCALE:GREGORIAN");
     if let Some(n) = name {
         line(&mut out, &format!("X-WR-CALNAME:{}", escape(n)));
@@ -1344,7 +1569,7 @@ pub fn write(items: &[Item], here: &Zone, now: i64, name: Option<&str>) -> Strin
     for (item, a) in &shown {
         let uid = uid(item);
         line(&mut out, "BEGIN:VEVENT");
-        event_body(&mut out, a, item, &uid, now);
+        event_body(&mut out, a, item, &uid, now, method);
         let rule = a.recurrence.as_ref().and_then(|r| {
             let w = Writer { zone: if a.all_day { Zone::utc() } else { a.series_zone().into_owned() } };
             rule_text(r, &w, a.all_day).map(|t| (r, w, t))
@@ -1383,7 +1608,7 @@ pub fn write(items: &[Item], here: &Zone, now: i64, name: Option<&str>) -> Strin
                 }
             },
         }
-        alarm(&mut out, a);
+        alarm(&mut out, a, method);
         line(&mut out, "END:VEVENT");
         // Each occurrence changed on its own, by the time it was first planned for.
         if let Some((r, w, _)) = &rule {
@@ -1391,12 +1616,12 @@ pub fn write(items: &[Item], here: &Zone, now: i64, name: Option<&str>) -> Strin
                 let day = recur::day_of_minutes(e.original);
                 let Some(one) = a.occurrence_of(day) else { continue };
                 line(&mut out, "BEGIN:VEVENT");
-                event_body(&mut out, &one, item, &uid, now);
+                event_body(&mut out, &one, item, &uid, now, method);
                 let planned = recur::minutes_of_day(day).saturating_add(i64::from(r.start_offset));
                 line(&mut out, &w.at("RECURRENCE-ID", planned, a.all_day));
                 line(&mut out, &w.at("DTSTART", e.start, one.all_day && a.all_day));
                 line(&mut out, &w.at("DTEND", e.end.max(e.start), one.all_day && a.all_day));
-                alarm(&mut out, &one);
+                alarm(&mut out, &one, method);
                 line(&mut out, "END:VEVENT");
             }
         }

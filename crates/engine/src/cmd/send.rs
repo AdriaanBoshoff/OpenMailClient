@@ -228,10 +228,11 @@ fn send_now(s: &mut Session, wait: bool) -> CmdResult {
             skipped.push(json!({ "subject": summary.subject, "said": "it expired before it went; change when it expires, or delete it" }));
             continue;
         }
-        // Something that is not a message (a meeting answer not yet written, say) waits.
-        let class = item.message_class();
-        if !(class.is_empty() || class.to_ascii_uppercase().starts_with("IPM.NOTE")) {
-            skipped.push(json!({ "subject": summary.subject, "said": format!("a {class} is not sent by this version") }));
+        // Something that is not a message or a meeting's request, answer or cancellation (a
+        // task request, say) waits; a meeting's goes with its calendar, [MS-OXOCAL] 2.2.6.
+        let class = item.message_class().to_ascii_uppercase();
+        if !(class.is_empty() || class.starts_with("IPM.NOTE") || class.starts_with("IPM.SCHEDULE.MEETING.")) {
+            skipped.push(json!({ "subject": summary.subject, "said": format!("a {} is not sent by this version", item.message_class()) }));
             continue;
         }
         let Some(at) = account_for(s, &item.sender_email()).and_then(|a| s.accounts.iter().position(|b| b.id == a.id)) else { continue };

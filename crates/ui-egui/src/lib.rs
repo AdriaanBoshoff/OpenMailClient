@@ -16,6 +16,7 @@ mod faces;
 pub mod icons;
 mod import;
 mod line_edit;
+mod meeting;
 mod panes;
 mod pictures;
 mod preview;
@@ -145,6 +146,16 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         id: "ui.importOutlook",
         label: "Import from Outlook…",
         params: r#"{} opens the window on what Outlook's profiles hold (file.importOutlook), everything that can be brought chosen; {"import": true} imports what is chosen; {"close": true} closes it"#,
+    },
+    UiCommand {
+        id: "ui.meeting",
+        label: "New Meeting",
+        params: r#"{} opens the window on a new meeting at the next half hour of the day chosen, those asked typed in by role and sent with Send (calendar.new, then calendar.sendInvitations)"#,
+    },
+    UiCommand {
+        id: "ui.replyWithMeeting",
+        label: "Reply with Meeting",
+        params: r#"{} opens the window on a meeting in reply to the open message: its sender and those it went to asked, those it was copied to as optional, oneself left out, at the next whole hour; nothing is kept until it is sent or saved"#,
     },
     UiCommand {
         id: "ui.timeZones",
@@ -355,6 +366,8 @@ pub struct MailUi {
     pub(crate) cal_scroll: bool,
     /// The appointment window, open.
     pub(crate) appointment: Option<calendar::AppointmentForm>,
+    /// The bar above the open meeting message, by the message it was worked out for.
+    pub(crate) invitation: Option<(String, Option<meeting::Bar>)>,
 }
 
 pub(crate) fn font(size: f32) -> FontId {
@@ -570,6 +583,7 @@ impl MailUi {
             cal_nav: None,
             cal_scroll: true,
             appointment: None,
+            invitation: None,
         }
     }
 
@@ -712,6 +726,8 @@ impl MailUi {
     /// Run a command by id: engine commands and `ui.*` commands alike. Never opens a dialog by
     /// itself; dialog commands only queue a [`UiRequest`] for the host.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, String> {
+        // Whatever it does may change what a meeting's bar says.
+        self.invitation = None;
         if id != "ui.quit" {
             self.quit_asked = false;
         }
@@ -850,6 +866,13 @@ impl MailUi {
                 None if self.session.is_enabled("calendar.new") => self.new_appointment(),
                 None => return Err("No data file open has a calendar that can be written".to_string()),
             },
+            "ui.meeting" => {
+                if !self.session.is_enabled("calendar.newMeeting") {
+                    return Err("No data file open has a calendar that can be written".to_string());
+                }
+                self.new_meeting();
+            }
+            "ui.replyWithMeeting" => self.reply_with_meeting()?,
             "ui.timeZones" => {
                 self.time_zones_open = match params.get("open") {
                     None | Some(Value::Null) => !self.time_zones_open,

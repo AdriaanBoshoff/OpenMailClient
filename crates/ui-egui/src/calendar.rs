@@ -7,6 +7,7 @@ use crate::line_edit::LineEdit;
 use crate::{MailUi, bold, clip_text, font, one_line, text_width};
 use egui::{Align2, Color32, Painter, Rect, ScrollArea, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
 use openmailclient_model::calendar::{self, Appointment, Busy, DAY, MINUTE, View};
+use openmailclient_model::meeting::{Meeting, Role};
 use openmailclient_model::recur::{self, End, Freq, Rule};
 use openmailclient_model::time::{self, Civil};
 use openmailclient_model::zone::Zone;
@@ -210,6 +211,13 @@ pub(crate) struct AppointmentForm {
     /// The time zone it is kept in and its times are typed in, by name; empty for none, when
     /// they are typed where we are. One occurrence alone is always typed where we are.
     pub(crate) zone: String,
+    /// The meeting it is, as kept when the window opened; `None` for an appointment.
+    pub(crate) meeting: Option<Meeting>,
+    /// Those asked, typed by role: required, optional, resources; and as they were.
+    pub(crate) asked: [String; 3],
+    pub(crate) asked_was: [String; 3],
+    /// Those asked are shown to be typed in: a meeting one organizes, or Invite Attendees.
+    pub(crate) inviting: bool,
 }
 
 const REMINDERS: &[(Option<i32>, &str)] = &[
@@ -319,7 +327,30 @@ impl AppointmentForm {
             repeat_was: RepeatForm::of(a, zone),
             pattern: a.recurrence.as_ref().map(|_| a.pattern_words()).unwrap_or_default(),
             zone: a.zone.as_ref().filter(|_| a.occurrence.is_none()).map(|z| z.name().to_string()).unwrap_or_default(),
+            meeting: None,
+            asked: Default::default(),
+            asked_was: Default::default(),
+            inviting: false,
         }
+    }
+
+    /// The form made to show `m`, the meeting it is.
+    pub(crate) fn with_meeting(mut self, m: Option<Meeting>) -> Self {
+        self.asked = crate::meeting::lines(m.as_ref());
+        self.asked_was = self.asked.clone();
+        self.inviting = m.as_ref().is_some_and(|m| !m.received);
+        self.meeting = m;
+        self
+    }
+
+    /// One asked to it by someone else: its organizer says who comes.
+    pub(crate) fn received(&self) -> bool {
+        self.meeting.as_ref().is_some_and(|m| m.received)
+    }
+
+    /// Someone is typed in as asked.
+    pub(crate) fn asks_anyone(&self) -> bool {
+        self.inviting && self.asked.iter().any(|l| l.contains('@'))
     }
 
     /// The parameters `calendar.new` and `calendar.change` take.
@@ -347,6 +378,10 @@ impl AppointmentForm {
         }
         if self.occurrence.is_none() {
             p["zone"] = if self.zone.is_empty() { Value::Null } else { json!(self.zone) };
+        }
+        // Those asked, when they were typed or changed; the whole series' alone.
+        if self.occurrence.is_none() && self.inviting && !self.received() && (self.asked != self.asked_was || self.id.is_none()) {
+            p["attendees"] = crate::meeting::lines_param(&self.asked);
         }
         p
     }
@@ -399,6 +434,12 @@ enum Ask {
     Save,
     Delete,
     Close,
+    /// Saved, and its invitations or update sent.
+    Send,
+    /// Everyone asked told it is off, and it goes.
+    CancelMeeting,
+    /// One asked answers: accept, tentative or decline.
+    Respond(&'static str),
 }
 
 impl MailUi {
@@ -1070,10 +1111,11 @@ Kept in step with a calendar server at each Send/Receive"
             .find(|(i, a)| *i == id && (occurrence.is_none() || a.occurrence == occurrence))
             .map(|(_, a)| a.clone());
         let Some(a) = shown else { return };
-        let mut form = AppointmentForm::of(Some(id), &a, off);
+        let m = if a.meeting { self.session.meeting(id).ok().flatten() } else { None };
+        let mut form = AppointmentForm::of(Some(id), &a, off).with_meeting(m.clone());
         if a.occurrence.is_some() {
             match self.session.appointment(id) {
-                Ok(series) => form.other = Some(Box::new(AppointmentForm::of(Some(id), &series, off))),
+                Ok(series) => form.other = Some(Box::new(AppointmentForm::of(Some(id), &series, off).with_meeting(m))),
                 Err(e) => self.session.status = e.to_string(),
             }
         }
@@ -1091,6 +1133,35 @@ Kept in step with a calendar server at each Send/Receive"
         let half = (into_day / (30 * MINUTE)).saturating_add(1).clamp(0, 47);
         let start = calendar::day_start(day, off).saturating_add(half * 30 * MINUTE);
         self.appointment = Some(AppointmentForm::new_at(start, false, off));
+    }
+
+    /// A new meeting: an appointment with its attendees to type in, sent rather than saved.
+    pub(crate) fn new_meeting(&mut self) {
+        self.new_appointment();
+        if let Some(f) = self.appointment.as_mut() {
+            f.inviting = true;
+        }
+    }
+
+    /// A meeting in reply to the open message: its sender and those it went to asked, its
+    /// subject, at the next whole hour. Nothing is kept until it is sent or saved.
+    pub(crate) fn reply_with_meeting(&mut self) -> Result<(), String> {
+        let Some(item) = self.session.open.as_ref() else { return Err("No message is open".to_string()) };
+        let subject = one_line(&item.subject());
+        let asked = self.session.reply_attendees();
+        let off = &self.session.zone.clone();
+        let now = self.session.time_now();
+        let hour = 60 * MINUTE;
+        let start = now.saturating_sub(now.rem_euclid(hour)).saturating_add(hour);
+        let mut form = AppointmentForm::new_at(start, false, off);
+        form.end_time = hm(&off.civil(start.saturating_add(hour)));
+        form.end_date = ymd(&off.civil(start.saturating_add(hour)));
+        form.subject = subject;
+        let m = Meeting { attendees: asked, ..Meeting::default() };
+        form.asked = crate::meeting::lines(Some(&m));
+        form.inviting = true;
+        self.appointment = Some(form);
+        Ok(())
     }
 
     /// The window an appointment is made or changed in.
@@ -1117,14 +1188,20 @@ Kept in step with a calendar server at each Send/Receive"
         let preview = self.repeat_preview(&form);
         let zones = known_zones();
         let here_label = off.label();
-        let title = match (form.id, form.occurrence) {
-            (None, _) => "New Appointment",
-            (Some(_), Some(_)) => "Appointment Occurrence",
-            (Some(_), None) if form.recurring => "Appointment Series",
-            (Some(_), None) => "Appointment",
+        let is_meeting = form.meeting.is_some() || form.inviting;
+        let title = match (form.id, form.occurrence, is_meeting) {
+            (None, _, false) => "New Appointment",
+            (None, _, true) => "New Meeting",
+            (Some(_), Some(_), false) => "Appointment Occurrence",
+            (Some(_), Some(_), true) => "Meeting Occurrence",
+            (Some(_), None, false) if form.recurring => "Appointment Series",
+            (Some(_), None, true) if form.recurring => "Meeting Series",
+            (Some(_), None, false) => "Appointment",
+            (Some(_), None, true) => "Meeting",
         };
+        let icon = if is_meeting { Icon::NewMeeting } else { Icon::NewAppointment };
         let mut switch = false;
-        let shown = crate::dialog::Dialog::new("appointment", title, Icon::NewAppointment).show(ctx, &t, |ui| {
+        let shown = crate::dialog::Dialog::new("appointment", title, icon).show(ctx, &t, |ui| {
             // Opened on one occurrence: this one alone, or the whole series, with no question first.
             if form.other.is_some() || form.occurrence.is_some() {
                 ui.horizontal(|ui| {
@@ -1150,6 +1227,28 @@ Kept in step with a calendar server at each Send/Receive"
                 });
                 ui.add_space(4.0);
             }
+            if let Some(m) = form.meeting.as_ref().filter(|m| m.received) {
+                let organizer = one_line(m.organizer.label());
+                let tone = if m.cancelled { t.danger } else { t.accent };
+                crate::dialog::callout(ui, &t, tone, |ui| {
+                    let words = if m.cancelled {
+                        format!("{organizer} has called this meeting off.")
+                    } else {
+                        format!("{organizer} asked you to this meeting. {}.", crate::meeting::answer_words(m.response))
+                    };
+                    ui.label(egui::RichText::new(words).font(font(12.0)).color(t.text));
+                    if !m.cancelled {
+                        ui.horizontal(|ui| {
+                            for (label, response) in [("Accept", "accept"), ("Tentative", "tentative"), ("Decline", "decline")] {
+                                if ui.add(crate::dialog::plain(label)).on_hover_text("Answer, and tell the organizer").clicked() {
+                                    ask = Some(Ask::Respond(response));
+                                }
+                            }
+                        });
+                    }
+                });
+                ui.add_space(6.0);
+            }
             if !clashes.is_empty() {
                 let words = format!("At the same time: {}", clashes.join(", "));
                 crate::dialog::callout(ui, &t, t.flag, |ui| {
@@ -1167,6 +1266,41 @@ Kept in step with a calendar server at each Send/Receive"
                 ui.label(egui::RichText::new("Location").color(t.text_dim));
                 ui.add(LineEdit::new(&mut form.location, egui::Id::new("appt-location")).desired_width(380.0).char_limit(255));
                 ui.end_row();
+                if let Some(m) = form.meeting.as_ref().filter(|m| m.received) {
+                    let people: Vec<String> = m.attendees.iter().take(12).map(|p| one_line(p.label())).collect();
+                    let more = m.attendees.len().saturating_sub(people.len());
+                    ui.label(egui::RichText::new("Organizer").color(t.text_dim));
+                    ui.label(egui::RichText::new(crate::meeting::person_text(&m.organizer)).color(t.text));
+                    ui.end_row();
+                    ui.label(egui::RichText::new("Attendees").color(t.text_dim));
+                    let mut line = people.join("; ");
+                    if more > 0 {
+                        line.push_str(&format!(" and {more} more"));
+                    }
+                    ui.add(egui::Label::new(egui::RichText::new(line).color(t.text)).wrap());
+                    ui.end_row();
+                } else if form.inviting {
+                    // The whole series' attendees: one occurrence alone has those of its series.
+                    let alone = form.occurrence.is_some();
+                    for (n, (label, hint)) in
+                        [("Required", "Those who need to come"), ("Optional", "Those welcome to come"), ("Resources", "Rooms and things booked")]
+                            .into_iter()
+                            .enumerate()
+                    {
+                        let Some(line) = form.asked.get_mut(n) else { continue };
+                        ui.label(egui::RichText::new(label).color(t.text_dim));
+                        ui.add_enabled(
+                            !alone,
+                            LineEdit::new(line, egui::Id::new(("appt-asked", n)))
+                                .desired_width(380.0)
+                                .char_limit(16_000)
+                                .hint("Name <address>; …", None),
+                        )
+                        .on_hover_text(hint)
+                        .on_disabled_hover_text("Those asked are changed for the whole series");
+                        ui.end_row();
+                    }
+                }
                 for (label, date, clock, key) in
                     [("Start time", &mut form.start_date, &mut form.start_time, "start"), ("End time", &mut form.end_date, &mut form.end_time, "end")]
                 {
@@ -1206,6 +1340,32 @@ Kept in step with a calendar server at each Send/Receive"
                     repeat_rows(ui, &t, &mut form.repeat, week_start, preview.as_ref());
                 }
             });
+            if let Some(m) = form.meeting.as_ref().filter(|m| !m.received && m.invited && !m.attendees.is_empty()) {
+                ui.add_space(6.0);
+                egui::CollapsingHeader::new(
+                    egui::RichText::new(format!("Tracking: {}", crate::meeting::tally_words(m))).font(font(12.0)).color(t.text),
+                )
+                .id_salt("appt-tracking")
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                        egui::Grid::new("appt-tracking-grid").num_columns(3).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+                            for p in m.attendees.iter().take(openmailclient_model::meeting::MAX_ATTENDEES) {
+                                ui.label(egui::RichText::new(one_line(p.label())).color(t.text));
+                                ui.label(
+                                    egui::RichText::new(match p.role {
+                                        Role::Required => "Required",
+                                        Role::Optional => "Optional",
+                                        Role::Resource => "Resource",
+                                    })
+                                    .color(t.text_dim),
+                                );
+                                ui.label(egui::RichText::new(p.response.words()).color(t.text));
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+            }
             ui.add_space(8.0);
             match form.span(off) {
                 Some((s, e)) if e > s => {
@@ -1237,16 +1397,38 @@ Kept in step with a calendar server at each Send/Receive"
                     ui.label(egui::RichText::new(one_line(said)).font(font(12.0)).color(t.text));
                 });
             }
+            let invited = form.meeting.as_ref().is_some_and(|m| m.invited && !m.received && !m.cancelled);
+            let sends = form.asks_anyone() && !form.received();
             crate::dialog::foot(ui, &t, |ui| {
                 let deletes = if form.occurrence.is_some() { "Deletes this occurrence alone" } else { "Moves it to Deleted Items" };
-                if form.id.is_some() && ui.add(crate::dialog::danger(&t, "Delete")).on_hover_text(deletes).clicked() {
+                if invited && form.occurrence.is_none() {
+                    if ui
+                        .add(crate::dialog::danger(&t, "Cancel Meeting"))
+                        .on_hover_text("Tells everyone asked it is off, and moves it to Deleted Items")
+                        .clicked()
+                    {
+                        ask = Some(Ask::CancelMeeting);
+                    }
+                } else if form.id.is_some() && ui.add(crate::dialog::danger(&t, "Delete")).on_hover_text(deletes).clicked() {
                     ask = Some(Ask::Delete);
+                }
+                if !form.inviting && form.meeting.is_none() && form.occurrence.is_none() && ui.add(crate::dialog::plain("Invite Attendees")).clicked()
+                {
+                    form.inviting = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(crate::dialog::plain("Cancel")).clicked() {
                         ask = Some(Ask::Close);
                     }
-                    if ui.add(crate::dialog::primary(&t, "Save & Close")).clicked() {
+                    if sends {
+                        let label = if invited { "Send Update" } else { "Send" };
+                        if ui.add(crate::dialog::primary(&t, label)).on_hover_text("Saves it and sends it to everyone asked").clicked() {
+                            ask = Some(Ask::Send);
+                        }
+                        if ui.add(crate::dialog::plain("Save & Close")).on_hover_text("Keeps it in the calendar without sending it yet").clicked() {
+                            ask = Some(Ask::Save);
+                        }
+                    } else if ui.add(crate::dialog::primary(&t, "Save & Close")).clicked() {
                         ask = Some(Ask::Save);
                     }
                 });
@@ -1267,6 +1449,18 @@ Kept in step with a calendar server at each Send/Receive"
             Some(Ask::Close) => return,
             Some(Ask::Save) => self.execute(if form.id.is_some() { "calendar.change" } else { "calendar.new" }, &form.params()),
             Some(Ask::Delete) => self.execute("calendar.delete", &form.delete_params()),
+            Some(Ask::Send) => self.execute(if form.id.is_some() { "calendar.change" } else { "calendar.new" }, &form.params()).and_then(|saved| {
+                // Saved: what is typed is kept, so a send that fails is tried again from here.
+                let id = form.id.or_else(|| saved["id"].as_u64()).ok_or_else(|| "The meeting was not kept".to_string())?;
+                form.id = Some(id);
+                form.asked_was = form.asked.clone();
+                self.execute("calendar.sendInvitations", &json!({ "id": id }))
+            }),
+            Some(Ask::CancelMeeting) => self.execute("calendar.cancelMeeting", &json!({ "id": form.id })),
+            Some(Ask::Respond(response)) => {
+                let id = form.id;
+                self.execute("calendar.respond", &json!({ "id": id, "response": response }))
+            }
         };
         if let Err(e) = result {
             form.said = Some(e);

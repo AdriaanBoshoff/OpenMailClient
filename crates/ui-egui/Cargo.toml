@@ -28,3 +28,4 @@ iana-time-zone = { version = "0.1", features = ["fallback"] }
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 openmailclient-net = { workspace = true, features = ["fake"] }
+openmailclient-mime = { workspace = true }

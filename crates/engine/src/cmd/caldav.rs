@@ -563,6 +563,9 @@ fn apply(s: &mut Session, store: usize, t: &Took) -> (Vec<Value>, Vec<DavCal>) {
     let main = s.find_folder(store, FolderKind::Calendar);
     let deleted = s.find_folder(store, FolderKind::Deleted);
     let (here_tz, now) = (s.zone.clone(), s.time_now());
+    // A meeting one called, or was asked to, is kept as such.
+    let mine = super::meeting::mine(s);
+    let me: Vec<&str> = mine.iter().map(String::as_str).collect();
     let mut folders: Vec<(FolderId, String)> = s.folders.get(store).map(|f| f.iter().map(|x| (x.id, x.name.clone())).collect()).unwrap_or_default();
     let mut kept = Vec::new();
     let mut shown = Vec::new();
@@ -654,10 +657,10 @@ fn apply(s: &mut Session, store: usize, t: &Took) -> (Vec<Value>, Vec<DavCal>) {
             }
             let item = match mine.map(|id| (id, st.load(folder, ItemId(id)))) {
                 Some((id, Ok(mut item))) => {
-                    event.write(&mut item);
+                    event.write_as(&mut item, &me);
                     Some((Some(id), item))
                 }
-                _ => Some((None, event.item())),
+                _ => Some((None, event.item_as(&me))),
             };
             let Some((id, mut item)) = item else { continue };
             DavPlace { href: href.clone(), etag: etag.clone(), hash: hash_of(&item) }.put(&mut item);

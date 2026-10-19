@@ -39,7 +39,7 @@ pub struct Shown {
 }
 
 const VIEW_PARAMS: &str = r#"{"view": "day" | "workWeek" | "week" | "month"}"#;
-const APPOINTMENT_PARAMS: &str = r#"{"subject", "start": "YYYY-MM-DD HH:MM" local time (a date alone for an all-day event), "end" (default: half an hour on, or the next day for an all-day event), "location", "allDay": bool, "busy": "free" | "tentative" | "busy" | "outOfOffice" | "workingElsewhere", "reminder": minutes before, or null for none (default 15; none for an all-day event), "repeat": as calendar.recurrence takes it, "zone": the time zone it is kept in and its times are given in, a name calendar.timeZones gives, or null for none (default: the one dates are shown in); a series in a zone keeps its hour there whatever the season}"#;
+const APPOINTMENT_PARAMS: &str = r#"{"subject", "start": "YYYY-MM-DD HH:MM" local time (a date alone for an all-day event), "end" (default: half an hour on, or the next day for an all-day event), "location", "allDay": bool, "busy": "free" | "tentative" | "busy" | "outOfOffice" | "workingElsewhere", "reminder": minutes before, or null for none (default 15; none for an all-day event), "repeat": as calendar.recurrence takes it, "zone": the time zone it is kept in and its times are given in, a name calendar.timeZones gives, or null for none (default: the one dates are shown in); a series in a zone keeps its hour there whatever the season, "attendees": those asked, which makes it a meeting one organizes (see calendar.newMeeting)}"#;
 const REPEAT_PARAMS: &str = r#"{"id" (default: the one chosen), "repeat": null or "none" for once, or {"every": "day" | "weekday" | "week" | "month" | "year", "interval": days, weeks or months between (default 1), "on": weekday names (a week's days, or with "nth" the days of a month counted), "nth": 1 to 4 or "last", "day": the day of the month (default: the start's), "lastDay": true for the month's last day, "count": occurrences 1 to 999, or "until": "YYYY-MM-DD" (default: no end)}}; the first occurrence is the first day it falls on from the start, and occurrences changed on their own are as planned again"#;
 
 pub(crate) fn commands() -> Vec<CommandSpec> {
@@ -578,7 +578,7 @@ pub(super) fn writable_calendar(s: &Session) -> Result<(usize, FolderId), Engine
     Ok((store, folder))
 }
 
-fn new(s: &mut Session, p: &Value) -> CmdResult {
+pub(super) fn new(s: &mut Session, p: &Value) -> CmdResult {
     let (store, folder) = writable_calendar(s)?;
     let mut a = changed(s, p, None)?;
     let zone = a.zone.clone().unwrap_or_else(|| s.zone.clone());
@@ -587,6 +587,10 @@ fn new(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Its id for life, by which a copy of it (a calendar file, a server's) is known again.
     let mut item = a.item();
+    if let Some(v) = p.get("attendees") {
+        let asked = super::meeting::attendees_param(s, v)?;
+        super::meeting::set_attendees(s, &mut item, asked)?;
+    }
     let seed = s.calendar.items.len() as u64 ^ (a.start as u64).rotate_left(17) ^ a.subject.len() as u64;
     calendar::set_global_id(&mut item, &calendar::new_global_id(s.time_now(), seed));
     let id = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.add(folder, item)?;
@@ -816,6 +820,9 @@ fn change(s: &mut Session, p: &Value) -> CmdResult {
             if p.get("repeat").is_some() {
                 return Err(EngineError::BadParams("one occurrence cannot repeat on its own; change the series".into()));
             }
+            if p.get("attendees").is_some() {
+                return Err(EngineError::BadParams("those asked are asked to the whole series; change the series".into()));
+            }
             let now = was.occurrence_of(day).ok_or_else(|| EngineError::BadParams("that appointment has no such occurrence".into()))?;
             let to = changed(s, p, Some(&now))?;
             // It stays between the occurrences before and after it, as Outlook keeps it.
@@ -841,6 +848,10 @@ fn change(s: &mut Session, p: &Value) -> CmdResult {
                 None => moved_series(&was, &mut a),
             }
             a.write(&mut item);
+            if let Some(v) = p.get("attendees") {
+                let asked = super::meeting::attendees_param(s, v)?;
+                super::meeting::set_attendees(s, &mut item, asked)?;
+            }
         }
     }
     s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.update(folder, ItemId(id), item)?;
@@ -861,7 +872,7 @@ fn recurrence(s: &mut Session, p: &Value) -> CmdResult {
     change(s, &Value::Object(asked))
 }
 
-fn delete(s: &mut Session, p: &Value) -> CmdResult {
+pub(super) fn delete(s: &mut Session, p: &Value) -> CmdResult {
     let (store, folder) = writable_calendar(s)?;
     let (id, occurrence) = which(s, p)?;
     let deleted = s.find_folder(store, FolderKind::Deleted);

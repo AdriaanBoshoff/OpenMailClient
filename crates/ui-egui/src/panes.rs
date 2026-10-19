@@ -485,6 +485,9 @@ impl MailUi {
     fn reading_pane(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
         let doc = self.body_doc();
+        // A meeting's request, answer or cancellation: what it is, and answered from here.
+        let meeting_bar = self.meeting_bar();
+        let mut meeting_acts: Vec<(&'static str, Value)> = Vec::new();
         if let (Some(doc), Some((key, _)), Some(item)) = (&doc, &self.body_doc, self.session.open.as_ref()) {
             self.pictures.load(ui.ctx(), *key, doc, item, &self.session.downloaded);
             self.pictures.moving = self.session.animate;
@@ -578,7 +581,10 @@ impl MailUi {
         // Attachments: a click picks one, a double-click or Enter asks whether to open or save it,
         // and a right-click offers the same. Nothing is opened or run without that answer.
         // The name is shown as it would be saved, so nothing in it is hidden or reversed.
+        // A meeting's calendar is the meeting, answered from its bar, not a file to open.
+        let meeting = openmailclient_model::meeting::is_meeting_message(item);
         let files: Vec<(usize, String, usize, Option<String>)> = openmailclient_engine::attachments::files(item)
+            .filter(|(_, a)| !(meeting && a.mime().eq_ignore_ascii_case("text/calendar")))
             .map(|(i, a)| {
                 (i, openmailclient_engine::attachments::file_name(a), a.size(), openmailclient_engine::attachments::caution_of(a).map(|c| c.words()))
             })
@@ -716,6 +722,12 @@ impl MailUi {
             clip_text(&p, pos2(bar.left() + pad + 12.0, bar.center().y - 8.0), bar.width() - 40.0, words, font(11.5), t.text_dim);
             y += 30.0;
         }
+        if let Some(bar) = &meeting_bar {
+            let room = Rect::from_min_max(pos2(rect.left() + 1.0, y), pos2(rect.right(), rect.bottom()));
+            let drawn =
+                ui.scope_builder(UiBuilder::new().max_rect(room).id_salt("meeting-bar"), |ui| self.meeting_bar_ui(ui, bar, &mut meeting_acts));
+            y += drawn.response.rect.height() + 6.0;
+        }
         if let Some(notice) = notice {
             let bar = Rect::from_min_size(pos2(rect.left() + 1.0, y), vec2(rect.width() - 1.0, 24.0));
             p.rect_filled(bar, 0.0, t.info_bar);
@@ -779,6 +791,9 @@ impl MailUi {
         });
         for cmd in acts {
             self.act(cmd, Value::Null);
+        }
+        for (cmd, params) in meeting_acts {
+            self.act(cmd, params);
         }
         ui.data_mut(|d| match picked {
             Some(index) => {

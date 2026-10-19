@@ -39,6 +39,8 @@ mod tests_calendar_file;
 #[cfg(test)]
 mod tests_import;
 #[cfg(test)]
+mod tests_meeting;
+#[cfg(test)]
 mod tests_pictures;
 #[cfg(test)]
 mod tests_print;

@@ -11,6 +11,8 @@
 //! {"size": [1280, 800]}                      window size in points (before the first shot)
 //! {"sample": true}                           open the sample mailbox
 //! {"command": "mail.select", "params": {"index": 0}}
+//!                                            a param "$id" stands for the "id" the last
+//!                                            command gave back
 //! {"shot": "plan/shots/inbox.png"}
 //! {"click": [640, 18]}                       press and let go at a place in the window
 //! {"type": "words"}                          type into what has the keyboard
@@ -81,13 +83,25 @@ fn run() -> Result<(), String> {
     // A picture is taken with every picture of the message in it.
     harness.state_mut().wait_for_pictures(true);
     harness.run_steps(3);
+    // The "id" the last command gave back, put where a param says "$id".
+    let mut last_id = Value::Null;
     for step in &steps {
         if step.get("sample").and_then(Value::as_bool) == Some(true) {
             harness.state_mut().execute("file.openSample", &Value::Null)?;
         } else if let Some(id) = step.get("command").and_then(Value::as_str) {
-            let params = step.get("params").cloned().unwrap_or(Value::Null);
-            if let Err(e) = harness.state_mut().execute(id, &params) {
-                eprintln!("ui_shot: {id}: {e}");
+            let mut params = step.get("params").cloned().unwrap_or(Value::Null);
+            if let Some(map) = params.as_object_mut() {
+                for v in map.values_mut().filter(|v| v.as_str() == Some("$id")) {
+                    *v = last_id.clone();
+                }
+            }
+            match harness.state_mut().execute(id, &params) {
+                Ok(got) => {
+                    if let Some(new) = got.get("id").filter(|v| !v.is_null()) {
+                        last_id = new.clone();
+                    }
+                }
+                Err(e) => eprintln!("ui_shot: {id}: {e}"),
             }
         } else if let Some(r) = step.get("region").and_then(Value::as_array) {
             let text = |i: usize| r.get(i).and_then(Value::as_str).unwrap_or("");

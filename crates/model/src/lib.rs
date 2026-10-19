@@ -8,6 +8,7 @@
 pub mod calendar;
 pub mod codepage;
 pub mod html;
+pub mod meeting;
 pub mod memstore;
 pub mod props;
 pub mod recur;
@@ -493,12 +494,17 @@ impl Item {
         }
     }
 
-    /// Attachments a person would count: not the inline pictures an HTML body refers to.
+    /// Attachments a person would count: not the inline pictures an HTML body refers to, nor
+    /// the calendar a meeting's message carries, which is the meeting itself.
     pub fn visible_attachments(&self) -> impl Iterator<Item = &Attachment> {
         let html = self.body_html().unwrap_or_default();
-        self.attachments.iter().filter(move |a| match a.content_id() {
-            Some(cid) if !cid.is_empty() => !html.contains(&format!("cid:{cid}")),
-            _ => true,
+        let meeting = meeting::is_meeting_message(self);
+        self.attachments.iter().filter(move |a| {
+            !(meeting && a.mime().eq_ignore_ascii_case("text/calendar"))
+                && match a.content_id() {
+                    Some(cid) if !cid.is_empty() => !html.contains(&format!("cid:{cid}")),
+                    _ => true,
+                }
         })
     }
 

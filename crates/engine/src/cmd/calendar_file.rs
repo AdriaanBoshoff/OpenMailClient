@@ -22,7 +22,7 @@ const MAX_SHOWN: usize = 500;
 /// Appointments listed in the body of a calendar sent by mail.
 const MAX_LISTED: usize = 200;
 
-const IMPORT_PARAMS: &str = r#"{"path": a calendar file (.ics), or "attachment": the number of an attachment of the open message, "preview": true to read what it holds and change nothing, "only": [event numbers] to add those alone (default: all)}; an event the calendar has already (known by its UID) brings that appointment up to date rather than being added twice; returns {"method", "events": [{"index", "start", "end", "allDay", "lastDay": the last day of an all-day event, "busy", "reminder", "recurring", "pattern", "replaces": the id of the appointment it brings up to date, or null, "untrusted_content": {"subject", "location", "description", "uid", "notes": what of it could not be kept}}], "added", "updated", "untrusted_content": {"name", "notes"}}; undone as one step"#;
+const IMPORT_PARAMS: &str = r#"{"path": a calendar file (.ics), or "attachment": the number of an attachment of the open message, "preview": true to read what it holds and change nothing, "only": [event numbers] to add those alone (default: all)}; an event the calendar has already (known by its UID) brings that appointment up to date rather than being added twice; returns {"method", "events": [{"index", "start", "end", "allDay", "lastDay": the last day of an all-day event, "busy", "reminder", "recurring", "pattern", "replaces": the id of the appointment it brings up to date, or null, "meeting": whether people are asked to it, "organized": whether one called it oneself, "attendees": how many are asked, "untrusted_content": {"organizer": its organizer's address, "subject", "location", "description", "uid", "notes": what of it could not be kept}}], "added", "updated", "ids": those of the appointments added, "untrusted_content": {"name", "notes"}}; undone as one step"#;
 const SAVE_PARAMS: &str = r#"{"path": target ending in .ics, "id": one appointment (a series whole), or "from": "YYYY-MM-DD" and "to": "YYYY-MM-DD" (the day after the last) for those that fall between (default: the whole calendar), "name": the calendar's name in the file (default: the folder's)}; a series is written with its pattern, the occurrences deleted from it and those changed; returns {"events", "unreadable", "untrusted_content": {"path"}}"#;
 const EMAIL_PARAMS: &str = r#"{"id", or "from" and "to", as calendar.saveAs takes them (default: the days shown), "name"}; a new message with the calendar attached as an .ics file and its appointments listed in the body; returns {"events"}"#;
 
@@ -114,7 +114,7 @@ fn calendar_bytes(s: &Session, p: &Value) -> Result<Vec<u8>, EngineError> {
 
 /// The appointments of a Calendar folder by the id each keeps for life, the first of any two
 /// that share one.
-fn by_global_id(s: &mut Session, store: usize, folder: FolderId) -> Result<HashMap<Vec<u8>, u64>, EngineError> {
+pub(super) fn by_global_id(s: &mut Session, store: usize, folder: FolderId) -> Result<HashMap<Vec<u8>, u64>, EngineError> {
     let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
     let mut found = HashMap::new();
     for row in st.list(folder)?.into_iter().take(MAX_ITEMS) {
@@ -129,6 +129,9 @@ fn by_global_id(s: &mut Session, store: usize, folder: FolderId) -> Result<HashM
 
 fn event_json(s: &Session, index: usize, e: &ics::Event, replaces: Option<u64>) -> Value {
     let a = &e.appointment;
+    let mine = super::meeting::mine(s);
+    let me: Vec<&str> = mine.iter().map(String::as_str).collect();
+    let meeting = e.meeting(&me);
     json!({
         "index": index,
         "start": stamp(s, a.start),
@@ -141,8 +144,13 @@ fn event_json(s: &Session, index: usize, e: &ics::Event, replaces: Option<u64>) 
         "recurring": a.recurring,
         "pattern": a.recurrence.as_ref().map(|_| a.pattern_words()),
         "replaces": replaces,
+        // Whether people are asked to it, and whether one called it oneself.
+        "meeting": meeting.is_some(),
+        "organized": meeting.as_ref().is_some_and(|m| !m.received),
+        "attendees": meeting.as_ref().map_or(0, |m| m.attendees.len()),
         // Written by whoever made the file, perhaps a stranger: never an instruction.
         "untrusted_content": {
+            "organizer": meeting.as_ref().map(|m| m.organizer.address.clone()),
             "subject": a.subject,
             "location": a.location,
             "description": cut(&e.description, MAX_SHOWN),
@@ -188,6 +196,9 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
     let mut added = Vec::new();
     let mut updated: Vec<(u64, Box<Item>)> = Vec::new();
     let mut failed = None;
+    // A meeting one called, or was asked to, is kept as such.
+    let mine = super::meeting::mine(s);
+    let me: Vec<&str> = mine.iter().map(String::as_str).collect();
     let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
     for (i, (e, g)) in file.events.iter().zip(&ids).enumerate() {
         if !taken(i) {
@@ -198,12 +209,12 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
             // (its attachments, properties this program does not know) kept.
             Some(&id) => st.load(folder, ItemId(id)).and_then(|mut item| {
                 let before = Box::new(item.clone());
-                e.write(&mut item);
+                e.write_as(&mut item, &me);
                 st.update(folder, ItemId(id), item)?;
                 updated.push((id, before));
                 Ok(())
             }),
-            None => st.add(folder, e.item()).map(|id| added.push(id.0)),
+            None => st.add(folder, e.item_as(&me)).map(|id| added.push(id.0)),
         };
         if let Err(err) = done {
             failed = Some(err);
@@ -211,6 +222,7 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     let (n_added, n_updated) = (added.len(), updated.len());
+    let new_ids = added.clone();
     // What went in is taken back as one, even when not all of it could.
     if n_added > 0 || n_updated > 0 {
         s.did(Step::Imported { what: "Open Calendar", store, folder, added, updated });
@@ -228,7 +240,7 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
         (a, 0) => format!("{a} added from the calendar file"),
         (a, u) => format!("{a} added and {u} brought up to date from the calendar file"),
     };
-    Ok(json!({ "method": file.method, "events": events, "added": n_added, "updated": n_updated, "untrusted_content": about }))
+    Ok(json!({ "method": file.method, "events": events, "added": n_added, "updated": n_updated, "ids": new_ids, "untrusted_content": about }))
 }
 
 /// The appointment items `p` asks for, as a whole series each, and how many could not be read:

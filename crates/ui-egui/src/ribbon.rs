@@ -38,7 +38,12 @@ const HOME: &[Group] = &[
     ),
     (
         "Respond",
-        &[big(Icon::Reply, "Reply", "mail.reply"), big(Icon::ReplyAll, "Reply\nAll", "mail.replyAll"), big(Icon::Forward, "Forward", "mail.forward")],
+        &[
+            big(Icon::Reply, "Reply", "mail.reply"),
+            big(Icon::ReplyAll, "Reply\nAll", "mail.replyAll"),
+            big(Icon::Forward, "Forward", "mail.forward"),
+            small(Icon::NewMeeting, "Meeting", "ui.replyWithMeeting"),
+        ],
     ),
     ("Move", &[small(Icon::Move, "Move", "menu:move"), small(Icon::Rules, "Rules", "")]),
     (
@@ -53,7 +58,7 @@ const HOME: &[Group] = &[
 ];
 
 const CALENDAR_HOME: &[Group] = &[
-    ("New", &[big(Icon::NewAppointment, "New\nAppointment", "ui.appointment")]),
+    ("New", &[big(Icon::NewAppointment, "New\nAppointment", "ui.appointment"), big(Icon::NewMeeting, "New\nMeeting", "ui.meeting")]),
     ("Go To", &[big(Icon::Today, "Today", "calendar.today")]),
     ("Time Zones", &[big(Icon::Clock, "Time\nZones", "ui.timeZones")]),
     (
@@ -149,6 +154,8 @@ impl MailUi {
             "ui.prompt" => true,
             "ui.openAppointment" => self.session.calendar.selected.is_some(),
             "ui.appointment" => self.session.is_enabled("calendar.new"),
+            "ui.meeting" => self.session.is_enabled("calendar.newMeeting"),
+            "ui.replyWithMeeting" => self.session.is_enabled("mail.replyWithMeeting"),
             "ui.saveCalendarDialog" => self.session.is_enabled("calendar.saveAs"),
             c if c.starts_with("ui.") => true,
             c => match menu_of(c) {

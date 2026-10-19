@@ -13,6 +13,7 @@ pub(crate) mod imap_sync;
 mod import;
 mod link;
 mod mail;
+mod meeting;
 mod picture;
 mod progress;
 mod receive;
@@ -61,6 +62,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(progress::commands());
         v.extend(calendar::commands());
         v.extend(calendar_file::commands());
+        v.extend(meeting::commands());
         v.extend(caldav::commands());
         v
     })

@@ -381,3 +381,123 @@ fn hostile_calendar_files_never_panic_and_are_read_in_bounded_time() {
     assert!(read(&vec![b'a'; MAX_BYTES + 1], &Zone::fixed(0)).is_err());
     assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
 }
+
+/// An invitation as another calendar program sends one: an organizer, three attendees (one
+/// who must come, one who may and has said yes, and a room) and a SEQUENCE. Synthetic.
+const INVITATION: &str = "BEGIN:VCALENDAR\r
+METHOD:REQUEST\r
+BEGIN:VEVENT\r
+UID:plan-7@example.com\r
+DTSTAMP:20261101T120000Z\r
+DTSTART:20261103T140000Z\r
+DTEND:20261103T150000Z\r
+SUMMARY:Planning\r
+ORGANIZER;CN=\"Lee, Sam\":mailto:sam@example.com\r
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=Alex Morgan:MAILTO:alex.morgan@example.org\r
+ATTENDEE;ROLE=OPT-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:priya@example.net\r
+ATTENDEE;CUTYPE=ROOM;CN=Room 4:mailto:room4@example.org\r
+ATTENDEE;CN=Twice:mailto:PRIYA@example.net\r
+ATTENDEE;CN=No address:urn:uuid:1234\r
+SEQUENCE:3\r
+END:VEVENT\r
+END:VCALENDAR\r
+";
+
+#[test]
+fn an_invitation_is_read_with_its_organizer_and_attendees_and_written_again() {
+    let cal = read(INVITATION.as_bytes(), &Zone::utc()).unwrap();
+    assert_eq!(cal.method.as_deref(), Some("REQUEST"));
+    let e = &cal.events[0];
+    assert!(e.notes.is_empty(), "{:?}", e.notes);
+    assert!(e.appointment.meeting);
+    assert_eq!(e.sequence, 3);
+    let organizer = e.organizer.as_ref().unwrap();
+    assert_eq!((organizer.name.as_str(), organizer.address.as_str()), ("Lee, Sam", "sam@example.com"));
+    let people: Vec<(&str, Role, Response)> = e.attendees.iter().map(|p| (p.address.as_str(), p.role, p.response)).collect();
+    assert_eq!(
+        people,
+        [
+            ("alex.morgan@example.org", Role::Required, Response::NotResponded),
+            ("priya@example.net", Role::Optional, Response::Accepted),
+            ("room4@example.org", Role::Resource, Response::NotResponded),
+        ],
+        "an address given twice is one attendee; a link that is no address is none"
+    );
+    // Seen by one who is asked: received, not yet answered.
+    let mine = e.meeting(&["Alex.Morgan@example.org"]).unwrap();
+    assert!(mine.received);
+    assert_eq!(mine.response, Response::NotResponded);
+    // Seen by its organizer: theirs.
+    let theirs = e.meeting(&["sam@example.com"]).unwrap();
+    assert!(!theirs.received);
+    assert_eq!(theirs.response, Response::Organized);
+    let mut item = e.appointment.item();
+    e.write_as(&mut item, &["sam@example.com"]);
+    let folded = write_as(std::slice::from_ref(&item), &Zone::utc(), at("2026-11-01 12:00", 0), None, &Method::Request);
+    assert!(folded.split("\r\n").all(|l| l.len() <= 75), "lines are folded");
+    let text = folded.replace("\r\n ", "");
+    assert!(text.contains("METHOD:REQUEST\r\n"));
+    assert!(text.contains("ORGANIZER;CN=\"Lee, Sam\":mailto:sam@example.com\r\n"));
+    assert!(text.contains("PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=\"Alex Morgan\":mailto:alex.morgan@example.org\r\n"), "{text}");
+    assert!(text.contains("ROLE=NON-PARTICIPANT;CUTYPE=RESOURCE"));
+    assert!(text.contains("SEQUENCE:3\r\n") && text.contains("STATUS:CONFIRMED\r\n"));
+    let back = read(text.as_bytes(), &Zone::utc()).unwrap();
+    assert_eq!(back.events[0].attendees, e.attendees);
+    assert_eq!(back.events[0].organizer, e.organizer);
+}
+
+#[test]
+fn a_reply_gives_its_answer_and_a_cancellation_its_meeting() {
+    let cal = read(INVITATION.as_bytes(), &Zone::utc()).unwrap();
+    let mut item = cal.events[0].appointment.item();
+    cal.events[0].write_as(&mut item, &["alex.morgan@example.org"]);
+    item.set_body_text("The agenda");
+    let mut me = Attendee::new("Alex Morgan", "alex.morgan@example.org", Role::Required);
+    me.response = Response::Tentative;
+    let now = at("2026-11-01 13:00", 0);
+    let reply = write_as(std::slice::from_ref(&item), &Zone::utc(), now, None, &Method::Reply { from: &me, comment: "Late by ten minutes" });
+    assert!(reply.contains("METHOD:REPLY\r\n"));
+    assert_eq!(reply.matches("ATTENDEE").count(), 1, "a reply names the one who answers alone");
+    assert!(!reply.contains("DESCRIPTION") && !reply.contains("VALARM"));
+    let back = read(reply.as_bytes(), &Zone::utc()).unwrap();
+    assert_eq!(back.answers.len(), 1);
+    let answer = &back.answers[0];
+    assert_eq!(answer.uid, "plan-7@example.com");
+    assert_eq!((answer.attendee.address.as_str(), answer.attendee.response), ("alex.morgan@example.org", Response::Tentative));
+    assert_eq!(answer.comment, "Late by ten minutes");
+    assert_eq!(answer.sequence, 3);
+
+    let cancel = write_as(std::slice::from_ref(&item), &Zone::utc(), now, None, &Method::Cancel);
+    assert!(cancel.contains("STATUS:CANCELLED\r\n"));
+    let back = read(cancel.as_bytes(), &Zone::utc()).unwrap();
+    assert!(back.events.is_empty(), "a meeting called off is not one to add");
+    assert_eq!(back.cancelled.len(), 1);
+    assert_eq!(back.cancelled[0].uid, "plan-7@example.com");
+    assert_eq!(back.cancelled[0].organizer.as_ref().map(|o| o.address.as_str()), Some("sam@example.com"));
+    // A reply or cancellation of one occurrence alone says which.
+    let one = "BEGIN:VCALENDAR\r\nMETHOD:CANCEL\r\nBEGIN:VEVENT\r\nUID:s\r\nRECURRENCE-ID:20261110T090000Z\r\nDTSTART:20261110T090000Z\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let back = read(one.as_bytes(), &Zone::utc()).unwrap();
+    assert_eq!(back.cancelled[0].occurrence, Some(at("2026-11-10 09:00", 0)));
+}
+
+#[test]
+fn attendees_from_a_stranger_are_capped_and_cannot_break_a_line() {
+    let mut text = String::from("BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:x\r\nDTSTART:20261103T140000Z\r\n");
+    for i in 0..1_200 {
+        text.push_str(&format!("ATTENDEE;CN=\"a\r\n b\";PARTSTAT=WHATEVER:mailto:p{i}@example.com\r\n"));
+    }
+    text.push_str("ORGANIZER:mailto:o@example.com;\"x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n");
+    let cal = read(text.as_bytes(), &Zone::utc()).unwrap();
+    let e = &cal.events[0];
+    assert_eq!(e.attendees.len(), meeting::MAX_ATTENDEES);
+    assert!(e.notes.iter().any(|n| n.contains("attendees")));
+    assert_eq!(e.organizer.as_ref().unwrap().address, "o@example.comx");
+    let mut item = e.appointment.item();
+    e.write_as(&mut item, &[]);
+    let mut evil = Meeting::of(&item).unwrap();
+    evil.attendees[0].name = "Bad\"\r\nATTENDEE:mailto:x@evil".into();
+    evil.attendees[0].address = "y@example.com\r\nX:1".into();
+    evil.write(&mut item);
+    let out = write_as(std::slice::from_ref(&item), &Zone::utc(), 0, None, &Method::Request);
+    assert!(!out.split("\r\n").any(|l| l.starts_with("ATTENDEE:mailto:x@evil") || l.starts_with("X:1")));
+}

@@ -49,13 +49,20 @@ pub fn write(item: &Item) -> Vec<u8> {
     let text =
         item.props.str(pid::BODY).map(|s| s.replace("\r\n", "\n")).unwrap_or_else(|| if html.is_some() { item.body_text() } else { String::new() });
     let is_inline = |a: &&Attachment| matches!((a.content_id(), &html), (Some(cid), Some(h)) if !cid.is_empty() && h.contains(&format!("cid:{cid}")));
+    // A meeting's invitation, reply or cancellation carries its calendar as another way of
+    // reading the message, with the method it is (RFC 6047 2.4, [MS-OXCICAL] 2.1.3.4).
+    let invite = invitation(item);
+    let is_invite = |a: &&Attachment| invite.is_some_and(|(i, _)| std::ptr::eq(*a, i));
     let inline: Vec<&Attachment> = item.attachments.iter().filter(is_inline).collect();
-    let files: Vec<&Attachment> = item.attachments.iter().filter(|a| !is_inline(a)).collect();
+    let files: Vec<&Attachment> = item.attachments.iter().filter(|a| !is_inline(a) && !is_invite(a)).collect();
     let seed = fnv(item.subject().as_bytes()) ^ (item.approx_size() as u64).rotate_left(17) ^ item.time().unsigned_abs();
 
+    let calendar = invite.map(|(a, method)| calendar_part(&a.data, method));
     let mut body = match &html {
         Some(h) => {
-            let alt = multipart("alternative", seed ^ 1, &[text_part("plain", &text), text_part("html", h)]);
+            let mut ways = vec![text_part("plain", &text), text_part("html", h)];
+            ways.extend(calendar.clone());
+            let alt = multipart("alternative", seed ^ 1, &ways);
             if inline.is_empty() {
                 alt
             } else {
@@ -64,7 +71,10 @@ pub fn write(item: &Item) -> Vec<u8> {
                 multipart("related", seed ^ 2, &parts)
             }
         }
-        None => text_part("plain", &text),
+        None => match calendar {
+            Some(c) => multipart("alternative", seed ^ 1, &[text_part("plain", &text), c]),
+            None => text_part("plain", &text),
+        },
     };
     if !files.is_empty() {
         let mut parts = vec![body];
@@ -155,6 +165,35 @@ fn multipart(kind: &str, seed: u64, parts: &[String]) -> String {
 
 fn text_part(subtype: &str, text: &str) -> String {
     format!("Content-Type: text/{subtype}; charset=\"utf-8\"\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n{}", encode_qp(text))
+}
+
+/// The calendar a meeting message carries, and the method it gives (RFC 5546 1.4): the first
+/// `text/calendar` attachment of an `IPM.Schedule.Meeting.*` message.
+fn invitation(item: &Item) -> Option<(&Attachment, &'static str)> {
+    if !item.message_class().to_ascii_lowercase().starts_with("ipm.schedule.meeting.") {
+        return None;
+    }
+    let a = item.attachments.iter().find(|a| a.embedded.is_none() && a.mime().eq_ignore_ascii_case("text/calendar"))?;
+    Some((a, calendar_method(&a.data)?))
+}
+
+/// The METHOD a calendar gives, one of those a message may carry; `None` for any other.
+pub fn calendar_method(data: &[u8]) -> Option<&'static str> {
+    let head = data.get(..data.len().min(4096)).unwrap_or_default();
+    let text = String::from_utf8_lossy(head);
+    let line = text.lines().find(|l| l.len() > 7 && l.get(..7).is_some_and(|h| h.eq_ignore_ascii_case("METHOD:")))?;
+    let method = line.get(7..)?.trim().to_ascii_uppercase();
+    ["PUBLISH", "REQUEST", "REPLY", "CANCEL", "COUNTER", "DECLINECOUNTER", "REFRESH", "ADD"].into_iter().find(|m| *m == method)
+}
+
+fn calendar_part(data: &[u8], method: &str) -> String {
+    let mut out = format!("Content-Type: text/calendar; charset=\"utf-8\"; method={method}\r\nContent-Transfer-Encoding: base64\r\n\r\n");
+    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+    for line in b64.as_bytes().chunks(76) {
+        out.push_str(std::str::from_utf8(line).unwrap_or(""));
+        out.push_str("\r\n");
+    }
+    out
 }
 
 fn attachment_part(a: &Attachment, inline: bool) -> String {

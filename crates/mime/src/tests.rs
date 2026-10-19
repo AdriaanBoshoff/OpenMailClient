@@ -142,3 +142,39 @@ fn hostile_input_never_panics() {
         let _ = parse(&bad);
     }
 }
+
+#[test]
+fn a_meeting_message_carries_its_calendar_as_another_way_to_read_it() {
+    let mut item = Item::default();
+    item.props.set_str(pid::MESSAGE_CLASS, "IPM.Schedule.Meeting.Request");
+    item.props.set_str(pid::SUBJECT, "Planning");
+    item.set_body_text("When: Tuesday");
+    let ics = b"BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:p\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n".to_vec();
+    item.attachments.push(Attachment::file("invite.ics", "text/calendar", ics.clone()));
+    item.attachments.push(Attachment::file("agenda.txt", "text/plain", b"1. Plans".to_vec()));
+    let eml = String::from_utf8(write(&item)).unwrap();
+    assert!(eml.contains("multipart/alternative"));
+    assert!(eml.contains("Content-Type: text/calendar; charset=\"utf-8\"; method=REQUEST\r\n"));
+    assert!(!eml.contains("invite.ics"), "not an attachment as well");
+    let back = parse(eml.as_bytes()).unwrap();
+    assert_eq!(back.message_class(), "IPM.Schedule.Meeting.Request");
+    assert_eq!(back.body_text().trim(), "When: Tuesday");
+    let cal = back.attachments.iter().find(|a| a.mime() == "text/calendar").unwrap();
+    assert_eq!(cal.data, ics);
+    assert!(back.attachments.iter().any(|a| a.name() == "agenda.txt"));
+
+    // Answers are classed by what they say; a calendar that is only published is not a meeting's.
+    for (body, class) in [
+        ("METHOD:REPLY\r\nATTENDEE;PARTSTAT=DECLINED:mailto:a@example.com", "IPM.Schedule.Meeting.Resp.Neg"),
+        ("METHOD:REPLY\r\nATTENDEE;PARTSTAT=TENTATIVE:mailto:a@example.com", "IPM.Schedule.Meeting.Resp.Tent"),
+        ("METHOD:CANCEL", "IPM.Schedule.Meeting.Canceled"),
+        ("METHOD:PUBLISH", "IPM.Note"),
+        ("METHOD:REPLY", "IPM.Note"),
+    ] {
+        let eml = format!("Subject: x\r\nContent-Type: text/calendar; method=X\r\n\r\nBEGIN:VCALENDAR\r\n{body}\r\nEND:VCALENDAR\r\n");
+        assert_eq!(parse(eml.as_bytes()).unwrap().message_class(), class, "{body}");
+    }
+    // A plain message that is not a meeting's keeps its calendar as an attachment.
+    item.props.set_str(pid::MESSAGE_CLASS, "IPM.Note");
+    assert!(String::from_utf8(write(&item)).unwrap().contains("invite.ics"));
+}

@@ -2753,3 +2753,108 @@ fn an_accounts_caldav_server_is_a_field_of_its_form() {
     assert_eq!(crate::accounts::url_host("https://[::1]/x"), "[::1]");
     assert_eq!(crate::accounts::url_host("not one"), "");
 }
+
+#[test]
+fn a_meeting_is_typed_in_the_appointment_window_and_its_attendees_read_back() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "calendar" })).unwrap();
+    ui.execute("ui.meeting", &Value::Null).unwrap();
+    let mut form = ui.appointment.clone().unwrap();
+    assert!(form.inviting && form.meeting.is_none());
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    form.subject = "Rota planning".to_string();
+    form.start_date = "2026-11-02".to_string();
+    form.start_time = "09:00".to_string();
+    form.end_date = "2026-11-02".to_string();
+    form.end_time = "10:00".to_string();
+    form.asked = [
+        "\"Okafor, June\" <june@example.test>; tomas@example.test".to_string(),
+        "Sam Reyes <sam@example.test>".to_string(),
+        "Room 2 <room2@example.test>".to_string(),
+    ];
+    assert!(form.asks_anyone());
+    let id = ui.execute("calendar.new", &form.params()).unwrap()["id"].as_u64().unwrap();
+    ui.execute("ui.appointment", &json!({ "id": id })).unwrap();
+    let opened = ui.appointment.clone().unwrap();
+    let m = opened.meeting.clone().unwrap();
+    assert!(!m.received && !m.invited);
+    assert_eq!(opened.asked, form.asked, "typed again as it was typed");
+    assert!(opened.inviting);
+    // Sent: no account, so it waits in the Outbox; opened again it is invited and tracked.
+    ui.execute("calendar.sendInvitations", &json!({ "id": id })).unwrap();
+    assert!(ui.session.status.contains("Outbox"), "{}", ui.session.status);
+    ui.execute("ui.appointment", &json!({ "id": id })).unwrap();
+    let sent = ui.appointment.clone().unwrap();
+    assert!(sent.meeting.as_ref().unwrap().invited);
+    assert_eq!(crate::meeting::tally_words(sent.meeting.as_ref().unwrap()), "4 no response");
+    // Nothing changed in who is asked: a change of time alone does not send them again.
+    assert!(sent.params().get("attendees").is_none());
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    // Emptied, it is an appointment again.
+    let mut none = sent.clone();
+    none.asked = Default::default();
+    ui.execute("calendar.change", &none.params()).unwrap();
+    assert!(ui.session.meeting(id).unwrap().is_none());
+    ui.appointment = None;
+    // A plain appointment can be made a meeting, Invite Attendees; a hostile line is refused.
+    ui.execute("ui.appointment", &json!({ "id": id })).unwrap();
+    let mut plain = ui.appointment.clone().unwrap();
+    assert!(!plain.inviting);
+    plain.inviting = true;
+    plain.asked[0] = "<<<>>>;;;\u{202e}".to_string();
+    assert!(ui.execute("calendar.change", &plain.params()).is_ok(), "no address in it: no one is asked");
+    assert!(ui.session.meeting(id).unwrap().is_none());
+}
+
+#[test]
+fn reply_with_meeting_asks_those_the_message_went_to() {
+    let mut ui = MailUi::new(Session::with_sample());
+    assert!(ui.execute("ui.replyWithMeeting", &Value::Null).is_err(), "nothing open");
+    ui.execute("mail.select", &json!({ "folder": "Inbox", "index": 0 })).unwrap();
+    let sender = ui.session.open.as_ref().unwrap().sender_email();
+    let subject = ui.session.open.as_ref().unwrap().subject();
+    ui.execute("ui.replyWithMeeting", &Value::Null).unwrap();
+    let form = ui.appointment.clone().unwrap();
+    assert!(form.inviting && form.id.is_none());
+    assert_eq!(form.subject, subject);
+    assert!(form.asked[0].contains(&sender), "{:?}", form.asked);
+    assert_eq!(form.start_time.get(3..), Some("00"), "at a whole hour");
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+}
+
+fn meeting_message(from: &str, method: &str, body: &str) -> openmailclient_model::Item {
+    let msg = format!(
+        "From: {from}\r\nTo: pat@example.test\r\nSubject: Quarterly review\r\nDate: Tue, 13 Oct 2026 09:00:00 +0000\r\nMessage-ID: <{method}@example.test>\r\nContent-Type: text/calendar; method={method}; charset=utf-8\r\n\r\nBEGIN:VCALENDAR\r\nMETHOD:{method}\r\nBEGIN:VEVENT\r\n{body}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    openmailclient_mime::parse(msg.as_bytes()).unwrap()
+}
+
+#[test]
+fn a_meeting_message_has_a_bar_that_says_what_it_is_and_answers_it() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.user_email = "pat@example.test".to_string();
+    let event = "UID:review-1@example.test\r\nDTSTART:20261007T090000Z\r\nDTEND:20261007T100000Z\r\nSUMMARY:Quarterly review\r\nORGANIZER;CN=Sam Reyes:mailto:sam@example.test\r\nATTENDEE;RSVP=TRUE:mailto:pat@example.test\r\nSEQUENCE:0";
+    ui.session.open = Some(meeting_message("Sam Reyes <sam@example.test>", "REQUEST", event));
+    let bar = ui.meeting_bar().unwrap();
+    assert!(bar.answers && bar.words.contains("Please respond"), "{bar:?}");
+    assert_eq!(bar.day.as_deref(), Some("2026-10-07"));
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    draw_window(&mut ui, egui::vec2(320.0, 240.0));
+    // An answer for one attendee sent by another is said to be so.
+    let forged = "UID:review-1@example.test\r\nDTSTART:20261007T090000Z\r\nATTENDEE;PARTSTAT=DECLINED:mailto:june@example.test";
+    ui.session.open = Some(meeting_message("Mallory <mallory@example.test>", "REPLY", forged));
+    let bar = ui.meeting_bar().unwrap();
+    assert!(bar.warn && !bar.answers && bar.words.contains("someone else"), "{bar:?}");
+    // A cancellation of a meeting not in the calendar offers nothing to remove.
+    ui.session.open =
+        Some(meeting_message("Sam Reyes <sam@example.test>", "CANCEL", "UID:review-1@example.test\r\nDTSTART:20261007T090000Z\r\nSTATUS:CANCELLED"));
+    let bar = ui.meeting_bar().unwrap();
+    assert!(bar.remove.is_none() && bar.words.contains("not in your calendar"), "{bar:?}");
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    // A message that only says it is a meeting, with no calendar, has no bar and draws.
+    let mut bare = openmailclient_model::Item::new_mail();
+    bare.props.set_str(openmailclient_model::pid::MESSAGE_CLASS, "IPM.Schedule.Meeting.Request");
+    ui.session.open = Some(bare);
+    assert!(ui.meeting_bar().is_none());
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+}

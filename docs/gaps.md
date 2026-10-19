@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 112 · 2026-10-19 · ranked: the top of the list is what hurts most.
+**Status:** revision 113 · 2026-10-19 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -56,7 +56,7 @@
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (on screen they are downloaded when asked for, M4.10; on paper their place is named),
    right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, a printer's own settings (trays, two-sided; it prints on any printer the system has, with copies and pages, M1.10),
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
-4. **People and Tasks** modules show a placeholder. The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6); meetings are scheduled in ROADMAP's M5 plan.
+4. **People and Tasks** modules show a placeholder. The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6) and meetings, invitations sent, answered and called off (M5.7); the Scheduling Assistant is a do-later in ROADMAP.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
 6. **Web build.** The engine and everything under it compiles for wasm32; there is no web app.
 
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 113 · 2026-10-19 — M5.7: meetings: invitations sent, answered and called off.
 - 112 · 2026-10-19 — M5.6: time zones and daylight saving.
 - 111 · 2026-10-18 — M5.5: calendars kept in step with a CalDAV server.
 - 110 · 2026-10-18 — M5.4: iCalendar files opened, imported and saved.

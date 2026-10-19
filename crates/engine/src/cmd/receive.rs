@@ -792,6 +792,7 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
     let mut changes = 0usize;
     let mut accounts = Vec::new();
     let mut touched: Vec<Target> = Vec::new();
+    let mut meetings: Vec<String> = Vec::new();
     for t in took {
         let Some(&(_, Target { store, folder, own })) = targets.iter().find(|(id, _)| *id == t.id) else { continue };
         let into = into_of(s, Target { store, folder, own });
@@ -872,8 +873,13 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
                 continue;
             }
             let told = (is_unread && !first).then(|| crate::arrival::Told::of(&item));
+            // A meeting's answer or cancellation is taken in once the message is kept.
+            let meeting = openmailclient_model::meeting::is_meeting_message(&item).then(|| item.clone());
             match s.stores.get_mut(store).map(|st| st.add(folder, item)) {
                 Some(Ok(new)) => {
+                    if let Some(said) = meeting.and_then(|m| super::meeting::arrived(s, &m)) {
+                        meetings.push(said);
+                    }
                     if let Some(told) = told {
                         s.arrived.note(store, folder, new, &t.name, told);
                     }
@@ -977,7 +983,11 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
     if !said.is_empty() {
         status.push_str(&format!("; {}", said.join("; ")));
     }
-    (status, json!({ "received": all, "accounts": accounts }))
+    // What a meeting's answers and cancellations changed in the calendar.
+    if !meetings.is_empty() {
+        status.push_str(&format!("; {}", meetings.join("; ")));
+    }
+    (status, json!({ "received": all, "accounts": accounts, "meetings": meetings }))
 }
 
 /// Folders here moved and renamed as the server's are now, and those the server no longer has

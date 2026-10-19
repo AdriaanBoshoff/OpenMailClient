@@ -132,7 +132,7 @@ impl Busy {
 }
 
 /// What an appointment says of itself.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Appointment {
     pub subject: String,
     pub location: String,
@@ -164,12 +164,12 @@ fn key(guid: [u8; 16], id: u32) -> NamedKey {
     NamedKey { guid, name: NameId::Id(id) }
 }
 
-fn named(item: &Item, guid: [u8; 16], id: u32) -> Option<&PropValue> {
+pub(crate) fn named(item: &Item, guid: [u8; 16], id: u32) -> Option<&PropValue> {
     let want = key(guid, id);
     item.named.iter().find(|(k, _)| *k == want).map(|(_, v)| v)
 }
 
-fn set_named(item: &mut Item, guid: [u8; 16], id: u32, value: PropValue) {
+pub(crate) fn set_named(item: &mut Item, guid: [u8; 16], id: u32, value: PropValue) {
     let want = key(guid, id);
     match item.named.iter_mut().find(|(k, _)| *k == want) {
         Some((_, v)) => *v = value,
@@ -177,19 +177,19 @@ fn set_named(item: &mut Item, guid: [u8; 16], id: u32, value: PropValue) {
     }
 }
 
-fn remove_named(item: &mut Item, guid: [u8; 16], id: u32) {
+pub(crate) fn remove_named(item: &mut Item, guid: [u8; 16], id: u32) {
     let want = key(guid, id);
     item.named.retain(|(k, _)| *k != want);
 }
 
-fn time_of(v: Option<&PropValue>) -> Option<i64> {
+pub(crate) fn time_of(v: Option<&PropValue>) -> Option<i64> {
     match v {
         Some(PropValue::Time(t)) => Some(*t),
         _ => None,
     }
 }
 
-fn bool_of(v: Option<&PropValue>) -> Option<bool> {
+pub(crate) fn bool_of(v: Option<&PropValue>) -> Option<bool> {
     match v {
         Some(PropValue::Bool(b)) => Some(*b),
         Some(PropValue::Int32(n)) => Some(*n != 0),
@@ -198,7 +198,7 @@ fn bool_of(v: Option<&PropValue>) -> Option<bool> {
     }
 }
 
-fn i32_of(v: Option<&PropValue>) -> Option<i32> {
+pub(crate) fn i32_of(v: Option<&PropValue>) -> Option<i32> {
     match v {
         Some(PropValue::Int32(n)) => Some(*n),
         Some(PropValue::Int16(n)) => Some(i32::from(*n)),

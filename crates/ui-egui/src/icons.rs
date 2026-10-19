@@ -47,6 +47,8 @@ pub enum Icon {
     Import,
     Page,
     NewAppointment,
+    /// A meeting: a calendar page with two people before it.
+    NewMeeting,
     Today,
     DayView,
     WorkWeekView,
@@ -315,6 +317,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.line(&[(11.0, 2.5), (15.0, 2.5)]);
             pen.dot(5.0, 10.5, 0.7);
             pen.dot(8.0, 10.5, 0.7);
+        }
+        Icon::NewMeeting => {
+            pen.line(&[(5.5, 4.5), (1.5, 4.5), (1.5, 14.0)]);
+            pen.line(&[(1.5, 7.5), (5.0, 7.5)]);
+            pen.line(&[(4.0, 3.0), (4.0, 6.0)]);
+            pen.line(&[(12.0, 4.5), (14.5, 4.5), (14.5, 6.5)]);
+            pen.circle(8.5, 6.0, 2.0);
+            pen.line(&[(4.5, 14.5), (5.2, 11.6), (7.0, 10.4), (10.0, 10.4), (11.8, 11.6), (12.5, 14.5)]);
+            pen.circle(13.0, 9.5, 1.4);
+            pen.line(&[(13.4, 11.9), (14.6, 12.6), (15.2, 14.5)]);
         }
         Icon::Today => {
             pen.closed(&[(2.0, 3.5), (14.0, 3.5), (14.0, 13.5), (2.0, 13.5)]);
