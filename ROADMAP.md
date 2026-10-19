@@ -7,7 +7,7 @@
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 72 of 131 (55%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 599, all passing |
+| Tests | 601, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
@@ -173,7 +173,7 @@
 | ~~M5.7~~ | done: meeting requests: attendees, invitations sent and answered, updates and cancellations, tracking, Reply with Meeting |
 | M5.8 | People: contacts listed, opened and edited; `.vcf` (RFC 6350); CardDAV sync after it |
 | M5.9 | Tasks: to-do items and flagged mail; due dates, reminders |
-| M5.10 | Reminders that pop up for appointments and tasks; a Calendar folder made in a store that has none |
+| M5.10 | Reminders that pop up for appointments and tasks (a Calendar folder made in a data file that has none: done first) |
 
 ## Do later (from M2)
 
@@ -2109,6 +2109,23 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   strict #RRGGBB taken, names cleaned and capped at 60 characters, built-in and repeated names
   left out, and at most 40 kept. Every dialog is drawn in every theme, light and dark, in a large
   window and a tiny one. Do later: themes saved to and read from a file of their own. 4 tests.
+- **2026-10-19** - M5.10 (first part): a Calendar folder made in a data file that has none.
+  An account's data file made before account files were given a calendar, people and tasks
+  could not take a meeting: Accept was not there, as there was no calendar to put it in. Such
+  a file is now given the Calendar, Contacts and Tasks it lacks when the account opens it,
+  each of its own kind (its container class, [MS-OXOSFLD] 2.2.6), as Outlook makes them for an
+  account; a folder of that kind already there, by any name, is kept as it is. A data file can
+  now be given a folder of any kind, `Store::create_folder_of`, kept in the journal of unsaved
+  changes like any other and saved as that kind. Found with a request sent from Outlook Classic
+  to one of the owner's own accounts. `openmailclient-cli run --profile` runs commands on the
+  window's own settings, accounts and data files and keeps them again at the end, so a thing
+  seen in the window can be done and looked at from the command line, its times in the
+  machine's own zone as the window's (`openmailclient_engine::local_zone`, shared by both).
+  Looked at with Outlook Classic on IMAP accounts: Outlook's request accepted here reached it as
+  an acceptance (`IPM.Schedule.Meeting.Resp.Pos`), and an invitation sent from here came to it
+  as a meeting request at its hour, not answered and pencilled into its calendar. Hostile input: a class
+  that is empty, longer than 255 characters or has control characters in it is refused, and so
+  is a parent that is not there. 2 tests.
 - **2026-10-19** - M5.7: meetings to and from Outlook.
   A meeting request sent from Outlook Classic to one of our accounts, and one of ours opened
   in Outlook, were looked at side by side. Outlook sends a request as its calendar alone, a

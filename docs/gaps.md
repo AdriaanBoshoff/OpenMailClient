@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 114 · 2026-10-19 · ranked: the top of the list is what hurts most.
+**Status:** revision 115 · 2026-10-19 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 115 · 2026-10-19 — M5.10 (first part): a Calendar folder made in a data file that has none.
 - 114 · 2026-10-19 — M5.7: meetings to and from Outlook.
 - 113 · 2026-10-19 — M5.7: meetings: invitations sent, answered and called off.
 - 112 · 2026-10-19 — M5.6: time zones and daylight saving.

@@ -1123,3 +1123,36 @@ impl Session {
         })
     }
 }
+
+/// The time zone this machine keeps; hosts give it to [`Session::set_system_zone`]. Its rules
+/// are found from the offsets the system keeps through this year, and it is known by the name
+/// the system gives it.
+pub fn local_zone() -> openmailclient_model::zone::Zone {
+    use chrono::TimeZone;
+    use openmailclient_model::{time, zone::Zone};
+    let now = time::from_unix(chrono::Utc::now().timestamp());
+    let offset_at = |t: i64| chrono::Local.timestamp_opt(time::to_unix(t), 0).single().map_or(0, |d| d.offset().local_minus_utc() / 60);
+    let found = Zone::from_system(now, offset_at);
+    match system_zone_name() {
+        // One known by that name, where it keeps the rules the system does.
+        Some(name) => match Zone::named(&name) {
+            Some(known) if known.bias == found.bias && known.daylight == found.daylight => known,
+            // Else what the system keeps, by the name it gives it.
+            _ => Zone { id: name, ..found },
+        },
+        None => found,
+    }
+}
+
+/// The tz database name the system gives its zone, when it is a plain one.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_zone_name() -> Option<String> {
+    let name = iana_time_zone::get_timezone().ok()?;
+    let plain = !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'+'));
+    plain.then_some(name)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn system_zone_name() -> Option<String> {
+    None
+}

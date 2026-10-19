@@ -141,6 +141,13 @@ impl Store for MemStore {
         Ok(self.push_folder(None, name, "IPF.Note"))
     }
 
+    fn create_folder_of(&mut self, parent: Option<FolderId>, name: &str, class: &str) -> Result<FolderId, StoreError> {
+        if let Some(p) = parent {
+            self.folder_mut(p)?;
+        }
+        Ok(self.push_folder(parent, name, class))
+    }
+
     fn rename_folder(&mut self, folder: FolderId, name: &str) -> Result<(), StoreError> {
         self.folder_mut(folder)?.info.name = name.to_string();
         Ok(())

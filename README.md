@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M5%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-62%20of%20123%20%C2%B7%2050%25-yellow)
-![tests](https://img.shields.io/badge/tests-599%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-601%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -190,6 +190,13 @@ cargo run --release -p openmailclient-cli -- inspect path/to/archive.pst --check
 
 ```bash
 cargo run --release -p openmailclient-cli -- inspect path/to/message.msg --props
+```
+
+Commands can also be run on the window's own settings, accounts and data files (close the
+window first); what changed is saved at the end:
+
+```bash
+cargo run --release -p openmailclient-cli -- run --profile --cmd account.receive
 ```
 
 ```bash

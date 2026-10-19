@@ -2904,6 +2904,8 @@ name = "openmailclient-engine"
 version = "0.1.0"
 dependencies = [
  "cfb",
+ "chrono",
+ "iana-time-zone",
  "image",
  "log",
  "openmailclient-fonts",
@@ -3030,7 +3032,6 @@ dependencies = [
  "chrono",
  "egui",
  "egui_kittest",
- "iana-time-zone",
  "image",
  "log",
  "openmailclient-engine",

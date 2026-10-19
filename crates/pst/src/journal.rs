@@ -65,6 +65,12 @@ pub(crate) enum Op {
         parent: u64,
         name: String,
     },
+    /// A folder of the kind its container class names; `parent` as for `CreateFolder`.
+    CreateFolderOf {
+        parent: u64,
+        name: String,
+        class: String,
+    },
     RenameFolder {
         folder: u64,
         name: String,
@@ -361,6 +367,12 @@ impl Op {
                 e.u64(*parent);
                 e.str(name)?;
             }
+            Self::CreateFolderOf { parent, name, class } => {
+                e.u8(9);
+                e.u64(*parent);
+                e.str(name)?;
+                e.str(class)?;
+            }
             Self::RenameFolder { folder, name } => {
                 e.u8(6);
                 e.u64(*folder);
@@ -405,6 +417,7 @@ impl Op {
             6 => Self::RenameFolder { folder: d.u64()?, name: d.string()? },
             7 => Self::DeleteFolder { folder: d.u64()? },
             8 => Self::MoveFolder { folder: d.u64()?, parent: d.u64()? },
+            9 => Self::CreateFolderOf { parent: d.u64()?, name: d.string()?, class: d.string()? },
             _ => return None,
         };
         d.0.is_empty().then_some(op)

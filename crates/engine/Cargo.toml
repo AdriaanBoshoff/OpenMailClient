@@ -26,6 +26,12 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# The time zone the machine keeps.
+chrono = { workspace = true }
+
+# The name the system gives its time zone; chrono already depends on it.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+iana-time-zone = { version = "0.1", features = ["fallback"] }
 
 [target.'cfg(windows)'.dependencies]
 # Outlook Classic's profiles are read from the registry to be imported; nothing is written.

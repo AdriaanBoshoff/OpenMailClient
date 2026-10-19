@@ -431,3 +431,69 @@ fn an_invitation_we_send_is_kept_with_the_properties_outlook_reads() {
     let m = Meeting::of(&sent).unwrap();
     assert!(!m.received, "{m:?}");
 }
+
+#[test]
+fn an_account_s_data_file_made_without_a_calendar_is_given_one_and_takes_the_meeting() {
+    use openmailclient_model::{FolderKind, MemStore};
+    let dir = std::env::temp_dir().join(format!("omc-no-calendar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let fake = Fake::default();
+    let mut s = Session::new();
+    s.now = openmailclient_model::time::from_civil(2026, 10, 7, 14, 30, 0, 0);
+    s.connector = Some(Arc::new(fake.clone()));
+    run(
+        &mut s,
+        "account.add",
+        json!({
+            "email": "pat@example.test", "displayName": "Pat Lee", "kind": "imap",
+            "incoming": { "host": "mail.example.test", "security": "starttls" },
+            "outgoing": { "host": "mail.example.test", "security": "starttls" },
+            "password": "not a real password",
+        }),
+    );
+    // Its data file as accounts' files were made before they had a calendar: mail folders only.
+    let path = dir.join("Accounts").join(crate::accounts::data_file_name(&s.accounts[0]));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    crate::io::save_store(&mut MemStore::with_default_folders("Pat Lee"), &path, crate::io::new_store_id(s.now)).unwrap();
+    s.account_dir = Some(dir.join("Accounts"));
+    s.journal_dir = Some(dir.join("journals"));
+    assert!(s.stores.iter().all(|st| st.path().is_none_or(|p| p != path)));
+
+    // The meeting comes into it, and it is given what it lacks.
+    fake.state().mailbox("INBOX").unwrap().add(outlook_request().as_bytes(), &[]);
+    run(&mut s, "account.receive", Value::Null);
+    let at = s.stores.iter().position(|st| st.path() == Some(path.as_path())).unwrap();
+    for kind in [FolderKind::Calendar, FolderKind::Contacts, FolderKind::Tasks] {
+        assert!(s.find_folder(at, kind).is_some(), "{kind:?}");
+    }
+    let count = |s: &mut Session| s.stores[at].folders().unwrap().len();
+    let folders = count(&mut s);
+    // Opened again, nothing more is made.
+    run(&mut s, "account.receive", Value::Null);
+    assert_eq!(count(&mut s), folders);
+
+    // Accepted into the calendar that is now there.
+    run(&mut s, "folder.select", json!({ "folder": "Inbox", "store": at }));
+    let row = s.rows.iter().position(|r| r.subject == "Planning").unwrap();
+    run(&mut s, "mail.select", json!({ "index": row }));
+    run(&mut s, "calendar.respond", json!({ "response": "accept" }));
+    assert_eq!(went(&fake, 0).1, "Accepted: Planning");
+    let cal = s.find_folder(at, FolderKind::Calendar).unwrap();
+    assert_eq!(s.stores[at].list(cal).unwrap().len(), 1);
+
+    // Saved, the folders are there when the file is opened again.
+    run(&mut s, "file.save", Value::Null);
+    drop(s);
+    let mut again = crate::io::open_path(&path)
+        .ok()
+        .and_then(|o| match o {
+            crate::io::Opened::Store(st) => Some(st),
+            crate::io::Opened::Item(_) => None,
+        })
+        .unwrap();
+    let kinds: Vec<_> = again.folders().unwrap().into_iter().map(|f| f.kind).collect();
+    for kind in [FolderKind::Calendar, FolderKind::Contacts, FolderKind::Tasks] {
+        assert_eq!(kinds.iter().filter(|k| **k == kind).count(), 1, "{kind:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

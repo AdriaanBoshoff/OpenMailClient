@@ -504,3 +504,45 @@ fn what_a_damaged_journal_lost_is_counted_as_far_as_it_can_be() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_calendar_made_in_a_data_file_that_has_none_comes_back_as_one() {
+    use openmailclient_model::FolderKind;
+    let (dir, path, _) = on_disk("journal-calendar");
+    let mut store = PstStore::open(&path).unwrap();
+    let inbox = folder(&mut store, "Inbox");
+    let cal = store.create_folder_of(None, "Calendar", "IPF.Appointment").unwrap();
+    store.create_folder_of(Some(inbox.id), "People", "IPF.Contact").unwrap();
+    // A class that is no class, and a parent that is not there, are refused and not kept.
+    assert!(store.create_folder_of(None, "Odd", "").is_err());
+    assert!(store.create_folder_of(None, "Odd", "IPF.\u{0}Note").is_err());
+    assert!(store.create_folder_of(Some(openmailclient_model::FolderId(u64::MAX - 7)), "Odd", "IPF.Task").is_err());
+    let kinds = |s: &mut PstStore| {
+        let mut v: Vec<_> = s
+            .folders()
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.kind != FolderKind::Mail && !f.container_class.is_empty() && f.container_class != "IPF.Note")
+            .map(|f| (f.name, f.kind, f.container_class, f.parent.is_some()))
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    };
+    let want = kinds(&mut store);
+    assert!(want.iter().any(|(n, k, c, _)| n == "Calendar" && *k == FolderKind::Calendar && c == "IPF.Appointment"), "{want:?}");
+    assert!(want.iter().any(|(n, k, _, _)| n == "People" && *k == FolderKind::Contacts), "{want:?}");
+    let got = store.folders().unwrap().into_iter().find(|f| f.id == cal).unwrap();
+    assert_eq!(got.parent, inbox.parent, "beside the Inbox");
+    drop(store);
+
+    // Played back from the journal after a run that ended without saving.
+    let mut back = PstStore::open(&path).unwrap();
+    assert_eq!(back.recover().unwrap(), Recovery { applied: 2, ..none() });
+    assert_eq!(kinds(&mut back), want);
+    // And saved, still the kind it was made.
+    back.save(UID).unwrap();
+    drop(back);
+    let mut saved = PstStore::open(&path).unwrap();
+    assert_eq!(kinds(&mut saved), want);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

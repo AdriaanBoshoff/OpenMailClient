@@ -211,6 +211,30 @@ pub(crate) fn account_path(s: &Session, account: &Account) -> Option<std::path::
     }
 }
 
+/// What Outlook makes beside an account's mail in its data file: a calendar, people and tasks,
+/// kept on this computer only.
+const BESIDE_MAIL: [(&str, &str); 3] = [("Calendar", "IPF.Appointment"), ("Contacts", "IPF.Contact"), ("Tasks", "IPF.Task")];
+
+/// An account's data file made before it was given a calendar, people and tasks is given those
+/// it lacks, so a meeting can be accepted into it and contacts and tasks kept in it. A folder of
+/// that kind already there, by any name, is kept as it is.
+fn given_beside_mail(s: &mut Session, idx: usize) -> Result<(), EngineError> {
+    let mut made = false;
+    for (name, class) in BESIDE_MAIL {
+        let kind = openmailclient_model::FolderKind::guess(name, class);
+        if s.find_folder(idx, kind).is_some() {
+            continue;
+        }
+        let Some(store) = s.stores.get_mut(idx) else { return Ok(()) };
+        store.create_folder_of(None, name, class)?;
+        made = true;
+    }
+    if made {
+        s.refresh_folders(idx);
+    }
+    Ok(())
+}
+
 /// The data file the account `at` keeps its mail in, opened, as Outlook keeps one for each
 /// account so that its mail is never mixed with another's: made, with the folders a mailbox
 /// has, the first time it is needed, in the program's own folder. `None` where the host keeps
@@ -229,8 +253,7 @@ pub(crate) fn account_store(s: &mut Session, at: usize) -> Result<Option<usize>,
                     std::fs::create_dir_all(dir)?;
                 }
                 let mut mailbox = openmailclient_model::MemStore::with_default_folders(&name);
-                // As Outlook makes one for an account: its calendar, people and tasks beside its mail.
-                for (folder, class) in [("Calendar", "IPF.Appointment"), ("Contacts", "IPF.Contact"), ("Tasks", "IPF.Task")] {
+                for (folder, class) in BESIDE_MAIL {
                     mailbox.push_folder(None, folder, class);
                 }
                 crate::io::save_store(&mut mailbox, &path, crate::io::new_store_id(s.now))?;
@@ -251,6 +274,7 @@ pub(crate) fn account_store(s: &mut Session, at: usize) -> Result<Option<usize>,
     if !s.stores.get(idx).is_some_and(|st| st.writable()) {
         return Err(EngineError::Format(format!("the data file of {name} cannot be written: {}", path.display())));
     }
+    given_beside_mail(s, idx)?;
     if let Some(a) = s.accounts.get_mut(at) {
         a.data_file = Some(path);
     }

@@ -767,6 +767,11 @@ pub trait Store {
     fn create_top_folder(&mut self, _name: &str) -> Result<FolderId, StoreError> {
         Err(StoreError::ReadOnly)
     }
+    /// A folder of the kind its container class names (`IPF.Appointment`, `IPF.Contact`,
+    /// `IPF.Task`…, [MS-OXOSFLD] 2.2.6), inside `parent` or at the top of the data file.
+    fn create_folder_of(&mut self, _parent: Option<FolderId>, _name: &str, _class: &str) -> Result<FolderId, StoreError> {
+        Err(StoreError::ReadOnly)
+    }
     fn rename_folder(&mut self, _folder: FolderId, _name: &str) -> Result<(), StoreError> {
         Err(StoreError::ReadOnly)
     }

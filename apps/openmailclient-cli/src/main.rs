@@ -28,9 +28,12 @@ const USAGE: &str = "usage:
                                               --props lists every property of a .msg/.eml, its
                                               recipients' and attachments' too
   openmailclient-cli convert <in> <out>            .msg/.oft/.eml to .msg/.oft/.eml, or a .pst/.ost to a new .pst
-  openmailclient-cli run [--template sample] [--open <file>]... [--cmd id[=json]]... [--save <out>]
+  openmailclient-cli run [--template sample] [--open <file>]... [--profile] [--cmd id[=json]]... [--save <out>]
                                               run commands in order; --save writes the open item,
-                                              or the whole data file when <out> ends in .pst";
+                                              or the whole data file when <out> ends in .pst;
+                                              --profile opens the window's own settings, accounts
+                                              and data files and keeps them again at the end (close
+                                              the window first)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -148,6 +151,19 @@ fn props(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Where the window keeps its settings, as `apps/openmailclient` finds it.
+fn settings_path() -> Option<std::path::PathBuf> {
+    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+    let dir = if cfg!(target_os = "windows") {
+        var("APPDATA")?.join("OpenMailClient")
+    } else if cfg!(target_os = "macos") {
+        var("HOME")?.join("Library").join("Application Support").join("OpenMailClient")
+    } else {
+        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|home| home.join(".config")))?.join("openmailclient")
+    };
+    Some(dir.join("settings.json"))
+}
+
 fn depth(folders: &[FolderInfo], f: &FolderInfo) -> usize {
     let mut n = 0;
     let mut cur = f.parent;
@@ -250,6 +266,9 @@ fn run_commands(args: &[String]) -> Result<(), String> {
         eprintln!("openmailclient-cli: mail servers cannot be reached: {e}");
     }
     let mut save: Option<&str> = None;
+    // The window's own settings and accounts, as the window opens them: kept again at the end,
+    // with every data file that changed, so what was done here is there when the window opens.
+    let mut profile: Option<(std::path::PathBuf, Value)> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || it.next().map(String::as_str).ok_or_else(|| format!("{arg} needs a value\n{USAGE}"));
@@ -273,8 +292,30 @@ fn run_commands(args: &[String]) -> Result<(), String> {
                 println!("{}", json!({ "command": id, "result": result }));
             }
             "--save" => save = Some(value()?),
+            "--profile" => {
+                // Times read and shown as the window reads and shows them.
+                session.set_system_zone(openmailclient_engine::local_zone());
+                let path = settings_path().ok_or("there is no folder for settings here")?;
+                let dir = path.parent().map(Path::to_path_buf);
+                session.journal_dir = dir.as_ref().map(|d| d.join("journals"));
+                session.account_dir = dir.as_ref().map(|d| d.join("Accounts"));
+                let loaded =
+                    session.run("settings.load", &json!({ "path": path.display().to_string(), "reopen": true })).map_err(|e| e.to_string())?;
+                println!(
+                    "{}",
+                    json!({ "command": "settings.load", "result": { "found": loaded["found"], "opened": loaded["opened"], "missing": loaded["missing"] } })
+                );
+                profile = Some((path, loaded["ui"].clone()));
+            }
             other => return Err(format!("unknown option {other}\n{USAGE}")),
         }
+    }
+    if let Some((path, ui)) = profile {
+        if session.unsaved() {
+            let saved = session.run("file.save", &Value::Null).map_err(|e| format!("file.save: {e}"))?;
+            println!("{}", json!({ "command": "file.save", "result": saved }));
+        }
+        session.run("settings.save", &json!({ "path": path.display().to_string(), "ui": ui })).map_err(|e| format!("settings.save: {e}"))?;
     }
     if let Some(path) = save {
         let whole = Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("pst"));

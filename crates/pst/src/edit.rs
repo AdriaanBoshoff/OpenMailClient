@@ -338,6 +338,7 @@ impl PstStore {
             Op::Remove { folder, id } => self.e_remove(FolderId(folder), ItemId(id)).map(|_| ()),
             Op::CreateFolder { parent: TOP, name } => self.e_create_top_folder(&name).map(|_| ()),
             Op::CreateFolder { parent, name } => self.e_create_folder(FolderId(parent), &name).map(|_| ()),
+            Op::CreateFolderOf { parent, name, class } => self.e_create_of((parent != TOP).then_some(FolderId(parent)), &name, &class).map(|_| ()),
             Op::RenameFolder { folder, name } => self.e_rename_folder(FolderId(folder), &name),
             Op::DeleteFolder { folder } => self.e_delete_folder(FolderId(folder)),
             Op::MoveFolder { folder, parent } => self.e_move_folder(FolderId(folder), FolderId(parent)),
@@ -528,6 +529,27 @@ impl PstStore {
             Some(parent) => edits.folders.get(edits.at(parent)?).map(|f| f.info.container_class.clone()).unwrap_or_default(),
             None => "IPF.Note".to_string(),
         };
+        let id = self.e_make(parent, name, class)?;
+        self.log(&Op::CreateFolder { parent: parent.map_or(TOP, |p| p.0), name: name.to_string() });
+        Ok(id)
+    }
+
+    /// A folder of the kind `class` names, inside `parent` or at the top of the tree.
+    pub(crate) fn e_create_of(&mut self, parent: Option<FolderId>, name: &str, class: &str) -> Result<FolderId, StoreError> {
+        if class.is_empty() || class.chars().count() > 255 || class.chars().any(char::is_control) {
+            return Err(StoreError::Format(format!("{class:?} is no folder class")));
+        }
+        if let Some(p) = parent {
+            let edits = self.edits()?;
+            edits.at(p)?;
+        }
+        let id = self.e_make(parent, name, class.to_string())?;
+        self.log(&Op::CreateFolderOf { parent: parent.map_or(TOP, |p| p.0), name: name.to_string(), class: class.to_string() });
+        Ok(id)
+    }
+
+    fn e_make(&mut self, parent: Option<FolderId>, name: &str, class: String) -> Result<FolderId, StoreError> {
+        let edits = self.edits()?;
         let nid = edits.fresh(TYPE_FOLDER)?;
         let id = FolderId(u64::from(nid));
         let info = FolderInfo {
@@ -545,7 +567,6 @@ impl PstStore {
         edits.folders.insert(at, EFolder { info, nid, new: true, items: Some(Vec::new()), had: Vec::new() });
         edits.mark_parents();
         edits.dirty = true;
-        self.log(&Op::CreateFolder { parent: parent.map_or(TOP, |p| p.0), name: name.to_string() });
         Ok(id)
     }
 
