@@ -55,6 +55,7 @@ const HOME: &[Group] = &[
 const CALENDAR_HOME: &[Group] = &[
     ("New", &[big(Icon::NewAppointment, "New\nAppointment", "ui.appointment")]),
     ("Go To", &[big(Icon::Today, "Today", "calendar.today")]),
+    ("Time Zones", &[big(Icon::Clock, "Time\nZones", "ui.timeZones")]),
     (
         "Arrange",
         &[

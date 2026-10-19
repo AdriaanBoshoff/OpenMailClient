@@ -76,6 +76,8 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "sendReceiveMinutes": s.send_receive_min,
         "newMailAsItComes": s.new_mail_as_it_comes,
         "newMail": s.alerts.to_json(),
+        "timeZone": s.zone_chosen,
+        "secondTimeZone": s.second_zone.as_ref().map(|z| z.name().to_string()),
         "dataFiles": files,
         "accounts": s.accounts.iter().map(crate::accounts::Account::to_settings).collect::<Vec<_>>(),
     });
@@ -215,6 +217,25 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(v.is_boolean());
         if let Some(on) = v.as_bool() {
             s.new_mail_as_it_comes = on;
+        }
+    }
+    if let Some(v) = all.get("timeZone") {
+        let ok = match v {
+            Value::Null => s.choose_zone(None).is_ok(),
+            Value::String(name) => s.choose_zone(Some(name)).is_ok(),
+            _ => false,
+        };
+        took(ok);
+    }
+    if let Some(v) = all.get("secondTimeZone") {
+        let zone = match v {
+            Value::Null => Some(None),
+            Value::String(name) => openmailclient_model::zone::Zone::named(name).map(Some),
+            _ => None,
+        };
+        took(zone.is_some());
+        if let Some(z) = zone {
+            s.second_zone = z;
         }
     }
     if let Some(v) = all.get("newMail") {

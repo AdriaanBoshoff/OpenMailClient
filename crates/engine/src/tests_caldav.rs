@@ -23,7 +23,7 @@ fn account(fake: &Fake, name: &str) -> (Session, std::path::PathBuf) {
     let _ = std::fs::remove_dir_all(&dir);
     let mut s = Session::new();
     s.add_store(Box::new(crate::sample::sample_store(s.now)));
-    s.tz_offset_min = 0;
+    s.zone = openmailclient_model::zone::Zone::fixed(0);
     s.connector = Some(Arc::new(fake.clone()));
     s.account_dir = Some(dir.join("Accounts"));
     s.journal_dir = Some(dir.join("journals"));

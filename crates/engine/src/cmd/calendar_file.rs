@@ -135,7 +135,7 @@ fn event_json(s: &Session, index: usize, e: &ics::Event, replaces: Option<u64>) 
         "end": stamp(s, a.end),
         "allDay": a.all_day,
         // The last day an all-day event is on: its end is the midnight after it.
-        "lastDay": a.all_day.then(|| day_text(calendar::day_of(a.end.saturating_sub(1).max(a.start), s.tz_offset_min))),
+        "lastDay": a.all_day.then(|| day_text(calendar::day_of(a.end.saturating_sub(1).max(a.start), &s.zone))),
         "busy": a.busy.name(),
         "reminder": a.reminder,
         "recurring": a.recurring,
@@ -171,7 +171,7 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
     let chosen = only(p)?;
     let preview = p_bool(p, "preview") == Some(true);
     let bytes = calendar_bytes(s, p)?;
-    let file = ics::read(&bytes, s.tz_offset_min).map_err(EngineError::Format)?;
+    let file = ics::read(&bytes, &s.zone).map_err(EngineError::Format)?;
     drop(bytes);
     let target = if preview { calendar_folder(s) } else { Some(writable_calendar(s)?) };
     let known = match target {
@@ -217,7 +217,7 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
     }
     s.refresh_folders(store);
     if let Some(first) = file.events.iter().enumerate().find(|(i, _)| taken(*i)) {
-        s.calendar.day = calendar::day_of(first.1.appointment.start, s.tz_offset_min);
+        s.calendar.day = calendar::day_of(first.1.appointment.start, &s.zone);
     }
     s.reload_calendar()?;
     if let Some(e) = failed {
@@ -260,7 +260,7 @@ fn chosen_items(s: &mut Session, p: &Value, days_shown: bool) -> Result<(Vec<Ite
                 calendar::MAX_DAYS
             )));
         }
-        let (from, to) = (calendar::day_start(from, s.tz_offset_min), calendar::day_start(to, s.tz_offset_min));
+        let (from, to) = (calendar::day_start(from, &s.zone), calendar::day_start(to, &s.zone));
         let mut seen = HashSet::new();
         s.appointments_between(from, to)?.0.into_iter().map(|(id, _)| id).filter(|id| seen.insert(*id)).collect()
     } else {
@@ -293,7 +293,7 @@ fn save_as(s: &mut Session, p: &Value) -> CmdResult {
         return Err(EngineError::BadParams("the file name must end in .ics".into()));
     }
     let (items, unreadable) = chosen_items(s, p, false)?;
-    let text = ics::write(&items, s.tz_offset_min, s.time_now(), Some(&calendar_name(s, p)));
+    let text = ics::write(&items, &s.zone, s.time_now(), Some(&calendar_name(s, p)));
     io::write_atomic(path, text.as_bytes())?;
     s.status = format!("Saved {} appointments to {}", items.len(), path.display());
     Ok(json!({ "events": items.len(), "unreadable": unreadable, "untrusted_content": { "path": path.display().to_string() } }))
@@ -302,7 +302,7 @@ fn save_as(s: &mut Session, p: &Value) -> CmdResult {
 fn email(s: &mut Session, p: &Value) -> CmdResult {
     let (mut items, _) = chosen_items(s, p, true)?;
     let name = calendar_name(s, p);
-    let text = ics::write(&items, s.tz_offset_min, s.time_now(), Some(&name));
+    let text = ics::write(&items, &s.zone, s.time_now(), Some(&name));
     // Listed in the body as well, earliest first, for one who reads it without a calendar.
     items.sort_by_key(|i| Appointment::of(i).map_or(i64::MAX, |a| a.start));
     let mut body = format!("{name}\n\n");

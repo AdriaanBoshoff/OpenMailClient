@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); third-party sign-in (M7) comes after the first release · revision 121 · 2026-10-18
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); third-party sign-in (M7) comes after the first release · revision 122 · 2026-10-19
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 62 of 123 (50%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 570, all passing |
+| Catalogued Outlook Classic features with a command | 65 of 126 (51%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 580, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
@@ -22,7 +22,7 @@
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
 | M3c | Proof in Outlook and 4K-page writing | closed: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | closed: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3); sending (M4.4); receiving (M4.5); Account Settings in the window (M4.6); each account in a data file of its own, the live check passed (M4.7); every IMAP folder kept in step both ways (M4.8); certificates trusted on the owner's word, new mail told of, Show Progress, Delay Delivery (M4.9); pictures on command (M4.10); attachments opened (M4.11); CONDSTORE, QRESYNC, IDLE, folders and drafts on the server (M4.12); pictures off the window's thread (M4.13); servers found from the address (M4.14) and its DNS records (M4.15). OAuth sign-in is M7 |
-| M5 | Calendar, People and Tasks modules | in progress: the Calendar's views and appointments (M5.1), Import from Outlook (M5.2), recurring appointments (M5.3), calendar files (M5.4), CalDAV sync (M5.5); see the M5 plan |
+| M5 | Calendar, People and Tasks modules | in progress: the Calendar's views and appointments (M5.1), Import from Outlook (M5.2), recurring appointments (M5.3), calendar files (M5.4), CalDAV sync (M5.5), time zones (M5.6); see the M5 plan |
 | M6 | MCP server, control channel, web build | not started |
 | M7 | Third-party sign-in: Gmail, Outlook.com and Microsoft 365, Yahoo and other providers through OAuth 2.0 (SASL XOAUTH2 and OAUTHBEARER, RFC 7628), signed in through the system's browser with PKCE, tokens kept and renewed in the system's credential store, a provider's servers filled in from its address | after the first release, by the owner's choice: until then such accounts sign in with an app password |
 
@@ -156,7 +156,8 @@
 103. Done: Recurring appointments: a series made, read and saved as Outlook keeps it ([MS-OXOCAL] 2.2.1.44 pattern, exceptions as hidden attached messages, 2.2.10.1), shown on every day it falls, and one occurrence changed or deleted alone, from the window or by command (M5.3, `crates/model/src/recur.rs`, `crates/engine/src/cmd/calendar.rs`, `crates/ui-egui/src/calendar.rs`).
 104. Done: Calendar files: an `.ics` file, or one attached to a message, shown event by event before anything is added, the events chosen added, one the calendar has already brought up to date by its UID instead of added twice, all of it undone at once; the calendar, a range of days or one appointment saved as an `.ics` file with its series, changed and deleted occurrences, and sent by mail as a file and a list (M5.4, `crates/formats/src/ics.rs`, `crates/engine/src/cmd/calendar_file.rs`, `crates/ui-egui/src/calendar_file.rs`).
 105. Done: Calendars kept in step with a CalDAV server: each calendar of the server an account names is a Calendar folder of the account's own data file, what is made, changed and deleted on either side goes to the other on each Send/Receive, only what changed asked for by sync token, a change on both sides keeping both, over HTTPS with the account's own sign-in; My Calendars lists every calendar in its colour (M5.5, `crates/net/src/dav.rs`, `crates/engine/src/cmd/caldav.rs`).
-106. Next: M5.6: Time zones and daylight saving.
+106. Done: Time zones and daylight saving: dates shown in the system's zone or one chosen, with its summer time; an appointment kept in its own zone, so a series keeps its hour there across the change; zones written into data files as Outlook keeps them and defined in calendar files; a second zone's hours beside ours in the day and week views (M5.6, `crates/model/src/zone.rs`, `calendar.timeZone`, Calendar > Home > Time Zones).
+107. Next: M5.7: Meeting requests.
 
 ## M5 plan
 
@@ -167,8 +168,8 @@
 | ~~M5.3~~ | done: recurring appointments ([MS-OXOCAL] 2.2.1.44 pattern, exceptions), shown on every day they fall, one occurrence changed or deleted alone |
 | ~~M5.4~~ | done: iCalendar: `.ics` files opened, imported and saved (RFC 5545, [MS-OXCICAL]) |
 | ~~M5.5~~ | done: Calendar sync over CalDAV (RFC 4791), as with Nextcloud: calendars found from the account, changes asked for by sync token (RFC 6578) and ETags, both ways, HTTPS only, the password in the credential store; tested against an in-process fake CalDAV server |
-| M5.6 | Time zones and daylight saving: an appointment kept in its own time zone, shown in the system's |
-| M5.7 | Meeting requests: attendees, invitations sent and answered, Scheduling Assistant |
+| ~~M5.6~~ | done: time zones and daylight saving: an appointment kept in its own time zone, shown in the system's or one chosen; a second zone beside ours |
+| M5.7 | Meeting requests: attendees, invitations sent and answered, Scheduling Assistant; a zone's rules by year, and the zone checked in Outlook |
 | M5.8 | People: contacts listed, opened and edited; `.vcf` (RFC 6350); CardDAV sync after it |
 | M5.9 | Tasks: to-do items and flagged mail; due dates, reminders |
 | M5.10 | Reminders that pop up for appointments and tasks; a Calendar folder made in a store that has none |
@@ -2103,6 +2104,43 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   strict #RRGGBB taken, names cleaned and capped at 60 characters, built-in and repeated names
   left out, and at most 40 kept. Every dialog is drawn in every theme, light and dark, in a large
   window and a tiny one. Do later: themes saved to and read from a file of their own. 4 tests.
+- **2026-10-19** - M5.6: time zones and daylight saving.
+  Times were kept and shown at one offset from UTC, the one this computer had when the window
+  opened, so a weekly 09:00 meeting moved to 10:00 the week summer time began. Now a place's
+  zone is kept with its rules: its offset in standard time, and the day and hour summer time
+  begins and ends each year (`crates/model/src/zone.rs`, about 70 zones known by their tz
+  database names and Outlook's names for them). The window takes the system's zone, found from
+  the offsets the system keeps through the year and named as the system names it; dates
+  everywhere (the message list, search, printing, the Calendar) are shown in it, or in another
+  chosen in the Time Zones window (Calendar > Home > Time Zones) and kept in the settings.
+  An appointment is kept in the zone it was made in, shown in the appointment window with a
+  choice of any other: a series keeps its hour there whatever the season, and each occurrence
+  falls where that zone says. A time that summer time skips moves on to the hour after; one
+  that happens twice is the first.
+  In a data file the zone is written as Outlook keeps it ([MS-OXOCAL] 2.2.1.41 TZDEFINITION
+  in the start, end and recurrence zone properties, 2.2.1.39 TZREG and the zone's description
+  for a series), read back from any of them. A calendar file defines each zone its events are
+  given in (RFC 5545 3.6.5 VTIMEZONE with a yearly rule for each change) and an event is
+  written in its own zone; one read takes the rules a VTIMEZONE gives, or a zone known by name
+  where the file names one without defining it, as Outlook's files do.
+  Commands: `calendar.timeZones` (each zone known, with its offset now), `calendar.timeZone`
+  ({"zone": a name, or null for the system's}), `calendar.secondTimeZone`; `calendar.new` and
+  `calendar.change` take "zone"; `calendar.items` says each appointment's; `ui.timeZones`
+  opens the window; settings keep "timeZone" and "secondTimeZone".
+  Better than Outlook: a second zone's hours stand beside ours in the day and week views as in
+  Outlook, and the Time Zones window says what time it is now in each; the appointment window
+  says when an appointment typed in another zone is where you are as you type it; a zone is
+  asked for by either its tz name or Outlook's; the system's zone is named by the place the
+  system names, not the first with the same rules.
+  Hostile input: a TZDEFINITION is read only as far as its header and rule count say and at
+  most 1 024 rules, a rule's month, week, weekday and hour are checked and offsets kept within
+  18 hours; a VTIMEZONE whose rules no yearly pattern holds is read at the offset of each
+  event's start, as before; zone names from files are cleaned and capped, and an unknown name
+  given to a command is an error that changes nothing.
+  Do later: zones whose rules changed over the years kept with each year's rules (an event long
+  past shown at that year's offset) and zones whose rules follow another calendar (Jerusalem,
+  Tehran's old rules, Cairo) beyond their current year (M5.7); the zone checked in Outlook with
+  M5.7's meetings. 10 tests.
 - **2026-10-18** - M5.5: calendars kept in step with a CalDAV server.
   An account's settings take a CalDAV server's address (Account Settings > Servers > Calendars),
   signed in to with the account's own name and password from the credential store, over HTTPS

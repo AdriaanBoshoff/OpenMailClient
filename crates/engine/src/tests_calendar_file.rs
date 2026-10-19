@@ -16,7 +16,7 @@ fn now() -> i64 {
 fn session() -> Session {
     let mut s = Session::new();
     s.now = now();
-    s.tz_offset_min = 120;
+    s.zone = openmailclient_model::zone::Zone::fixed(120);
     s.add_store(Box::new(crate::sample::sample_store(s.now)));
     s.module = Module::Calendar;
     s
@@ -26,7 +26,7 @@ fn session() -> Session {
 fn empty_calendar() -> Session {
     let mut s = Session::new();
     s.now = now();
-    s.tz_offset_min = 120;
+    s.zone = openmailclient_model::zone::Zone::fixed(120);
     let mut store = MemStore::new("Mine");
     store.push_folder(None, "Inbox", "IPF.Note");
     store.push_folder(None, "Deleted Items", "IPF.Note");
@@ -69,7 +69,7 @@ fn the_calendar_saved_as_a_file_opens_again_with_every_appointment_and_series() 
     let d = dir("roundtrip");
     let mut s = session();
     // The sample's all-day events are at midnight UTC: a file says only their day.
-    s.tz_offset_min = 0;
+    s.zone = openmailclient_model::zone::Zone::fixed(0);
     run(
         &mut s,
         "calendar.new",
@@ -86,7 +86,7 @@ fn the_calendar_saved_as_a_file_opens_again_with_every_appointment_and_series() 
 
     // Opened where the calendar is empty, everything is there as it was.
     let mut other = empty_calendar();
-    other.tz_offset_min = 0;
+    other.zone = openmailclient_model::zone::Zone::utc();
     let seen = run(&mut other, "calendar.import", json!({"path": path.to_str().unwrap(), "preview": true}));
     assert_eq!(seen["events"].as_array().unwrap().len(), mine.len());
     assert!(seen["events"].as_array().unwrap().iter().all(|e| e["replaces"].is_null()));
@@ -171,7 +171,7 @@ fn a_calendar_is_sent_by_mail_as_a_file_and_a_list() {
     assert!(draft.body.contains("Review the spring catalogue") && draft.body.contains("Team stand-up"), "{}", draft.body);
     let att = &draft.attachments[0];
     assert_eq!(att.name(), "Calendar.ics");
-    let back = ics::read(&att.data, 120).unwrap();
+    let back = ics::read(&att.data, &openmailclient_model::zone::Zone::fixed(120)).unwrap();
     assert_eq!(back.events.len(), 3);
 }
 

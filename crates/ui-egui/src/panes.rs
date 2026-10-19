@@ -5,6 +5,7 @@ use crate::icons::{self, Icon};
 use crate::{MailUi, body, bold, clip_text, font, one_line, text_width, theme};
 use egui::{Align2, Rect, ScrollArea, Sense, Ui, UiBuilder, pos2, vec2};
 use openmailclient_engine::{Module, ReadingPane, SortKey};
+use openmailclient_model::zone::Zone;
 use openmailclient_model::{Flag, FolderId, FolderInfo, FolderKind, RECIP_CC, RECIP_TO, Summary, time};
 use serde_json::{Value, json};
 
@@ -378,7 +379,7 @@ impl MailUi {
         // Lay the rows out once, each group under its heading, however the list is arranged.
         let groups = s.groups();
         let now = s.now;
-        let now_day = time::civil(now, s.tz_offset_min).day_number;
+        let now_day = s.zone.civil(now).day_number;
         let mut entries: Vec<(f32, Entry)> = Vec::with_capacity(s.rows.len() + groups.len());
         let mut y = 0.0;
         let mut next = 0;
@@ -396,7 +397,7 @@ impl MailUi {
         let scroll_to = std::mem::take(&mut self.scroll_to_selected);
         // In a folder of mail going out, a row says whom it went to, as Outlook's do.
         let outgoing = s.current_folder().is_some_and(|f| matches!(f.kind, FolderKind::Sent | FolderKind::Drafts | FolderKind::Outbox));
-        let shown = Shown { now, now_day, tz: s.tz_offset_min, region: &s.region, outgoing };
+        let shown = Shown { now, now_day, tz: &s.zone, region: &s.region, outgoing };
         let rows = &s.rows;
         let mut unread_previews: Vec<u64> = Vec::new();
         let mut clicked: Option<u64> = None;
@@ -536,7 +537,7 @@ impl MailUi {
             clip_text(&p, pos2(text_x, y), width - 46.0, &format!("Cc  {cc}"), font(12.0), t.text_dim);
             y += 18.0;
         }
-        let stamp = self.session.region.stamp(&time::civil(item.time(), self.session.tz_offset_min));
+        let stamp = self.session.region.stamp(&self.session.zone.civil(item.time()));
         clip_text(&p, pos2(text_x, y), width - 46.0, &stamp, font(12.0), t.text_faint);
         y += 24.0;
 
@@ -820,7 +821,7 @@ impl MailUi {
         let (go_at, expire_at) = (draft.deliver_after, draft.expires);
         let go_shown = (go_at > 0).then(|| self.session.time_shown(go_at));
         let expire_shown = (expire_at > 0).then(|| self.session.time_shown(expire_at));
-        let (now, tz) = (self.session.now, self.session.tz_offset_min);
+        let (now, tz) = (self.session.now, self.session.zone.clone());
         let mut go_text = std::mem::take(&mut self.go_at_text);
         let mut expire_text = std::mem::take(&mut self.expire_at_text);
         // What the writer should know is on show while the message can still be changed.
@@ -855,7 +856,7 @@ impl MailUi {
                     }
                 }
                 ui.menu_button(egui::RichText::new("Delivery…").font(font(12.5)), |ui| {
-                    delivery_menu(ui, &t, now, tz, (&mut go_text, &mut expire_text), (go_at > 0, expire_at > 0), &mut acts);
+                    delivery_menu(ui, &t, now, &tz, (&mut go_text, &mut expire_text), (go_at > 0, expire_at > 0), &mut acts);
                 });
             });
             // What is set for when it goes and when it expires, each with a way to undo it.
@@ -929,7 +930,7 @@ fn delivery_menu(
     ui: &mut Ui,
     t: &theme::Tokens,
     now: i64,
-    tz: i32,
+    tz: &Zone,
     (go_text, expire_text): (&mut String, &mut String),
     (going_later, expiring): (bool, bool),
     acts: &mut Vec<(&'static str, Value)>,
@@ -937,10 +938,10 @@ fn delivery_menu(
     const DAY: i64 = 864_000_000_000;
     // "2026-10-17 08:00": `days` from today, at `hour`, on this machine's clock.
     let day_at = |days: i64, hour: u32| {
-        let c = time::civil(now.saturating_add(days.saturating_mul(DAY)), tz);
+        let c = tz.civil(now.saturating_add(days.saturating_mul(DAY)));
         format!("{}-{:02}-{:02} {hour:02}:00", c.year, c.month, c.day)
     };
-    let today = time::civil(now, tz);
+    let today = tz.civil(now);
     // Monday next, never today.
     let to_monday = match (8 - i64::from(today.weekday.min(6))) % 7 {
         0 => 7,
@@ -1016,7 +1017,7 @@ fn children(folders: &[FolderInfo], parent: Option<FolderId>) -> Vec<&FolderInfo
 struct Shown<'a> {
     now: i64,
     now_day: i64,
-    tz: i32,
+    tz: &'a Zone,
     region: &'a time::Region,
     /// The folder holds mail going out: a row says whom it went to.
     outgoing: bool,
@@ -1068,7 +1069,7 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme:
 
     // Line 2: subject and when.
     let shown_time = if held { row.deliver_after } else { row.time };
-    let c = time::civil(shown_time, tz);
+    let c = tz.civil(shown_time);
     let when = if shown_time <= 0 {
         String::new()
     } else if held {

@@ -2232,6 +2232,55 @@ fn the_appointment_window_makes_and_changes_appointments() {
 }
 
 #[test]
+fn an_appointment_typed_in_another_zone_and_a_second_zone_beside_ours() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.choose_zone(Some("Europe/London")).unwrap();
+    ui.execute("nav.module", &json!({ "module": "calendar" })).unwrap();
+    ui.execute("ui.appointment", &Value::Null).unwrap();
+    let mut form = ui.appointment.clone().unwrap();
+    // Made where we are, in our zone by name.
+    assert_eq!(form.zone, "Europe/London");
+    form.subject = "Call with Tokyo".to_string();
+    form.zone = "Asia/Tokyo".to_string();
+    for (field, value) in [(&mut form.start_date, "2026-11-02"), (&mut form.end_date, "2026-11-02")] {
+        *field = value.to_string();
+    }
+    form.start_time = "18:00".to_string();
+    form.end_time = "19:00".to_string();
+    let id = ui.execute("calendar.new", &form.params()).unwrap()["id"].as_u64().unwrap();
+    // 18:00 in Tokyo is 09:00 in London in November; opened again it is typed as it was.
+    let got = ui.execute("calendar.items", &json!({ "from": "2026-11-02", "to": "2026-11-03" })).unwrap();
+    let item = got["items"].as_array().unwrap().iter().find(|i| i["id"] == id).unwrap().clone();
+    assert_eq!((item["start"].as_str(), item["zone"].as_str()), (Some("2026-11-02 09:00"), Some("Asia/Tokyo")));
+    ui.execute("ui.appointment", &json!({ "id": id })).unwrap();
+    let opened = ui.appointment.clone().unwrap();
+    assert_eq!((opened.start_time.as_str(), opened.zone.as_str()), ("18:00", "Asia/Tokyo"));
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    ui.appointment = None;
+
+    // The window that chooses them, and a second zone's hours in each view.
+    assert!(ui.execute("ui.timeZones", &json!({ "open": "yes" })).is_err());
+    ui.execute("ui.timeZones", &Value::Null).unwrap();
+    assert!(ui.time_zones_open);
+    ui.execute("calendar.secondTimeZone", &json!({ "zone": "America/New_York" })).unwrap();
+    for view in ["day", "workWeek", "week", "month"] {
+        ui.execute("calendar.view", &json!({ "view": view })).unwrap();
+        for size in [egui::vec2(1280.0, 800.0), egui::vec2(200.0, 150.0)] {
+            draw_window(&mut ui, size);
+        }
+    }
+    ui.execute("ui.timeZones", &json!({ "open": false })).unwrap();
+    assert!(!ui.time_zones_open);
+}
+
+#[test]
+fn the_system_zone_keeps_the_offset_the_system_keeps_now() {
+    let zone = crate::local_zone();
+    let now = openmailclient_model::time::from_unix(chrono::Utc::now().timestamp());
+    assert_eq!(zone.offset_at(now), chrono::Local::now().offset().local_minus_utc() / 60);
+}
+
+#[test]
 fn themes_are_chosen_copied_changed_renamed_and_deleted_by_command() {
     let mut ui = MailUi::new(Session::with_sample());
     let blue = ui.tokens.clone();

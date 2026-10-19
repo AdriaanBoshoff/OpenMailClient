@@ -239,7 +239,7 @@ pub fn from_civil(year: i64, month: u32, day: u32, hour: u32, minute: u32, secon
 }
 
 // Days ↔ civil date, proleptic Gregorian (Howard Hinnant's public-domain algorithms).
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+pub(crate) fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y.rem_euclid(400);

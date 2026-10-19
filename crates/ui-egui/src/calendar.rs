@@ -9,6 +9,7 @@ use egui::{Align2, Color32, Painter, Rect, ScrollArea, Sense, Stroke, Ui, UiBuil
 use openmailclient_model::calendar::{self, Appointment, Busy, DAY, MINUTE, View};
 use openmailclient_model::recur::{self, End, Freq, Rule};
 use openmailclient_model::time::{self, Civil};
+use openmailclient_model::zone::Zone;
 use serde_json::{Value, json};
 
 /// The height of an hour in the day views; half hours are marked between.
@@ -107,8 +108,8 @@ pub(crate) struct RepeatForm {
 
 impl RepeatForm {
     /// How `a` repeats, or how it would by default from its start.
-    fn of(a: &Appointment, offset: i32) -> Self {
-        let c = time::civil(a.start, offset);
+    fn of(a: &Appointment, zone: &Zone) -> Self {
+        let c = zone.civil(a.start);
         let weekday = 1u8 << (c.weekday % 7);
         let mut f = Self {
             repeats: Repeats::Never,
@@ -206,6 +207,9 @@ pub(crate) struct AppointmentForm {
     pub(crate) repeat_was: RepeatForm,
     /// The pattern in words, as it is written for the series.
     pub(crate) pattern: String,
+    /// The time zone it is kept in and its times are typed in, by name; empty for none, when
+    /// they are typed where we are. One occurrence alone is always typed where we are.
+    pub(crate) zone: String,
 }
 
 const REMINDERS: &[(Option<i32>, &str)] = &[
@@ -267,7 +271,7 @@ fn length_words(minutes: i64) -> String {
 
 impl AppointmentForm {
     /// A new appointment from `start` (FILETIME), half an hour long, or all day.
-    fn new_at(start: i64, all_day: bool, offset: i32) -> Self {
+    fn new_at(start: i64, all_day: bool, here: &Zone) -> Self {
         let end = if all_day { start.saturating_add(DAY) } else { start.saturating_add(30 * MINUTE) };
         let a = Appointment {
             subject: String::new(),
@@ -281,14 +285,20 @@ impl AppointmentForm {
             meeting: false,
             recurrence: None,
             occurrence: None,
+            // Made where we are, when that is a zone known by name.
+            zone: (!all_day && !here.name().is_empty()).then(|| here.clone()),
         };
-        Self::of(None, &a, offset)
+        Self::of(None, &a, here)
     }
 
-    pub(crate) fn of(id: Option<u64>, a: &Appointment, offset: i32) -> Self {
-        let s = time::civil(a.start, offset);
+    pub(crate) fn of(id: Option<u64>, a: &Appointment, here: &Zone) -> Self {
+        // Its times as they are in its own zone, as they were typed; one occurrence alone, or
+        // an all-day event, as they are here.
+        let own = a.zone.as_ref().filter(|z| a.occurrence.is_none() && !a.all_day && !z.name().is_empty());
+        let zone = own.unwrap_or(here);
+        let s = zone.civil(a.start);
         // An all-day event's last day is the one before the midnight it ends at.
-        let e = time::civil(if a.all_day { a.end.saturating_sub(DAY).max(a.start) } else { a.end }, offset);
+        let e = zone.civil(if a.all_day { a.end.saturating_sub(DAY).max(a.start) } else { a.end });
         Self {
             id,
             subject: one_line(&a.subject),
@@ -305,9 +315,10 @@ impl AppointmentForm {
             occurrence: a.occurrence,
             recurring: a.recurrence.is_some() || a.recurring,
             other: None,
-            repeat: RepeatForm::of(a, offset),
-            repeat_was: RepeatForm::of(a, offset),
+            repeat: RepeatForm::of(a, zone),
+            repeat_was: RepeatForm::of(a, zone),
             pattern: a.recurrence.as_ref().map(|_| a.pattern_words()).unwrap_or_default(),
+            zone: a.zone.as_ref().filter(|_| a.occurrence.is_none()).map(|z| z.name().to_string()).unwrap_or_default(),
         }
     }
 
@@ -334,7 +345,18 @@ impl AppointmentForm {
         if self.occurrence.is_none() && self.repeat != self.repeat_was {
             p["repeat"] = self.repeat.param();
         }
+        if self.occurrence.is_none() {
+            p["zone"] = if self.zone.is_empty() { Value::Null } else { json!(self.zone) };
+        }
         p
+    }
+
+    /// The zone its times are typed in: its own, or `here`.
+    pub(crate) fn typed_in(&self, here: &Zone) -> Zone {
+        match self.occurrence {
+            None if !self.zone.is_empty() && !self.all_day => Zone::named(&self.zone).unwrap_or_else(|| here.clone()),
+            _ => here.clone(),
+        }
     }
 
     /// What Delete in its window deletes: the occurrence alone, or the whole appointment.
@@ -359,7 +381,8 @@ impl AppointmentForm {
     }
 
     /// Start and end as typed, when both read as times.
-    fn span(&self, offset: i32) -> Option<(i64, i64)> {
+    fn span(&self, here: &Zone) -> Option<(i64, i64)> {
+        let offset = &self.typed_in(here);
         let start =
             calendar::parse_local(&format!("{} {}", self.start_date.trim(), if self.all_day { "00:00" } else { self.start_time.trim() }), offset)?;
         let end = if self.all_day {
@@ -598,23 +621,33 @@ Kept in step with a calendar server at each Send/Receive"
 
     /// An hour as the gutter names it: "8 AM", or "08:00" where times are written on 24 hours.
     fn hour_name(&self, hour: u32) -> String {
+        self.clock_name(hour, 0)
+    }
+
+    /// A time as the gutter names it: "8 AM" or "8:30 AM", or "08:30" on 24 hours.
+    fn clock_name(&self, hour: u32, minute: u32) -> String {
         let r = &self.session.region;
+        let (hour, minute) = (hour % 24, minute % 60);
         if r.short_time.contains('h') {
             let h = if hour.is_multiple_of(12) { 12 } else { hour % 12 };
-            format!("{h} {}", if hour < 12 { &r.am } else { &r.pm })
+            let ampm = if hour < 12 { &r.am } else { &r.pm };
+            if minute == 0 { format!("{h} {ampm}") } else { format!("{h}:{minute:02} {ampm}") }
         } else {
-            format!("{hour:02}:00")
+            format!("{hour:02}:{minute:02}")
         }
     }
 
     /// The day, work week and week views: a column of hours for each day, all-day events above.
     fn time_grid(&mut self, ui: &mut Ui, rect: Rect, days: &[i64]) {
         let t = self.tokens.clone();
-        let off = self.session.tz_offset_min;
+        let off = &self.session.zone.clone();
         let today = self.session.today();
         let n = days.len().max(1);
-        let col_w = ((rect.width() - GUTTER - 14.0) / n as f32).max(20.0);
-        let col_x = |i: usize| rect.left() + GUTTER + col_w * i as f32;
+        // A second zone's hours stand in a column of their own, left of ours.
+        let second = self.session.second_zone.clone().filter(|z| z.name() != off.name());
+        let gutter = if second.is_some() { GUTTER * 2.0 } else { GUTTER };
+        let col_w = ((rect.width() - gutter - 14.0) / n as f32).max(20.0);
+        let col_x = |i: usize| rect.left() + gutter + col_w * i as f32;
         let items = self.session.calendar.items.clone();
         let (selected, occurrence) = (self.session.calendar.selected, self.session.calendar.occurrence);
         let chosen = |id: u64, a: &Appointment| selected == Some(id) && (occurrence.is_none() || a.occurrence == occurrence);
@@ -680,6 +713,14 @@ Kept in step with a calendar server at each Send/Receive"
                 self.go_to_day(*day);
             }
         }
+        if let Some(z) = &second {
+            // Which column is which zone's, named as the place or the offset.
+            let at = calendar::day_start(days.first().copied().unwrap_or(today), off);
+            for (x, zone) in [(rect.left() + GUTTER - 8.0, z), (rect.left() + gutter - 8.0, off)] {
+                let name: String = zone.short(at).chars().take(12).collect();
+                p.text(pos2(x, head.bottom() - 10.0), Align2::RIGHT_CENTER, name, font(10.0), t.text_dim);
+            }
+        }
         let band = Rect::from_min_size(pos2(rect.left(), head.bottom()), vec2(rect.width(), band_h));
         p.hline(rect.x_range(), band.top() + 0.5, (1.0, t.line));
         p.hline(rect.x_range(), band.bottom() - 0.5, (1.0, t.line));
@@ -716,7 +757,7 @@ Kept in step with a calendar server at each Send/Receive"
                 let p = ui.painter_at(canvas.intersect(ui.clip_rect()));
                 for (i, day) in days.iter().enumerate() {
                     let c = date_of(*day);
-                    let x = canvas.left() + GUTTER + col_w * i as f32;
+                    let x = canvas.left() + gutter + col_w * i as f32;
                     let workday = (1..=5).contains(&c.weekday);
                     let work =
                         Rect::from_min_max(pos2(x, canvas.top() + HOUR_H * WORK.0 as f32), pos2(x + col_w, canvas.top() + HOUR_H * WORK.1 as f32));
@@ -728,10 +769,22 @@ Kept in step with a calendar server at each Send/Receive"
                 }
                 for hour in 0..24u32 {
                     let y = canvas.top() + HOUR_H * hour as f32;
-                    p.hline(canvas.left() + GUTTER..=canvas.right(), y + 0.5, (1.0, t.line));
-                    p.hline(canvas.left() + GUTTER..=canvas.right(), y + HOUR_H / 2.0 + 0.5, (1.0, t.line.gamma_multiply(0.45)));
+                    p.hline(canvas.left() + gutter..=canvas.right(), y + 0.5, (1.0, t.line));
+                    p.hline(canvas.left() + gutter..=canvas.right(), y + HOUR_H / 2.0 + 0.5, (1.0, t.line.gamma_multiply(0.45)));
                     if hour > 0 {
-                        p.text(pos2(canvas.left() + GUTTER - 8.0, y), Align2::RIGHT_CENTER, self.hour_name(hour), font(10.5), t.text_dim);
+                        p.text(pos2(canvas.left() + gutter - 8.0, y), Align2::RIGHT_CENTER, self.hour_name(hour), font(10.5), t.text_dim);
+                        if let Some(z) = &second {
+                            // The same moment there, on the first day shown; half hours too.
+                            let local = calendar::day_start(first, off).saturating_add(i64::from(hour) * 60 * MINUTE);
+                            let there = z.civil(local);
+                            p.text(
+                                pos2(canvas.left() + GUTTER - 8.0, y),
+                                Align2::RIGHT_CENTER,
+                                self.clock_name(there.hour, there.minute),
+                                font(10.5),
+                                t.text_dim,
+                            );
+                        }
                     }
                 }
                 if scroll_to {
@@ -746,7 +799,7 @@ Kept in step with a calendar server at each Send/Receive"
                         items.iter().filter(|(_, a)| !(a.all_day || a.end.saturating_sub(a.start) >= DAY) && a.overlaps(from, to)).collect();
                     let spans: Vec<(i64, i64)> = timed.iter().map(|(_, a)| (a.start.max(from), a.end.min(to))).collect();
                     let cols = calendar::columns(&spans, 15 * MINUTE);
-                    let x = canvas.left() + GUTTER + col_w * i as f32;
+                    let x = canvas.left() + gutter + col_w * i as f32;
                     for ((item, (s, e)), (col, of)) in timed.iter().zip(&spans).zip(&cols) {
                         let (id, a) = (item.0, &item.1);
                         let y0 = canvas.top() + (s.saturating_sub(from) / MINUTE) as f32 / 60.0 * HOUR_H;
@@ -771,7 +824,7 @@ Kept in step with a calendar server at each Send/Receive"
                 }
                 // A double click where nothing is makes an appointment at that half hour.
                 if let Some(at) = resp.interact_pointer_pos().filter(|_| resp.double_clicked() || resp.clicked()) {
-                    let i = ((at.x - canvas.left() - GUTTER) / col_w).floor();
+                    let i = ((at.x - canvas.left() - gutter) / col_w).floor();
                     let half = ((at.y - canvas.top()) / (HOUR_H / 2.0)).floor().clamp(0.0, 47.0) as i64;
                     if i >= 0.0
                         && let Some(day) = days.get(i as usize)
@@ -868,8 +921,8 @@ Kept in step with a calendar server at each Send/Receive"
             icons::paint(&inner, Rect::from_min_size(pos2(x_icon, y_icon), vec2(11.0, 11.0)), Icon::Bell, t.text_faint);
         }
         let resp = ui.interact(r, egui::Id::new(("cal-appt", place, id, a.occurrence)), Sense::click());
-        let off = self.session.tz_offset_min;
-        let (s, e) = (time::civil(a.start, off), time::civil(a.end, off));
+        let off = &self.session.zone.clone();
+        let (s, e) = (off.civil(a.start), off.civil(a.end));
         let r = &self.session.region;
         let when = if a.all_day { "All day".to_string() } else { format!("{} - {}", r.time(&s), r.time(&e)) };
         let place = if a.location.is_empty() { String::new() } else { format!("\n{}", one_line(&a.location)) };
@@ -880,7 +933,7 @@ Kept in step with a calendar server at each Send/Receive"
     /// The month view: six weeks, each day with what is on it.
     fn month_grid(&mut self, ui: &mut Ui, rect: Rect, days: &[i64]) {
         let t = self.tokens.clone();
-        let off = self.session.tz_offset_min;
+        let off = &self.session.zone.clone();
         let today = self.session.today();
         let chosen = date_of(if self.session.calendar.day == 0 { today } else { self.session.calendar.day });
         let p = ui.painter_at(rect);
@@ -947,7 +1000,7 @@ Kept in step with a calendar server at each Send/Receive"
                 }
                 let mut x = r.left() + 4.0;
                 if !whole {
-                    let s = time::civil(a.start.max(from), off);
+                    let s = off.civil(a.start.max(from));
                     let when = self.session.region.time(&s);
                     p.text(pos2(x, r.center().y), Align2::LEFT_CENTER, &when, font(11.0), t.text_dim);
                     x += text_width(&p, &when, font(11.0)) + 5.0;
@@ -1008,7 +1061,7 @@ Kept in step with a calendar server at each Send/Receive"
     /// Open the appointment `id` in its window: one occurrence of a series, which the window
     /// can switch to the whole series, or the whole appointment.
     pub(crate) fn open_appointment(&mut self, id: u64, occurrence: Option<i64>) {
-        let off = self.session.tz_offset_min;
+        let off = &self.session.zone.clone();
         let shown = self
             .session
             .calendar
@@ -1031,7 +1084,7 @@ Kept in step with a calendar server at each Send/Receive"
     /// A new appointment at the next half hour of the day chosen.
     pub(crate) fn new_appointment(&mut self) {
         let s = &self.session;
-        let off = s.tz_offset_min;
+        let off = &s.zone.clone();
         let now = s.time_now();
         let day = if s.calendar.day == 0 { s.today() } else { s.calendar.day };
         let into_day = now.saturating_sub(calendar::day_start(s.today(), off));
@@ -1044,7 +1097,7 @@ Kept in step with a calendar server at each Send/Receive"
     pub(crate) fn appointment_window(&mut self, ctx: &egui::Context) {
         let Some(mut form) = self.appointment.take() else { return };
         let t = self.tokens.clone();
-        let off = self.session.tz_offset_min;
+        let off = &self.session.zone.clone();
         let mut ask: Option<Ask> = None;
         // What else is at that time, named, where Outlook only says there is a conflict.
         let clashes: Vec<String> = form
@@ -1062,6 +1115,8 @@ Kept in step with a calendar server at each Send/Receive"
             .unwrap_or_default();
         // The pattern as typed, in words, with the days it first falls on; or why it cannot be.
         let preview = self.repeat_preview(&form);
+        let zones = known_zones();
+        let here_label = off.label();
         let title = match (form.id, form.occurrence) {
             (None, _) => "New Appointment",
             (Some(_), Some(_)) => "Appointment Occurrence",
@@ -1127,6 +1182,11 @@ Kept in step with a calendar server at each Send/Receive"
                 ui.label("");
                 ui.checkbox(&mut form.all_day, "All day event");
                 ui.end_row();
+                if form.occurrence.is_none() && !form.all_day {
+                    ui.label(egui::RichText::new("Time zone").color(t.text_dim));
+                    zone_choice(ui, &mut form.zone, zones, &here_label);
+                    ui.end_row();
+                }
                 ui.label(egui::RichText::new("Show As").color(t.text_dim));
                 egui::ComboBox::from_id_salt("appt-busy").selected_text(show_as(form.busy)).width(180.0).show_ui(ui, |ui| {
                     for (b, name) in SHOW_AS {
@@ -1149,7 +1209,21 @@ Kept in step with a calendar server at each Send/Receive"
             ui.add_space(8.0);
             match form.span(off) {
                 Some((s, e)) if e > s => {
-                    ui.label(egui::RichText::new(format!("Lasts {}", length_words(e.saturating_sub(s) / MINUTE))).font(font(12.0)).color(t.text_dim));
+                    let mut words = format!("Lasts {}", length_words(e.saturating_sub(s) / MINUTE));
+                    // Typed in another zone than ours: when that is here, too.
+                    let typed_in = form.typed_in(off);
+                    if typed_in.offset_at(s) != off.offset_at(s) || typed_in.offset_at(e) != off.offset_at(e) {
+                        let (a, b) = (off.civil(s), off.civil(e));
+                        words.push_str(&format!(
+                            " · {} {} to {} {} where you are",
+                            ymd(&a),
+                            hm(&a),
+                            if ymd(&a) == ymd(&b) { String::new() } else { ymd(&b) },
+                            hm(&b)
+                        ));
+                        words = words.replace("to  ", "to ");
+                    }
+                    ui.label(egui::RichText::new(words).font(font(12.0)).color(t.text_dim));
                 }
                 Some(_) => {
                     ui.label(egui::RichText::new("It ends before it starts").font(font(12.0)).color(t.danger));
@@ -1240,8 +1314,9 @@ impl MailUi {
         if form.occurrence.is_some() || form.repeat.repeats == Repeats::Never {
             return None;
         }
-        let off = self.session.tz_offset_min;
+        let off = &self.session.zone.clone();
         let (start, end) = form.span(off)?;
+        let typed_in = form.typed_in(off);
         let a = Appointment {
             subject: String::new(),
             location: String::new(),
@@ -1254,6 +1329,7 @@ impl MailUi {
             meeting: false,
             recurrence: None,
             occurrence: None,
+            zone: Some(typed_in).filter(|z| !z.name().is_empty()),
         };
         Some(match self.session.repeat_preview(&form.repeat.param(), &a) {
             Ok(Some(r)) => {
@@ -1271,6 +1347,102 @@ impl MailUi {
             Err(e) => Err(e.to_string()),
         })
     }
+}
+
+impl MailUi {
+    /// The Time Zones window: the zone dates are shown in, the system's or one chosen, and a
+    /// second one whose hours stand beside ours in the day and week views; the time now in each.
+    pub(crate) fn time_zones_window(&mut self, ctx: &egui::Context) {
+        if !self.time_zones_open {
+            return;
+        }
+        let t = self.tokens.clone();
+        let zones = known_zones();
+        let now = self.session.now;
+        let system = self.session.system_zone.clone();
+        let mut chosen = self.session.zone_chosen.clone().unwrap_or_default();
+        let mut second = self.session.second_zone.as_ref().map(|z| z.name().to_string()).unwrap_or_default();
+        let (chosen_was, second_was) = (chosen.clone(), second.clone());
+        let at = |zone: &Zone| {
+            let c = zone.civil(now);
+            format!("{} {}", self.clock_name(c.hour, c.minute), zone.offset_text_at(now))
+        };
+        let (here_now, there_now) = (at(&self.session.zone), self.session.second_zone.as_ref().map(at));
+        let mut close = false;
+        let shown = crate::dialog::Dialog::new("time-zones", "Time Zones", Icon::Clock).width(460.0).show(ctx, &t, |ui| {
+            egui::Grid::new("time-zones-form").num_columns(2).spacing(vec2(12.0, 10.0)).show(ui, |ui| {
+                ui.label(egui::RichText::new("Show dates in").color(t.text_dim));
+                let label = |name: &str, none: &str| zones.iter().find(|(n, _)| n == name).map_or_else(|| none.to_string(), |(_, l)| l.clone());
+                let system_words = format!("The system's ({})", system.label());
+                egui::ComboBox::from_id_salt("tz-shown").selected_text(label(&chosen, &system_words)).width(300.0).height(320.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut chosen, String::new(), system_words.as_str());
+                    for (name, l) in zones {
+                        ui.selectable_value(&mut chosen, name.clone(), l.as_str());
+                    }
+                });
+                ui.end_row();
+                ui.label("");
+                ui.label(egui::RichText::new(format!("It is {here_now} there now.")).font(font(12.0)).color(t.text_dim));
+                ui.end_row();
+                ui.label(egui::RichText::new("Second time zone").color(t.text_dim));
+                egui::ComboBox::from_id_salt("tz-second").selected_text(label(&second, "None")).width(300.0).height(320.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut second, String::new(), "None");
+                    for (name, l) in zones {
+                        ui.selectable_value(&mut second, name.clone(), l.as_str());
+                    }
+                });
+                ui.end_row();
+                if let Some(there) = &there_now {
+                    ui.label("");
+                    ui.label(
+                        egui::RichText::new(format!("It is {there} there now; its hours stand beside ours.")).font(font(12.0)).color(t.text_dim),
+                    );
+                    ui.end_row();
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("An appointment made in a zone keeps its hour there when summer time begins or ends.")
+                    .font(font(12.0))
+                    .color(t.text_dim),
+            );
+            crate::dialog::foot(ui, &t, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(crate::dialog::primary(&t, "Close")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+        let name = |n: String| if n.is_empty() { Value::Null } else { Value::String(n) };
+        if chosen != chosen_was {
+            self.act("calendar.timeZone", json!({ "zone": name(chosen) }));
+        }
+        if second != second_was {
+            self.act("calendar.secondTimeZone", json!({ "zone": name(second) }));
+        }
+        if shown.closed || close {
+            self.time_zones_open = false;
+        }
+    }
+}
+
+/// Every zone known, by name and as it is labelled, west to east; made once.
+fn known_zones() -> &'static [(String, String)] {
+    static ZONES: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    ZONES.get_or_init(|| Zone::known().iter().map(|z| (z.name().to_string(), z.label())).collect())
+}
+
+/// The appointment window's choice of time zone: none, so that it is where we are wherever
+/// that is, or one known by name.
+fn zone_choice(ui: &mut Ui, zone: &mut String, zones: &[(String, String)], here: &str) {
+    let shown = zones.iter().find(|(name, _)| name == zone).map_or_else(|| format!("Where you are ({here})"), |(_, label)| label.clone());
+    egui::ComboBox::from_id_salt("appt-zone").selected_text(shown).width(300.0).height(320.0).show_ui(ui, |ui| {
+        ui.selectable_value(zone, String::new(), format!("Where you are ({here})"));
+        for (name, label) in zones {
+            ui.selectable_value(zone, name.clone(), label.as_str());
+        }
+    });
 }
 
 /// The rows of the appointment window's grid that say how it repeats.

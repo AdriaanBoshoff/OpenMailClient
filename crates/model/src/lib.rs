@@ -13,6 +13,7 @@ pub mod props;
 pub mod recur;
 pub mod rtf;
 pub mod time;
+pub mod zone;
 
 pub use memstore::MemStore;
 pub use props::{NameId, NamedKey, PropBag, PropValue, pid, pset, ptype};

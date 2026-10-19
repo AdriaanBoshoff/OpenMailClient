@@ -13,6 +13,7 @@
 //! case ("zoe" finds "Zöe"), nothing needs an index, and a keyword that is not understood is
 //! looked for as the text it is, so a query never fails and never quietly finds everything.
 
+use openmailclient_model::zone::Zone;
 use openmailclient_model::{Flag, Summary, time};
 
 /// Clauses one query may have; what is typed past them is left out.
@@ -127,7 +128,7 @@ fn yes(value: &str) -> Option<bool> {
 }
 
 /// A day, a month or a year, as the span of time it covers where the user is.
-fn span(value: &str, tz: i32) -> Option<(i64, i64)> {
+fn span(value: &str, tz: &Zone) -> Option<(i64, i64)> {
     let mut parts = value.split('-');
     let number = |part: Option<&str>, digits: usize| -> Option<Option<u32>> {
         match part {
@@ -141,7 +142,7 @@ fn span(value: &str, tz: i32) -> Option<(i64, i64)> {
     if parts.next().is_some() || !(1601..=9999).contains(&year) || month.is_some_and(|m| !(1..=12).contains(&m)) {
         return None;
     }
-    let start = |y: i64, m: u32, d: u32| time::from_civil(y, m, d, 0, 0, 0, tz);
+    let start = |y: i64, m: u32, d: u32| tz.utc_of(time::from_civil(y, m, d, 0, 0, 0, 0));
     Some(match (month, day) {
         (Some(m), Some(d)) => {
             if !(1..=31).contains(&d) {
@@ -181,7 +182,7 @@ fn size(value: &str) -> Option<Test> {
 
 /// What a `key:value` asks. `None` when the key is not one of ours or the value makes no sense
 /// for it: the words are then looked for as text.
-fn keyed(key: &str, value: &str, tz: i32) -> Option<Test> {
+fn keyed(key: &str, value: &str, tz: &Zone) -> Option<Test> {
     let folded = fold(value);
     let value = folded.as_str();
     let text = |make: fn(String) -> Test| (!value.is_empty()).then(|| make(value.to_string()));
@@ -219,8 +220,8 @@ fn keyed(key: &str, value: &str, tz: i32) -> Option<Test> {
     }
 }
 
-/// Understand what was typed. `tz` is the user's offset from UTC in minutes, for the dates.
-pub fn parse(text: &str, tz: i32) -> Query {
+/// Understand what was typed. `tz` is the user's time zone, for the dates.
+pub fn parse(text: &str, tz: &Zone) -> Query {
     let mut any: Vec<Vec<Clause>> = vec![Vec::new()];
     let (mut negate, mut count) = (false, 0usize);
     for token in tokens(text) {

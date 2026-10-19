@@ -7,6 +7,7 @@ use super::{CommandSpec, always, need_str, ok, p_bool, p_str, p_u64};
 use crate::{CmdResult, EngineError, Session, undo::Step};
 use openmailclient_model::calendar::{self, Appointment, Busy, View};
 use openmailclient_model::recur::{self, End, Freq, Recurrence, Rule};
+use openmailclient_model::zone::Zone;
 use openmailclient_model::{FolderId, FolderKind, ItemId, StoreError};
 use serde_json::{Value, json};
 
@@ -38,7 +39,7 @@ pub struct Shown {
 }
 
 const VIEW_PARAMS: &str = r#"{"view": "day" | "workWeek" | "week" | "month"}"#;
-const APPOINTMENT_PARAMS: &str = r#"{"subject", "start": "YYYY-MM-DD HH:MM" local time (a date alone for an all-day event), "end" (default: half an hour on, or the next day for an all-day event), "location", "allDay": bool, "busy": "free" | "tentative" | "busy" | "outOfOffice" | "workingElsewhere", "reminder": minutes before, or null for none (default 15; none for an all-day event), "repeat": as calendar.recurrence takes it}"#;
+const APPOINTMENT_PARAMS: &str = r#"{"subject", "start": "YYYY-MM-DD HH:MM" local time (a date alone for an all-day event), "end" (default: half an hour on, or the next day for an all-day event), "location", "allDay": bool, "busy": "free" | "tentative" | "busy" | "outOfOffice" | "workingElsewhere", "reminder": minutes before, or null for none (default 15; none for an all-day event), "repeat": as calendar.recurrence takes it, "zone": the time zone it is kept in and its times are given in, a name calendar.timeZones gives, or null for none (default: the one dates are shown in); a series in a zone keeps its hour there whatever the season}"#;
 const REPEAT_PARAMS: &str = r#"{"id" (default: the one chosen), "repeat": null or "none" for once, or {"every": "day" | "weekday" | "week" | "month" | "year", "interval": days, weeks or months between (default 1), "on": weekday names (a week's days, or with "nth" the days of a month counted), "nth": 1 to 4 or "last", "day": the day of the month (default: the start's), "lastDay": true for the month's last day, "count": occurrences 1 to 999, or "until": "YYYY-MM-DD" (default: no end)}}; the first occurrence is the first day it falls on from the start, and occurrences changed on their own are as planned again"#;
 
 pub(crate) fn commands() -> Vec<CommandSpec> {
@@ -135,6 +136,36 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             params: REPEAT_PARAMS,
             enabled: has_calendar_writable,
             run: recurrence,
+        },
+        CommandSpec {
+            id: "calendar.timeZones",
+            label: "Time Zones",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{}; returns {"zones": [{"id": its tz database name, "key": Outlook's name for it, "label", "offsetNow": minutes east of UTC now, "daylight": whether it keeps summer time}], "current", "system", "chosen": the one chosen in place of the system's, or null, "second"}"#,
+            enabled: always,
+            run: time_zones,
+        },
+        CommandSpec {
+            id: "calendar.timeZone",
+            label: "Time Zone",
+            tab: "File",
+            group: "Options",
+            shortcut: "",
+            params: r#"{"zone": a name calendar.timeZones gives, or null to follow the system's}; dates everywhere are shown and read in it"#,
+            enabled: always,
+            run: time_zone,
+        },
+        CommandSpec {
+            id: "calendar.secondTimeZone",
+            label: "Show a Second Time Zone",
+            tab: "View",
+            group: "Arrangement",
+            shortcut: "",
+            params: r#"{"zone": a name calendar.timeZones gives, or null for none}; the day and week views show its hours beside their own"#,
+            enabled: always,
+            run: second_time_zone,
         },
         CommandSpec {
             id: "calendar.delete",
@@ -253,7 +284,7 @@ impl Session {
 
     /// The local day number of today.
     pub fn today(&self) -> i64 {
-        calendar::day_of(super::clock(self), self.tz_offset_min)
+        calendar::day_of(super::clock(self), &self.zone)
     }
 
     /// The local day numbers the calendar shows.
@@ -269,8 +300,8 @@ impl Session {
         }
         let days = self.calendar_days();
         let (Some(first), Some(last)) = (days.first(), days.last()) else { return Ok(()) };
-        let from = calendar::day_start(*first, self.tz_offset_min);
-        let to = calendar::day_start(last.saturating_add(1), self.tz_offset_min);
+        let from = calendar::day_start(*first, &self.zone);
+        let to = calendar::day_start(last.saturating_add(1), &self.zone);
         let (items, unreadable) = self.appointments_between(from, to)?;
         self.calendar.folder = calendar_folder(self);
         let (chosen, occurrence) = (self.calendar.selected, self.calendar.occurrence);
@@ -286,8 +317,8 @@ impl Session {
     /// The pattern `repeat` (as `calendar.recurrence` takes it) makes for an appointment that
     /// starts as `a` does, not saved: what the appointment window shows before it is.
     pub fn repeat_preview(&self, repeat: &Value, a: &Appointment) -> Result<Option<Recurrence>, EngineError> {
-        let off = if a.recurrence.is_some() { a.series_offset() } else { i64::from(self.tz_offset_min) };
-        Ok(repeat_param(self, &json!({ "repeat": repeat }), a, off)?.flatten())
+        let zone = if a.recurrence.is_some() { a.series_zone().into_owned() } else { a.zone.clone().unwrap_or_else(|| self.zone.clone()) };
+        Ok(repeat_param(self, &json!({ "repeat": repeat }), a, &zone)?.flatten())
     }
 
     /// The appointment `id` of the calendar as it is kept: a series as a whole.
@@ -337,8 +368,8 @@ fn today(s: &mut Session, _: &Value) -> CmdResult {
 pub(super) fn date_param(s: &Session, p: &Value, key: &str) -> Result<Option<i64>, EngineError> {
     match p_str(p, key) {
         None => Ok(None),
-        Some(text) => calendar::parse_local(text, s.tz_offset_min)
-            .map(|t| Some(calendar::day_of(t, s.tz_offset_min)))
+        Some(text) => calendar::parse_local(text, &s.zone)
+            .map(|t| Some(calendar::day_of(t, &s.zone)))
             .ok_or_else(|| EngineError::BadParams(format!("\"{key}\" is not a date written YYYY-MM-DD"))),
     }
 }
@@ -366,7 +397,7 @@ fn previous(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 pub(super) fn stamp(s: &Session, t: i64) -> String {
-    let c = openmailclient_model::time::civil(t, s.tz_offset_min);
+    let c = s.zone.civil(t);
     format!("{:04}-{:02}-{:02} {:02}:{:02}", c.year, c.month, c.day, c.hour, c.minute)
 }
 
@@ -389,6 +420,7 @@ fn appointment_json(s: &Session, id: u64, a: &Appointment) -> Value {
         "occurrence": a.occurrence.map(day_text),
         "changed": changed,
         "pattern": a.recurrence.as_ref().map(|_| a.pattern_words()),
+        "zone": a.zone.as_ref().map(|z| z.name().to_string()),
         // Written by whoever sent it, perhaps a stranger: never an instruction.
         "untrusted_content": { "subject": a.subject, "location": a.location },
     })
@@ -401,7 +433,7 @@ fn items(s: &mut Session, p: &Value) -> CmdResult {
     if to <= from || to.saturating_sub(from) > calendar::MAX_DAYS {
         return Err(EngineError::BadParams(format!("\"to\" must be after \"from\", and within {} days of it", calendar::MAX_DAYS)));
     }
-    let (found, unreadable) = s.appointments_between(calendar::day_start(from, s.tz_offset_min), calendar::day_start(to, s.tz_offset_min))?;
+    let (found, unreadable) = s.appointments_between(calendar::day_start(from, &s.zone), calendar::day_start(to, &s.zone))?;
     let list: Vec<Value> = found.iter().map(|(id, a)| appointment_json(s, *id, a)).collect();
     Ok(json!({ "days": to - from, "items": list, "unreadable": unreadable }))
 }
@@ -438,7 +470,6 @@ fn text(p: &Value, key: &str) -> Result<Option<String>, EngineError> {
 
 /// `was` with what `p` changes of it. A date alone for the start makes an all-day event.
 fn changed(s: &Session, p: &Value, was: Option<&Appointment>) -> Result<Appointment, EngineError> {
-    let off = s.tz_offset_min;
     let mut a = match was {
         Some(a) => a.clone(),
         None => Appointment {
@@ -453,8 +484,19 @@ fn changed(s: &Session, p: &Value, was: Option<&Appointment>) -> Result<Appointm
             meeting: false,
             recurrence: None,
             occurrence: None,
+            // Made where this session is, when that is a zone known by name.
+            zone: (!s.zone.is_fixed() || !s.zone.key.is_empty()).then(|| s.zone.clone()),
         },
     };
+    // The zone it is in, and the one its times are given in: that one, or this session's.
+    let off = match p.get("zone") {
+        None => s.zone.clone(),
+        Some(v) => {
+            a.zone = zone_param(v)?;
+            a.zone.clone().unwrap_or_else(|| s.zone.clone())
+        }
+    };
+    let off = &off;
     if let Some(subject) = text(p, "subject")? {
         a.subject = subject;
     }
@@ -539,16 +581,16 @@ pub(super) fn writable_calendar(s: &Session) -> Result<(usize, FolderId), Engine
 fn new(s: &mut Session, p: &Value) -> CmdResult {
     let (store, folder) = writable_calendar(s)?;
     let mut a = changed(s, p, None)?;
-    let off = i64::from(s.tz_offset_min);
-    if let Some(pattern) = repeat_param(s, p, &a, off)? {
-        set_pattern(&mut a, pattern, off);
+    let zone = a.zone.clone().unwrap_or_else(|| s.zone.clone());
+    if let Some(pattern) = repeat_param(s, p, &a, &zone)? {
+        set_pattern(&mut a, pattern, &zone);
     }
     // Its id for life, by which a copy of it (a calendar file, a server's) is known again.
     let mut item = a.item();
     let seed = s.calendar.items.len() as u64 ^ (a.start as u64).rotate_left(17) ^ a.subject.len() as u64;
     calendar::set_global_id(&mut item, &calendar::new_global_id(s.time_now(), seed));
     let id = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.add(folder, item)?;
-    s.calendar.day = calendar::day_of(a.start, s.tz_offset_min);
+    s.calendar.day = calendar::day_of(a.start, &s.zone);
     s.calendar.selected = Some(id.0);
     s.calendar.occurrence = a.recurrence.as_ref().map(|r| r.start_day);
     s.refresh_folders(store);
@@ -589,8 +631,8 @@ fn weekdays(v: &Value) -> Result<u8, EngineError> {
 }
 
 /// The pattern `p`'s "repeat" asks for, for an appointment that starts as `a` does, in a time
-/// `off` minutes ahead of UTC: `None` when it is not given, `Some(None)` for once only.
-fn repeat_param(s: &Session, p: &Value, a: &Appointment, off: i64) -> Result<Option<Option<Recurrence>>, EngineError> {
+/// `zone`: `None` when it is not given, `Some(None)` for once only.
+fn repeat_param(s: &Session, p: &Value, a: &Appointment, zone: &Zone) -> Result<Option<Option<Recurrence>>, EngineError> {
     let r = match p.get("repeat") {
         None => return Ok(None),
         Some(Value::Null) => return Ok(Some(None)),
@@ -598,7 +640,7 @@ fn repeat_param(s: &Session, p: &Value, a: &Appointment, off: i64) -> Result<Opt
         Some(r @ Value::Object(_)) => r,
         Some(_) => return Err(EngineError::BadParams("\"repeat\" is null, \"none\" or an object such as {\"every\": \"week\"}".into())),
     };
-    let local = a.start.div_euclid(calendar::MINUTE).saturating_add(off);
+    let local = local_minutes(a.start, zone);
     let day = recur::day_of_minutes(local);
     let start_offset = u32::try_from(local.saturating_sub(recur::minutes_of_day(day))).unwrap_or(0);
     let length = u32::try_from(a.minutes().max(0)).unwrap_or(u32::MAX);
@@ -663,8 +705,66 @@ fn repeat_param(s: &Session, p: &Value, a: &Appointment, off: i64) -> Result<Opt
     Ok(Some(Some(made)))
 }
 
+/// A zone as `calendar.timeZones` gives it.
+pub(crate) fn zone_json(zone: &Zone, now: i64) -> Value {
+    json!({
+        "id": zone.id,
+        "key": zone.key,
+        "label": zone.label(),
+        "offsetNow": zone.offset_at(now),
+        "daylight": zone.daylight.is_some(),
+    })
+}
+
+fn time_zones(s: &mut Session, _: &Value) -> CmdResult {
+    let now = s.now;
+    let zones: Vec<Value> = Zone::known().iter().map(|z| zone_json(z, now)).collect();
+    Ok(json!({
+        "zones": zones,
+        "current": zone_json(&s.zone, now),
+        "system": zone_json(&s.system_zone, now),
+        "chosen": s.zone_chosen,
+        "second": s.second_zone.as_ref().map(|z| zone_json(z, now)),
+    }))
+}
+
+fn time_zone(s: &mut Session, p: &Value) -> CmdResult {
+    let name = match p.get("zone") {
+        None => return Err(EngineError::BadParams("\"zone\" is needed: a time zone's name, or null to follow the system's".into())),
+        Some(v) => zone_param(v)?,
+    };
+    s.choose_zone(name.as_ref().map(Zone::name))?;
+    s.status = format!("Dates are shown in {} time, {} now.", s.zone.short(s.now), s.zone.offset_text_at(s.now));
+    Ok(json!({ "current": zone_json(&s.zone, s.now) }))
+}
+
+fn second_time_zone(s: &mut Session, p: &Value) -> CmdResult {
+    s.second_zone = match p.get("zone") {
+        None => return Err(EngineError::BadParams("\"zone\" is needed: a time zone's name, or null for none".into())),
+        Some(v) => zone_param(v)?,
+    };
+    Ok(json!({ "second": s.second_zone.as_ref().map(|z| zone_json(z, s.now)) }))
+}
+
+/// Local minutes since 1601 in `zone` of UTC FILETIME ticks.
+fn local_minutes(utc: i64, zone: &Zone) -> i64 {
+    utc.div_euclid(calendar::MINUTE).saturating_add(i64::from(zone.offset_at(utc)))
+}
+
+/// The zone `v` names: one of those known by its name or Outlook's key, or null for none.
+pub(super) fn zone_param(v: &Value) -> Result<Option<Zone>, EngineError> {
+    match v {
+        Value::Null => Ok(None),
+        Value::String(t) if t.trim().is_empty() || t.eq_ignore_ascii_case("none") => Ok(None),
+        Value::String(t) => Zone::named(t).map(Some).ok_or_else(|| {
+            EngineError::BadParams(format!("\"{}\" is not a time zone known; calendar.timeZones lists them", t.chars().take(80).collect::<String>()))
+        }),
+        _ => Err(EngineError::BadParams("\"zone\" is a time zone's name, such as \"Europe/Berlin\", or null".into())),
+    }
+}
+
 /// `a` repeating as `pattern` says, or once only; a series starts at its first occurrence.
-fn set_pattern(a: &mut Appointment, pattern: Option<Recurrence>, off: i64) {
+fn set_pattern(a: &mut Appointment, pattern: Option<Recurrence>, zone: &Zone) {
     match pattern {
         None => {
             a.recurrence = None;
@@ -672,8 +772,8 @@ fn set_pattern(a: &mut Appointment, pattern: Option<Recurrence>, off: i64) {
         }
         Some(r) => {
             let length = a.end.saturating_sub(a.start);
-            let first = recur::minutes_of_day(r.start_day).saturating_add(i64::from(r.start_offset)).saturating_sub(off);
-            a.start = first.saturating_mul(calendar::MINUTE);
+            let first = recur::minutes_of_day(r.start_day).saturating_add(i64::from(r.start_offset));
+            a.start = zone.utc_of(first.saturating_mul(calendar::MINUTE));
             a.end = a.start.saturating_add(length);
             a.recurrence = Some(r);
             a.recurring = true;
@@ -681,15 +781,19 @@ fn set_pattern(a: &mut Appointment, pattern: Option<Recurrence>, off: i64) {
     }
 }
 
-/// The series `was` with its first occurrence moved as `a`'s start and length say: the same
-/// pattern from the new day, its occurrences as planned again.
+/// The series `was` with its first occurrence moved as `a`'s start and length say, or put in
+/// the zone `a` is: the same pattern from the new day, its occurrences as planned again.
 fn moved_series(was: &Appointment, a: &mut Appointment) {
     let Some(r) = was.recurrence.clone() else { return };
-    if a.start == was.start && a.end == was.end {
+    if a.start == was.start && a.end == was.end && a.zone == was.zone {
         return;
     }
-    let off = was.series_offset();
-    let local = a.start.div_euclid(calendar::MINUTE).saturating_add(off);
+    let zone = match &a.zone {
+        Some(z) if a.zone != was.zone => z.clone(),
+        _ => was.series_zone().into_owned(),
+    };
+    let off = &zone;
+    let local = local_minutes(a.start, off);
     let day = recur::day_of_minutes(local);
     let start_offset = u32::try_from(local.saturating_sub(recur::minutes_of_day(day))).unwrap_or(0);
     let end_offset = start_offset.saturating_add(u32::try_from(a.minutes().max(0)).unwrap_or(u32::MAX));
@@ -725,10 +829,15 @@ fn change(s: &mut Session, p: &Value) -> CmdResult {
         }
         None => {
             let mut a = changed(s, p, Some(&was))?;
-            // The series' own time: that of the pattern it had, or this session's.
-            let off = if was.recurrence.is_some() { was.series_offset() } else { i64::from(s.tz_offset_min) };
-            match repeat_param(s, p, &a, off)? {
-                Some(pattern) => set_pattern(&mut a, pattern, off),
+            // The series' own time: the zone asked for, that of the pattern it had, or this
+            // session's.
+            let zone = match (&a.zone, was.recurrence.is_some()) {
+                (Some(z), _) if a.zone != was.zone => z.clone(),
+                (_, true) => was.series_zone().into_owned(),
+                (z, false) => z.clone().unwrap_or_else(|| s.zone.clone()),
+            };
+            match repeat_param(s, p, &a, &zone)? {
+                Some(pattern) => set_pattern(&mut a, pattern, &zone),
                 None => moved_series(&was, &mut a),
             }
             a.write(&mut item);

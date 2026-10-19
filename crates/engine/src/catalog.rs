@@ -139,6 +139,9 @@ pub const FEATURES: &[Feature] = &[
     f("Calendar", "File", "Save As", "Save Calendar", "calendar.saveAs"),
     f("Calendar", "Appointment", "Options", "Recurrence", "calendar.recurrence"),
     f("Calendar", "Appointment", "Options", "Reminder", "calendar.change"),
+    f("Calendar", "Appointment", "Options", "Time Zones", "calendar.change"),
+    f("Calendar", "File", "Options", "Time Zone", "calendar.timeZone"),
+    f("Calendar", "File", "Options", "Show a Second Time Zone", "calendar.secondTimeZone"),
     f("Calendar", "Meeting", "Respond", "Accept, Tentative, Decline", ""),
     // People
     f("People", "Home", "New", "New Contact", ""),

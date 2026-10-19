@@ -74,7 +74,7 @@ END:VCALENDAR\r
 
 #[test]
 fn a_published_calendar_is_read_with_its_zone_its_series_and_its_changed_occurrences() {
-    let cal = read(PUBLISHED, 0).unwrap();
+    let cal = read(PUBLISHED, &Zone::fixed(0)).unwrap();
     assert_eq!(cal.name.as_deref(), Some("Team"));
     assert_eq!(cal.method.as_deref(), Some("PUBLISH"));
     assert!(cal.notes.is_empty(), "{:?}", cal.notes);
@@ -105,16 +105,16 @@ fn a_published_calendar_is_read_with_its_zone_its_series_and_its_changed_occurre
     let call = &cal.events[2].appointment;
     assert_eq!((call.start, call.minutes(), call.busy, call.reminder), (at("2026-07-10 15:00", 0), 45, Busy::OutOfOffice, Some(30)));
     // Read where we are two hours ahead, an all-day event keeps its days here.
-    let east = read(PUBLISHED, 120).unwrap();
+    let east = read(PUBLISHED, &Zone::fixed(120)).unwrap();
     assert_eq!(east.events[1].appointment.start, at("2026-12-24 00:00", 120));
     assert_eq!(east.events[0].appointment.start, a.start);
 }
 
 #[test]
 fn the_zone_in_effect_follows_daylight_saving_through_the_year() {
-    let cal = read(PUBLISHED, 0).unwrap();
+    let cal = read(PUBLISHED, &Zone::fixed(0)).unwrap();
     let (roots, _) = components(PUBLISHED);
-    let zone = roots[0].children.iter().find(|c| c.name == "VTIMEZONE").and_then(Zone::of).unwrap();
+    let zone = roots[0].children.iter().find(|c| c.name == "VTIMEZONE").and_then(FileZone::of).unwrap();
     let local = |t: &str| time::to_unix(at(t, 0));
     assert_eq!(zone.offset_at(local("2026-01-15 12:00")), 60);
     assert_eq!(zone.offset_at(local("2026-07-15 12:00")), 120);
@@ -139,6 +139,7 @@ fn appt(subject: &str, start: i64, minutes: i64) -> Appointment {
         meeting: false,
         recurrence: None,
         occurrence: None,
+        zone: None,
     }
 }
 
@@ -204,11 +205,11 @@ fn appointments_written_as_a_calendar_file_are_read_back_as_they_were() {
             it
         })
         .collect();
-    let text = write(&items, off, at("2026-10-18 12:00", 0), Some("Calendar"));
+    let text = write(&items, &Zone::fixed(off), at("2026-10-18 12:00", 0), Some("Calendar"));
     for l in text.split("\r\n") {
         assert!(l.len() <= 75, "{l}");
     }
-    let cal = read(text.as_bytes(), off).unwrap();
+    let cal = read(text.as_bytes(), &Zone::fixed(off)).unwrap();
     assert_eq!(cal.name.as_deref(), Some("Calendar"));
     assert!(cal.notes.is_empty(), "{:?}", cal.notes);
     assert_eq!(cal.events.len(), all.len());
@@ -222,7 +223,7 @@ fn appointments_written_as_a_calendar_file_are_read_back_as_they_were() {
         assert_eq!(calendar::global_id(&e.item()), calendar::global_id(it));
     }
     // Read where the clock is elsewhere, the series keep their own time.
-    let west = read(text.as_bytes(), -300).unwrap();
+    let west = read(text.as_bytes(), &Zone::fixed(-300)).unwrap();
     assert_eq!(west.events[0].appointment.start, all[0].start);
     assert_eq!(west.events[0].appointment.recurrence, all[0].recurrence);
 }
@@ -235,7 +236,7 @@ fn recurrence_rules_are_kept_as_outlook_keeps_them_or_said_to_be_not_kept() {
         )
     };
     let rule_of = |rule: &str, start: &str| {
-        let cal = read(file(rule, start).as_bytes(), 0).unwrap();
+        let cal = read(file(rule, start).as_bytes(), &Zone::fixed(0)).unwrap();
         let e = cal.events.into_iter().next().unwrap();
         (e.appointment.recurrence.map(|r| (r.freq, r.rule, r.period, r.end, r.start_day)), e.notes)
     };
@@ -292,7 +293,7 @@ fn recurrence_rules_are_kept_as_outlook_keeps_them_or_said_to_be_not_kept() {
 #[test]
 fn times_in_a_zone_the_file_does_not_define_are_taken_as_here_and_said_to_be() {
     let text = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:a\nDTSTART;TZID=Mars/Olympus:20261020T100000\nSUMMARY:A\nEND:VEVENT\nBEGIN:VEVENT\nUID:b\nDTSTART:20261020T100000\nSUMMARY:Floating\nEND:VEVENT\nEND:VCALENDAR\n";
-    let cal = read(text.as_bytes(), 120).unwrap();
+    let cal = read(text.as_bytes(), &Zone::fixed(120)).unwrap();
     assert_eq!(cal.events[0].appointment.start, at("2026-10-20 10:00", 120));
     assert!(cal.events[0].notes.iter().any(|n| n.contains("Mars/Olympus")));
     assert_eq!(cal.events[1].appointment.start, at("2026-10-20 10:00", 120));
@@ -302,7 +303,7 @@ fn times_in_a_zone_the_file_does_not_define_are_taken_as_here_and_said_to_be() {
 #[test]
 fn cancelled_events_and_orphaned_occurrences_are_handled_and_said() {
     let text = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:gone\r\nDTSTART:20261020T100000Z\r\nSTATUS:CANCELLED\r\nSUMMARY:Off\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:lonely\r\nRECURRENCE-ID:20261021T100000Z\r\nDTSTART:20261021T120000Z\r\nSUMMARY:Moved one\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nSUMMARY:No start\r\nEND:VEVENT\r\nBEGIN:VTODO\r\nSUMMARY:A task\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
-    let cal = read(text.as_bytes(), 0).unwrap();
+    let cal = read(text.as_bytes(), &Zone::fixed(0)).unwrap();
     assert_eq!(cal.events.len(), 1);
     assert_eq!(cal.events[0].appointment.subject, "Moved one");
     assert_ne!(cal.events[0].uid, "lonely");
@@ -315,10 +316,10 @@ fn cancelled_events_and_orphaned_occurrences_are_handled_and_said() {
 fn long_lines_are_folded_between_characters_and_unfolded_again() {
     let mut a = appt("Ünïcödé ", at("2026-10-20 10:00", 0), 30);
     a.subject = "Ünïcödé — ".repeat(40);
-    let text = write(&[a.item()], 0, at("2026-10-18 12:00", 0), None);
+    let text = write(&[a.item()], &Zone::fixed(0), at("2026-10-18 12:00", 0), None);
     assert!(text.split("\r\n").all(|l| l.len() <= 75));
     assert!(text.ends_with("END:VCALENDAR\r\n"));
-    let back = read(text.as_bytes(), 0).unwrap();
+    let back = read(text.as_bytes(), &Zone::fixed(0)).unwrap();
     assert_eq!(back.events[0].appointment.subject, a.subject);
 }
 
@@ -362,21 +363,21 @@ fn hostile_calendar_files_never_panic_and_are_read_in_bounded_time() {
         overrides.into_bytes(),
     ];
     for (i, case) in cases.iter().enumerate() {
-        if let Ok(cal) = read(case, 0) {
+        if let Ok(cal) = read(case, &Zone::fixed(0)) {
             assert!(cal.events.len() <= MAX_EVENTS, "{i}");
             assert!(cal.notes.len() <= MAX_NOTES, "{i}");
             for e in &cal.events {
                 assert!(e.appointment.end >= e.appointment.start, "{i}");
                 assert!(e.appointment.subject.chars().count() <= MAX_TEXT, "{i}");
                 // What is read is written again without a panic.
-                let _ = write(&[e.item()], 0, 0, None);
+                let _ = write(&[e.item()], &Zone::fixed(0), 0, None);
             }
         }
     }
-    let many_events = read(cases[13].as_slice(), 0).unwrap();
+    let many_events = read(cases[13].as_slice(), &Zone::fixed(0)).unwrap();
     assert_eq!(many_events.events.len(), 3, "one series for each UID");
-    let changed = read(cases[14].as_slice(), 0).unwrap();
+    let changed = read(cases[14].as_slice(), &Zone::fixed(0)).unwrap();
     assert!(changed.events[0].appointment.recurrence.as_ref().unwrap().exceptions.len() <= recur::MAX_COUNT as usize);
-    assert!(read(&vec![b'a'; MAX_BYTES + 1], 0).is_err());
+    assert!(read(&vec![b'a'; MAX_BYTES + 1], &Zone::fixed(0)).is_err());
     assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
 }

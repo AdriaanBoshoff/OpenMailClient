@@ -13,7 +13,9 @@
 
 use crate::props::{NameId, NamedKey, PropValue, pid, pset};
 use crate::recur::{self, Exception, Recurrence};
+use crate::zone::{Offsets, Zone};
 use crate::{Attachment, Item, time};
+use std::borrow::Cow;
 
 /// PSETID_Appointment {00062002-0000-0000-C000-000000000046} ([MS-OXPROPS] 1.3.2).
 pub const PSETID_APPOINTMENT: [u8; 16] = [0x02, 0x20, 0x06, 0x00, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
@@ -41,6 +43,9 @@ mod lid {
     pub const TIME_ZONE_DESCRIPTION: u32 = 0x8234;
     pub const CLIP_START: u32 = 0x8235;
     pub const CLIP_END: u32 = 0x8236;
+    pub const ZONE_START: u32 = 0x825E;
+    pub const ZONE_END: u32 = 0x825F;
+    pub const ZONE_RECUR: u32 = 0x8260;
 }
 
 /// Properties of an exception's attachment ([MS-OXOCAL] 2.2.10.1, [MS-OXPROPS]).
@@ -149,6 +154,10 @@ pub struct Appointment {
     pub recurrence: Option<Recurrence>,
     /// For one occurrence of a series: the local day it was first planned on.
     pub occurrence: Option<i64>,
+    /// The time zone it was made in, when it says ([MS-OXOCAL] 2.2.1.41 and 2.2.1.39). A
+    /// series' pattern is in it, so its occurrences keep their local time when the clocks change
+    /// there.
+    pub zone: Option<Zone>,
 }
 
 fn key(guid: [u8; 16], id: u32) -> NamedKey {
@@ -226,6 +235,24 @@ impl Appointment {
             Some(PropValue::Binary(b)) if recurring => Recurrence::read(b),
             _ => None,
         };
+        let definition = |id| match named(item, a, id) {
+            Some(PropValue::Binary(b)) => Zone::of_tzdefinition(b),
+            _ => None,
+        };
+        // A series' pattern is in the zone of PidLidAppointmentTimeZoneDefinitionRecur, else of
+        // PidLidTimeZoneStruct ([MS-OXOCAL] 3.1.5.5); a single appointment's is its start's.
+        let zone = if recurrence.is_some() {
+            definition(lid::ZONE_RECUR)
+                .or_else(|| match named(item, a, lid::TIME_ZONE_STRUCT) {
+                    Some(PropValue::Binary(b)) => Zone::of_tzreg(b),
+                    _ => None,
+                })
+                .or_else(|| definition(lid::ZONE_START))
+                // One offset with no name says no more than the series' first occurrence does.
+                .filter(|z| !(z.is_fixed() && z.id.is_empty() && z.key.is_empty()))
+        } else {
+            definition(lid::ZONE_START)
+        };
         Some(Self {
             subject: item.subject(),
             location,
@@ -238,6 +265,7 @@ impl Appointment {
             meeting,
             recurrence,
             occurrence: None,
+            zone,
         })
     }
 
@@ -252,14 +280,25 @@ impl Appointment {
         if off.abs() <= 16 * 60 { off } else { 0 }
     }
 
+    /// The zone the series' pattern is in: its own where it agrees with when the series
+    /// begins, else the one offset its first occurrence shows.
+    pub fn series_zone(&self) -> Cow<'_, Zone> {
+        let off = self.series_offset();
+        match &self.zone {
+            Some(z) if self.recurrence.is_some() && i64::from(z.offset_at(self.start)) == off => Cow::Borrowed(z),
+            _ => Cow::Owned(Zone::fixed(i32::try_from(off).unwrap_or(0))),
+        }
+    }
+
     /// UTC FILETIME ticks of local minutes since 1601 in the series' time.
     fn utc(&self, local: i64) -> i64 {
-        local.saturating_sub(self.series_offset()).saturating_mul(MINUTE)
+        self.series_zone().utc_of(local.saturating_mul(MINUTE))
     }
 
     /// Local minutes since 1601 in the series' time of UTC FILETIME ticks.
     fn local(&self, utc: i64) -> i64 {
-        utc.div_euclid(MINUTE).saturating_add(self.series_offset())
+        let off = self.series_zone().offset_at(utc);
+        utc.div_euclid(MINUTE).saturating_add(i64::from(off))
     }
 
     /// The local day, in the series' time, that `utc` falls on.
@@ -437,6 +476,11 @@ impl Appointment {
         if named(item, a, lid::STATE_FLAGS).is_none() {
             set_named(item, a, lid::STATE_FLAGS, PropValue::Int32(0));
         }
+        if let Some(z) = &self.zone {
+            let definition = z.tzdefinition(false);
+            set_named(item, a, lid::ZONE_START, PropValue::Binary(definition.clone()));
+            set_named(item, a, lid::ZONE_END, PropValue::Binary(definition));
+        }
         match &self.recurrence {
             Some(r) => self.write_recurrence(item, r),
             // A pattern not read here is kept as it was.
@@ -481,9 +525,15 @@ impl Appointment {
             _ => self.utc(recur::minutes_of_day(r.end_day)),
         };
         set_named(item, a, lid::CLIP_END, PropValue::Time(clip_end));
-        // The zone the pattern's times are in, as a TimeZoneStruct ([MS-OXOCAL] 2.2.1.39) with
-        // no daylight saving: only where the item does not already say which zone it is.
-        if named(item, a, lid::TIME_ZONE_STRUCT).is_none() {
+        // The zone the pattern's times are in ([MS-OXOCAL] 3.1.4.1.2), as a TimeZoneStruct and a
+        // TZDEFINITION marked as the pattern's; with no zone of its own, one offset with no
+        // daylight saving, only where the item does not already say which zone it is.
+        let zone = self.series_zone();
+        if self.zone.is_some() {
+            set_named(item, a, lid::TIME_ZONE_STRUCT, PropValue::Binary(zone.tzreg()));
+            set_named(item, a, lid::TIME_ZONE_DESCRIPTION, PropValue::String(format!("({})", zone.label())));
+            set_named(item, a, lid::ZONE_RECUR, PropValue::Binary(zone.tzdefinition(true)));
+        } else if named(item, a, lid::TIME_ZONE_STRUCT).is_none() {
             let bias = i32::try_from(-off).unwrap_or(0);
             let mut tz = Vec::with_capacity(48);
             tz.extend_from_slice(&bias.to_le_bytes());
@@ -754,19 +804,20 @@ pub fn days_in(year: i64, month: u32) -> u32 {
     }
 }
 
-/// UTC FILETIME ticks at the local midnight beginning day number `day`.
-pub fn day_start(day: i64, offset_minutes: i32) -> i64 {
-    time::from_unix(day.saturating_mul(86_400).saturating_sub(i64::from(offset_minutes).saturating_mul(60)))
+/// UTC FILETIME ticks at the local midnight beginning day number `day` (days since
+/// 1970-01-01) where `here` is: a zone, or minutes east of UTC.
+pub fn day_start(day: i64, here: impl Offsets) -> i64 {
+    here.utc_of(time::from_unix(day.saturating_mul(86_400)))
 }
 
 /// The local day number `filetime` falls on.
-pub fn day_of(filetime: i64, offset_minutes: i32) -> i64 {
-    time::civil(filetime, offset_minutes).day_number
+pub fn day_of(filetime: i64, here: impl Offsets) -> i64 {
+    here.civil(filetime).day_number
 }
 
 /// A local date and time read from text: `YYYY-MM-DD`, then optionally `HH:MM` after a space or
 /// a `T`. `None` for anything else, or a date that does not exist.
-pub fn parse_local(text: &str, offset_minutes: i32) -> Option<i64> {
+pub fn parse_local(text: &str, here: impl Offsets) -> Option<i64> {
     let text = text.trim();
     let (date, clock) = match text.split_once(['T', ' ']) {
         Some((d, c)) => (d, Some(c.trim())),
@@ -792,7 +843,7 @@ pub fn parse_local(text: &str, offset_minutes: i32) -> Option<i64> {
         }
         None => (0, 0),
     };
-    Some(time::from_civil(year, month, day, hour, minute, 0, offset_minutes))
+    Some(here.utc_of(time::from_civil(year, month, day, hour, minute, 0, 0)))
 }
 
 /// Appointments laid side by side where they overlap, as a day of a calendar shows them: for
@@ -890,6 +941,7 @@ mod tests {
             meeting: false,
             recurrence: None,
             occurrence: None,
+            zone: None,
         };
         let item = a.item();
         assert!(is_appointment(&item));
@@ -965,6 +1017,7 @@ mod tests {
             meeting: false,
             recurrence: Some(r),
             occurrence: None,
+            zone: None,
         }
     }
 

@@ -380,6 +380,7 @@ fn appointments(now: i64) -> Vec<Item> {
         meeting: false,
         recurrence: None,
         occurrence: None,
+        zone: None,
     };
     // Every weekday from a week ago, at the same time; the sample's times are UTC.
     use openmailclient_model::recur::{self, End, Freq, Recurrence, Rule};

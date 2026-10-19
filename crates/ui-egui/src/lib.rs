@@ -147,6 +147,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         params: r#"{} opens the window on what Outlook's profiles hold (file.importOutlook), everything that can be brought chosen; {"import": true} imports what is chosen; {"close": true} closes it"#,
     },
     UiCommand {
+        id: "ui.timeZones",
+        label: "Time Zones…",
+        params: r#"{"open": true or false (default: the other way)}; the window that chooses the zone dates are shown in (calendar.timeZone) and a second one whose hours the Calendar shows (calendar.secondTimeZone)"#,
+    },
+    UiCommand {
         id: "ui.showProgress",
         label: "Show Progress",
         params: r#"{"open": true or false (default: the other way)}; a window lists what runs, how far each is, Cancel Task and Cancel All (mail.cancelTask), when Send/Receive comes next and what came of what ended (mail.showProgress)"#,
@@ -339,6 +344,8 @@ pub struct MailUi {
     chimes: u32,
     /// The Send/Receive Progress window is open (`ui.showProgress`).
     pub(crate) progress_open: bool,
+    /// The Time Zones window is open.
+    pub(crate) time_zones_open: bool,
     /// What is typed in the compose window's Delivery menu: a time to go, and to expire.
     pub(crate) go_at_text: String,
     pub(crate) expire_at_text: String,
@@ -557,6 +564,7 @@ impl MailUi {
             alert: None,
             chimes: 0,
             progress_open: false,
+            time_zones_open: false,
             go_at_text: String::new(),
             expire_at_text: String::new(),
             cal_nav: None,
@@ -842,6 +850,13 @@ impl MailUi {
                 None if self.session.is_enabled("calendar.new") => self.new_appointment(),
                 None => return Err("No data file open has a calendar that can be written".to_string()),
             },
+            "ui.timeZones" => {
+                self.time_zones_open = match params.get("open") {
+                    None | Some(Value::Null) => !self.time_zones_open,
+                    Some(Value::Bool(open)) => *open,
+                    Some(_) => return Err("\"open\" is true or false".to_string()),
+                };
+            }
             "ui.showProgress" => {
                 self.progress_open = match params.get("open") {
                     None | Some(Value::Null) => !self.progress_open,
@@ -1072,6 +1087,7 @@ impl MailUi {
         self.attachment_window(&ctx);
         self.preview_window(&ctx);
         self.progress_window(&ctx);
+        self.time_zones_window(&ctx);
         self.alert_window(&ctx);
         self.appointment_window(&ctx);
 
@@ -1373,9 +1389,37 @@ impl MailUi {
     }
 }
 
-/// Minutes east of UTC for this machine right now; hosts set [`Session::tz_offset_min`] from it.
-pub fn local_offset_minutes() -> i32 {
-    chrono::Local::now().offset().local_minus_utc() / 60
+/// The time zone this machine keeps; hosts give it to [`Session::set_system_zone`]. Its rules
+/// are found from the offsets the system keeps through this year, and it is known by the name
+/// the system gives it.
+pub fn local_zone() -> openmailclient_model::zone::Zone {
+    use chrono::TimeZone;
+    use openmailclient_model::{time, zone::Zone};
+    let now = time::from_unix(chrono::Utc::now().timestamp());
+    let offset_at = |t: i64| chrono::Local.timestamp_opt(time::to_unix(t), 0).single().map_or(0, |d| d.offset().local_minus_utc() / 60);
+    let found = Zone::from_system(now, offset_at);
+    match system_zone_name() {
+        // One known by that name, where it keeps the rules the system does.
+        Some(name) => match Zone::named(&name) {
+            Some(known) if known.bias == found.bias && known.daylight == found.daylight => known,
+            // Else what the system keeps, by the name it gives it.
+            _ => Zone { id: name, ..found },
+        },
+        None => found,
+    }
+}
+
+/// The tz database name the system gives its zone, when it is a plain one.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_zone_name() -> Option<String> {
+    let name = iana_time_zone::get_timezone().ok()?;
+    let plain = !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'+'));
+    plain.then_some(name)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn system_zone_name() -> Option<String> {
+    None
 }
 
 #[cfg(test)]

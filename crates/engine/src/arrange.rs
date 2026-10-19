@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 
+use openmailclient_model::zone::Zone;
 use openmailclient_model::{Flag, Summary, strip_reply_prefix, time};
 
 use crate::SortKey;
@@ -93,11 +94,11 @@ pub struct Group {
 /// then the weeks before by how many ago, then this month, the month before, and older. A day
 /// still to come, as a held message's is, is told the same way forward. Weeks begin on the day
 /// the region says.
-fn day_label(now: &time::Civil, row_time: i64, tz_offset_min: i32, week_start: u32) -> String {
+fn day_label(now: &time::Civil, row_time: i64, zone: &Zone, week_start: u32) -> String {
     if row_time <= 0 {
         return "No date".to_string();
     }
-    let day = time::civil(row_time, tz_offset_min);
+    let day = zone.civil(row_time);
     let week = |c: &time::Civil| time::Region { week_start, ..time::Region::default() }.week_begun(c);
     let weeks = week(&day).saturating_sub(week(now)) / 7;
     let months = (day.year.saturating_mul(12).saturating_add(i64::from(day.month)))
@@ -141,9 +142,9 @@ fn named(text: &str, none: &str) -> String {
 }
 
 /// The heading `row` stands under when the list is arranged by `key`.
-fn label(row: &Summary, key: SortKey, now: &time::Civil, tz_offset_min: i32, week_start: u32) -> String {
+fn label(row: &Summary, key: SortKey, now: &time::Civil, zone: &Zone, week_start: u32) -> String {
     match key {
-        SortKey::Date => day_label(now, row.time, tz_offset_min, week_start),
+        SortKey::Date => day_label(now, row.time, zone, week_start),
         SortKey::From => named(&row.from, "No sender"),
         SortKey::To => named(&row.to, "No recipient"),
         SortKey::Subject => named(strip_reply_prefix(&row.subject), "No subject"),
@@ -168,12 +169,12 @@ fn label(row: &Summary, key: SortKey, now: &time::Civil, tz_offset_min: i32, wee
 /// heading, with how many they are and how many of them are unread. Names and subjects that
 /// differ only in case or accents are one group, under the heading of its first row. Weeks
 /// begin on `week_start`, 0 for Sunday.
-pub fn groups(rows: &[Summary], key: SortKey, now: i64, tz_offset_min: i32, week_start: u32) -> Vec<Group> {
-    let now = time::civil(now, tz_offset_min);
+pub fn groups(rows: &[Summary], key: SortKey, now: i64, zone: &Zone, week_start: u32) -> Vec<Group> {
+    let now = zone.civil(now);
     let mut groups: Vec<Group> = Vec::new();
     let mut last: Option<String> = None;
     for (at, row) in rows.iter().enumerate() {
-        let label = label(row, key, &now, tz_offset_min, week_start);
+        let label = label(row, key, &now, zone, week_start);
         let same = fold(&label);
         match groups.last_mut() {
             Some(group) if last.as_deref() == Some(same.as_str()) => {

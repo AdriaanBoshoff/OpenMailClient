@@ -99,7 +99,7 @@ fn views_and_going_from_day_to_day() {
 #[test]
 fn appointments_are_made_changed_deleted_and_taken_back() {
     let mut s = session();
-    s.tz_offset_min = 120;
+    s.zone = openmailclient_model::zone::Zone::fixed(120);
     run(&mut s, "nav.module", json!({"module": "calendar"}));
     let made = run(&mut s, "calendar.new", json!({"subject": "Design review", "start": "2026-10-09 11:00", "location": "Room 1", "reminder": 10}));
     let id = made["id"].as_u64().unwrap();
@@ -136,7 +136,7 @@ fn appointments_are_made_changed_deleted_and_taken_back() {
 #[test]
 fn an_all_day_event_runs_midnight_to_midnight() {
     let mut s = session();
-    s.tz_offset_min = -300;
+    s.zone = openmailclient_model::zone::Zone::fixed(-300);
     run(&mut s, "calendar.view", json!({"view": "week"}));
     let id = run(&mut s, "calendar.new", json!({"subject": "Away", "start": "2026-10-12", "end": "2026-10-14"}))["id"].as_u64().unwrap();
     let (_, a) = s.calendar.items.iter().find(|(i, _)| *i == id).unwrap().clone();
@@ -213,7 +213,7 @@ fn the_sample_stand_up_is_on_every_weekday() {
 #[test]
 fn a_series_is_made_and_its_occurrences_changed_one_by_one() {
     let mut s = session();
-    s.tz_offset_min = 120;
+    s.zone = openmailclient_model::zone::Zone::fixed(120);
     run(&mut s, "nav.module", json!({"module": "calendar"}));
     // Mondays and Wednesdays at 10, four times, from Sunday: the first is on Monday.
     let repeat = json!({"every": "week", "on": ["monday", "Wed"], "count": 4});
@@ -344,4 +344,85 @@ fn a_series_with_changed_and_deleted_occurrences_is_saved_to_a_pst_and_read_agai
     run(&mut other, "calendar.delete", json!({}));
     assert_eq!(shown(&mut other, "2026-10-01", "2026-12-01", "Rowing").len(), 4);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_series_in_a_zone_keeps_its_hour_there_across_the_change_to_summer_time() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-zone-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = session();
+    run(&mut s, "calendar.timeZone", json!({"zone": "Europe/Berlin"}));
+    assert_eq!(s.zone_chosen.as_deref(), Some("Europe/Berlin"));
+    // Mondays at 09:00 in Berlin; summer time begins there on Sunday 28 March 2027.
+    let made = run(
+        &mut s,
+        "calendar.new",
+        json!({"subject": "Planning", "start": "2027-03-15 09:00", "end": "2027-03-15 10:00", "repeat": {"every": "week", "on": ["monday"], "count": 4}}),
+    );
+    let id = made["id"].as_u64().unwrap();
+    let starts = |s: &mut Session| shown(s, "2027-03-01", "2027-04-30", "Planning").into_iter().map(|(start, ..)| start).collect::<Vec<_>>();
+    assert_eq!(starts(&mut s), ["2027-03-15 09:00", "2027-03-22 09:00", "2027-03-29 09:00", "2027-04-05 09:00"]);
+    let got = run(&mut s, "calendar.items", json!({"from": "2027-03-15", "to": "2027-03-16"}));
+    assert_eq!(got["items"][0]["zone"], "Europe/Berlin");
+    // Seen from UTC it is an hour earlier from the change on.
+    run(&mut s, "calendar.timeZone", json!({"zone": "UTC"}));
+    let utc = ["2027-03-15 08:00", "2027-03-22 08:00", "2027-03-29 07:00", "2027-04-05 07:00"];
+    assert_eq!(starts(&mut s), utc);
+
+    // Saved to a data file and read again, it is in its zone still.
+    let path = dir.join("zone.pst");
+    run(&mut s, "file.export", json!({"path": path}));
+    let mut other = Session::new();
+    other.now = now();
+    run(&mut other, "file.open", json!({"path": path}));
+    run(&mut other, "nav.module", json!({"module": "calendar"}));
+    assert_eq!(starts(&mut other), utc);
+    let got = run(&mut other, "calendar.items", json!({"from": "2027-03-15", "to": "2027-03-16"}));
+    assert_eq!(got["items"][0]["zone"], "Europe/Berlin");
+
+    // And in a calendar file, with the zone defined in it.
+    let ics = dir.join("zone.ics");
+    run(&mut s, "calendar.saveAs", json!({"path": ics.to_str().unwrap(), "from": "2027-03-01", "to": "2027-04-30"}));
+    let text = std::fs::read_to_string(&ics).unwrap();
+    assert!(text.contains("TZID:Europe/Berlin") && text.contains("DTSTART;TZID=Europe/Berlin:20270315T090000"), "{text}");
+    let mut third = Session::new();
+    third.now = now();
+    let mut store = MemStore::new("Mine");
+    store.push_folder(None, "Deleted Items", "IPF.Note");
+    store.push_folder(None, "Calendar", "IPF.Appointment");
+    third.add_store(Box::new(store));
+    third.module = crate::Module::Calendar;
+    run(&mut third, "calendar.import", json!({"path": ics.to_str().unwrap()}));
+    assert_eq!(starts(&mut third), utc);
+    let _ = id;
+
+    // The zone chosen is kept in the settings; null follows the system's again.
+    let kept = crate::cmd::settings::current(&s, None);
+    assert_eq!(kept["timeZone"], "UTC");
+    run(&mut s, "calendar.timeZone", json!({"zone": null}));
+    assert_eq!((s.zone_chosen.clone(), s.zone.clone()), (None, s.system_zone.clone()));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn time_zones_are_listed_and_chosen_and_a_second_one_shown() {
+    let mut s = session();
+    let got = run(&mut s, "calendar.timeZones", json!({}));
+    let zones = got["zones"].as_array().unwrap();
+    assert!(zones.len() > 50);
+    let ny = zones.iter().find(|z| z["id"] == "America/New_York").unwrap();
+    // In October New York keeps summer time, four hours behind UTC.
+    assert_eq!((ny["offsetNow"].as_i64(), ny["daylight"].as_bool()), (Some(-240), Some(true)));
+    // Asked for by Outlook's name, it is known by its own.
+    run(&mut s, "calendar.timeZone", json!({"zone": "Tokyo Standard Time"}));
+    assert_eq!(s.zone_chosen.as_deref(), Some("Asia/Tokyo"));
+    run(&mut s, "calendar.secondTimeZone", json!({"zone": "America/New_York"}));
+    assert_eq!(run(&mut s, "calendar.timeZones", json!({}))["second"]["id"], "America/New_York");
+    run(&mut s, "calendar.secondTimeZone", json!({"zone": null}));
+    assert!(s.second_zone.is_none());
+    for bad in [json!({}), json!({"zone": "Mars/Olympus"}), json!({"zone": 5}), json!({"zone": "x".repeat(100_000)})] {
+        assert!(s.run("calendar.timeZone", &bad).is_err());
+        assert!(s.run("calendar.secondTimeZone", &bad).is_err());
+    }
+    assert_eq!(s.zone_chosen.as_deref(), Some("Asia/Tokyo"), "a bad name changes nothing");
 }

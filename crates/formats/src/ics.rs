@@ -9,6 +9,7 @@
 
 use openmailclient_model::calendar::{self, Appointment, Busy, DAY, MAX_DAYS, MINUTE};
 use openmailclient_model::recur::{self, End, Freq, Recurrence, Rule};
+use openmailclient_model::zone::{Daylight, Rule as ZoneRule, Zone};
 use openmailclient_model::{Item, time};
 
 /// Largest file read, in bytes.
@@ -405,11 +406,13 @@ struct Onset {
     yearly: Option<(u32, Option<(i32, u32)>, Option<i32>, Option<i64>)>,
     /// Other days it begins (RDATE).
     more: Vec<(i64, i64)>,
+    /// A DAYLIGHT observance, not a STANDARD one.
+    daylight: bool,
 }
 
 /// A time zone a file defines (VTIMEZONE), by its TZID.
 #[derive(Clone, Debug)]
-struct Zone {
+struct FileZone {
     id: String,
     onsets: Vec<Onset>,
 }
@@ -435,7 +438,7 @@ fn onset_day(year: i64, month: u32, nth: Option<(i32, u32)>, month_day: Option<i
     }
 }
 
-impl Zone {
+impl FileZone {
     fn of(c: &Comp) -> Option<Self> {
         let id = c.prop("TZID")?.value.trim().to_string();
         let mut onsets = Vec::new();
@@ -462,7 +465,7 @@ impl Zone {
                 .filter_map(|v| stamp(&v))
                 .map(|s| (s.day, s.secs))
                 .collect();
-            onsets.push(Onset { day: start.day, secs: start.secs, from, to, yearly, more });
+            onsets.push(Onset { day: start.day, secs: start.secs, from, to, yearly, more, daylight: o.name == "DAYLIGHT" });
         }
         (!onsets.is_empty()).then_some(Self { id, onsets })
     }
@@ -498,6 +501,63 @@ impl Zone {
         }
         best.or(earliest).map_or(0, |(_, off)| off)
     }
+
+    /// The zone as one this program keeps: one offset, or a standard and a daylight time that
+    /// begin on the same weekday of the same month each year (the observances that go on
+    /// repeating, where a zone gives its past ones too). Known by name when it is one of those
+    /// known; `None` when its rules are of another kind.
+    fn model(&self) -> Option<Zone> {
+        let in_range = |o: i64| o.abs() <= 18 * 60;
+        let current: Vec<&Onset> = self.onsets.iter().filter(|o| o.yearly.is_some_and(|(.., until)| until.is_none())).collect();
+        let zone = match current.as_slice() {
+            [] => {
+                // One offset all along: the observance begun last.
+                let last = self.onsets.iter().max_by_key(|o| (o.day, o.secs))?;
+                if !in_range(last.to) || self.onsets.iter().any(|o| o.more.iter().any(|(d, _)| *d > last.day)) {
+                    return None;
+                }
+                Zone::fixed(i32::try_from(last.to).ok()?)
+            }
+            [a, b] if a.daylight != b.daylight => {
+                let (standard, daylight) = if a.daylight { (*b, *a) } else { (*a, *b) };
+                let rule = |o: &Onset| -> Option<ZoneRule> {
+                    let (month, nth, month_day, _) = o.yearly?;
+                    let (n, weekday) = nth?;
+                    if month_day.is_some() {
+                        return None;
+                    }
+                    let week = match n {
+                        -1 | 5 => 5,
+                        1..=4 => u8::try_from(n).ok()?,
+                        _ => return None,
+                    };
+                    let minute = u16::try_from(o.secs.div_euclid(60)).ok().filter(|m| *m < 24 * 60)?;
+                    Some(ZoneRule { month: u8::try_from(month).ok()?, week, weekday: u8::try_from(weekday).ok()?, minute })
+                };
+                let save = daylight.to.saturating_sub(standard.to);
+                if !in_range(standard.to) || !in_range(daylight.to) || save == 0 {
+                    return None;
+                }
+                Zone {
+                    bias: i32::try_from(standard.to).ok()?,
+                    daylight: Some(Daylight { save: i32::try_from(save).ok()?, begins: rule(daylight)?, ends: rule(standard)? }),
+                    ..Zone::default()
+                }
+            }
+            _ => return None,
+        };
+        Some(named_as(&self.id, zone))
+    }
+}
+
+/// `zone` known by `tzid` where that is one of the zones known with the same rules, by its
+/// name or Outlook's key; else kept with the TZID as its key.
+fn named_as(tzid: &str, zone: Zone) -> Zone {
+    let id = tzid.trim().trim_start_matches('/');
+    match Zone::named(id) {
+        Some(known) if known.bias == zone.bias && known.daylight == zone.daylight => known,
+        _ => Zone { key: cut(id, 260), ..zone.known_as() },
+    }
 }
 
 /// The parts of a recurrence rule (RFC 5545 3.3.10), each name in capitals.
@@ -512,8 +572,8 @@ fn rule_parts(v: &str) -> Vec<(String, String)> {
 /// What times are read in: the zones the file defines, and the offset of where we are for
 /// times given in a zone it does not define, or in none.
 struct Clock<'a> {
-    zones: &'a [Zone],
-    here: i64,
+    zones: &'a [FileZone],
+    here: &'a Zone,
     /// Occurrences that may still be deleted or changed, in the whole file.
     budget: std::cell::Cell<usize>,
 }
@@ -534,7 +594,23 @@ impl Clock<'_> {
         if ["UTC", "GMT", "Etc/UTC", "Etc/GMT", "Z"].iter().any(|z| z.eq_ignore_ascii_case(id)) {
             return Some(0);
         }
-        self.zones.iter().find(|z| z.id.trim_start_matches('/') == id).map(|z| z.offset_at(local))
+        match self.zones.iter().find(|z| z.id.trim_start_matches('/') == id) {
+            Some(z) => Some(z.offset_at(local)),
+            // A zone known by name, as Outlook and others write them without defining them.
+            None => Zone::named(id).map(|z| offset_of_local(&z, local)),
+        }
+    }
+
+    /// The zone `tzid` names as one this program keeps, when it can be.
+    fn zone(&self, tzid: Option<&str>) -> Option<Zone> {
+        let id = tzid?.trim();
+        let id = id.strip_prefix('/').unwrap_or(id);
+        match self.zones.iter().find(|z| z.id.trim_start_matches('/') == id) {
+            Some(z) => z.model(),
+            None => Zone::named(id),
+        }
+        // One offset known by no name says no more than the time given in it does.
+        .filter(|z| !(z.is_fixed() && z.id.is_empty()))
     }
 
     /// A time read: its UTC FILETIME ticks, the offset it was given in, and whether that was
@@ -549,19 +625,24 @@ impl Clock<'_> {
         if s.utc {
             return (0, false);
         }
-        if s.date_only || tzid.is_none() {
-            return (self.here, false);
-        }
         let local = s.day.saturating_mul(86_400).saturating_add(s.secs);
+        if s.date_only || tzid.is_none() {
+            return (offset_of_local(self.here, local), false);
+        }
         match self.offset(tzid, local) {
             Some(off) => (off, false),
-            None => (self.here, true),
+            None => (offset_of_local(self.here, local), true),
         }
     }
 
     fn utc(&self, s: Stamp, off: i64) -> i64 {
         time::from_unix(s.day.saturating_mul(86_400).saturating_add(s.secs).saturating_sub(off.saturating_mul(60)))
     }
+}
+
+/// Minutes east `zone` keeps at the local second `local` (since 1970 on its own clock).
+fn offset_of_local(zone: &Zone, local: i64) -> i64 {
+    i64::from(zone.offset_at(zone.utc_of(time::from_unix(local))))
 }
 
 /// An event of a calendar file, read as an appointment.
@@ -613,10 +694,10 @@ fn note(notes: &mut Vec<String>, text: impl Into<String>) {
     }
 }
 
-/// A file's events read. `here` is the offset of where we are, in minutes east of UTC: times
-/// given in no zone, or in one the file does not define, are taken to be here. An error when
-/// it is not a calendar file at all.
-pub fn read(bytes: &[u8], here: i32) -> Result<Calendar, String> {
+/// A file's events read. `here` is the zone we are in: times given in no zone, or in one the
+/// file does not define and this program does not know, are taken to be here. An error when it
+/// is not a calendar file at all.
+pub fn read(bytes: &[u8], here: &Zone) -> Result<Calendar, String> {
     if bytes.len() > MAX_BYTES {
         return Err(format!("a calendar file is read up to {} MB", MAX_BYTES >> 20));
     }
@@ -638,7 +719,7 @@ pub fn read(bytes: &[u8], here: i32) -> Result<Calendar, String> {
         if out.method.is_none() {
             out.method = cal.prop("METHOD").map(|p| p.value.trim().to_ascii_uppercase());
         }
-        zones.extend(cal.children.iter().filter(|c| c.name == "VTIMEZONE").filter_map(Zone::of));
+        zones.extend(cal.children.iter().filter(|c| c.name == "VTIMEZONE").filter_map(FileZone::of));
         events.extend(cal.children.iter().filter(|c| c.name == "VEVENT"));
         let todos = cal.children.iter().filter(|c| c.name == "VTODO" || c.name == "VJOURNAL").count();
         if todos > 0 {
@@ -649,7 +730,7 @@ pub fn read(bytes: &[u8], here: i32) -> Result<Calendar, String> {
         note(&mut out.notes, format!("only the first {MAX_EVENTS} events are read"));
         events.truncate(MAX_EVENTS);
     }
-    let clock = Clock { zones: &zones, here: i64::from(here), budget: std::cell::Cell::new(MAX_CHANGES) };
+    let clock = Clock { zones: &zones, here, budget: std::cell::Cell::new(MAX_CHANGES) };
     let uids: Vec<String> = events.iter().enumerate().map(|(i, e)| uid_of(e, i)).collect();
     // The occurrences changed in each series (RECURRENCE-ID), by UID.
     let mut changes: std::collections::HashMap<&str, Vec<&Comp>> = std::collections::HashMap::new();
@@ -760,9 +841,9 @@ fn event_of(ev: &Comp, clock: &Clock, uid: &str, notes: &mut Vec<String>) -> Opt
         note(notes, format!("its time zone “{}” is not in the file: taken as this computer's", cut(dtstart.param("TZID").unwrap_or(""), 60)));
     }
     let all_day = s.date_only;
-    let start = if all_day { calendar::day_start(s.day, clock.here as i32) } else { start };
+    let start = if all_day { calendar::day_start(s.day, clock.here) } else { start };
     let end = match (ev.prop("DTEND").and_then(|p| clock.at(p)), ev.prop("DURATION").and_then(|p| duration(&p.value))) {
-        (Some((_, e, _, _)), _) if all_day && e.date_only => calendar::day_start(e.day, clock.here as i32),
+        (Some((_, e, _, _)), _) if all_day && e.date_only => calendar::day_start(e.day, clock.here),
         (Some((end, ..)), _) => end,
         (None, Some(d)) => start.saturating_add(d.saturating_mul(10_000_000)),
         (None, None) if all_day => start.saturating_add(DAY),
@@ -782,21 +863,30 @@ fn event_of(ev: &Comp, clock: &Clock, uid: &str, notes: &mut Vec<String>) -> Opt
         meeting: false,
         recurrence: None,
         occurrence: None,
+        // The zone it was given in; an all-day series is kept where we are, so its days begin
+        // at midnight here whatever the season.
+        zone: if s.utc || all_day { None } else { clock.zone(dtstart.param("TZID")) },
     };
+    if all_day && ev.prop("RRULE").is_some() && !clock.here.is_fixed() {
+        a.zone = Some(clock.here.clone());
+    }
     a.reminder = reminder_of(ev, clock, a.start, a.end);
     if ev.prop("ATTENDEE").is_some() {
         note(notes, "its attendees are not kept: it is added as an appointment");
     }
     if let Some(rule) = ev.prop("RRULE") {
-        let series_off = if all_day { clock.here } else { off };
+        let series_off = if all_day { i64::from(clock.here.offset_at(start)) } else { off };
         match pattern(&rule.value, &a, s, series_off, clock) {
             Ok((r, words)) => {
                 if let Some(w) = words {
                     note(notes, w);
                 }
                 let length = a.end.saturating_sub(a.start);
-                let first = recur::minutes_of_day(r.start_day).saturating_add(i64::from(r.start_offset)).saturating_sub(series_off);
-                a.start = first.saturating_mul(MINUTE);
+                let first = recur::minutes_of_day(r.start_day).saturating_add(i64::from(r.start_offset));
+                a.start = match &a.zone {
+                    Some(z) => z.utc_of(first.saturating_mul(MINUTE)),
+                    None => first.saturating_sub(series_off).saturating_mul(MINUTE),
+                };
                 a.end = a.start.saturating_add(length);
                 a.recurrence = Some(r);
                 a.recurring = true;
@@ -1043,28 +1133,76 @@ fn offset_text(off: i64) -> String {
     format!("{sign}{:02}{:02}", off.abs() / 60, off.abs() % 60)
 }
 
-/// The TZID written for a series kept at `off` minutes east: a zone of one offset, as the
-/// pattern's times are ([MS-OXOCAL] 2.2.1.44.5). It has no colon, which a parameter value
+/// The TZID written for a zone: its tz database name, Outlook's key, or for one offset with
+/// no name `UTC+0200`. It has no colon, semicolon, comma or quote, which a parameter value
 /// could not hold unquoted.
-fn zone_id(off: i64) -> String {
-    format!("UTC{}", offset_text(off))
+fn zone_id(zone: &Zone) -> String {
+    let safe = |t: &str| t.chars().filter(|c| !matches!(c, ':' | ';' | ',' | '"') && !c.is_control()).take(200).collect::<String>();
+    let id = if !zone.id.is_empty() { safe(&zone.id) } else { safe(&zone.key) };
+    if id.trim().is_empty() { format!("UTC{}", offset_text(i64::from(zone.bias))) } else { id }
 }
 
-/// How a series' times are written: in a zone of its own offset, or in UTC when it has none.
+/// Whether times in `zone` are written in UTC: it is UTC itself, by no other name.
+fn is_utc(zone: &Zone) -> bool {
+    zone.is_fixed() && zone.bias == 0 && (zone.id.is_empty() || zone.id == "UTC")
+}
+
+/// A zone as a VTIMEZONE (RFC 5545 3.6.5): one STANDARD observance, and a DAYLIGHT one
+/// beside it repeating each year where it saves daylight.
+fn write_zone(out: &mut String, zone: &Zone) {
+    line(out, "BEGIN:VTIMEZONE");
+    line(out, &format!("TZID:{}", zone_id(zone)));
+    let bias = i64::from(zone.bias);
+    match zone.daylight {
+        None => {
+            let text = offset_text(bias);
+            line(out, "BEGIN:STANDARD");
+            line(out, "DTSTART:16010101T000000");
+            line(out, &format!("TZOFFSETFROM:{text}"));
+            line(out, &format!("TZOFFSETTO:{text}"));
+            line(out, "END:STANDARD");
+        }
+        Some(d) => {
+            let saving = bias.saturating_add(i64::from(d.save));
+            let observance = |out: &mut String, name: &str, rule: ZoneRule, from: i64, to: i64| {
+                // First in 1970, said in the time before it, as RFC 5545 3.6.5 asks.
+                let day = rule.day_in(1970);
+                line(out, &format!("BEGIN:{name}"));
+                line(out, &format!("DTSTART:{}T{:02}{:02}00", date_text(day), rule.minute / 60, rule.minute % 60));
+                line(out, &format!("TZOFFSETFROM:{}", offset_text(from)));
+                line(out, &format!("TZOFFSETTO:{}", offset_text(to)));
+                let nth = if rule.week >= 5 { -1 } else { i32::from(rule.week) };
+                let weekday = WEEKDAYS.get(usize::from(rule.weekday) % 7).copied().unwrap_or("SU");
+                line(out, &format!("RRULE:FREQ=YEARLY;BYMONTH={};BYDAY={nth}{weekday}", rule.month));
+                line(out, &format!("END:{name}"));
+            };
+            observance(out, "STANDARD", d.ends, saving, bias);
+            observance(out, "DAYLIGHT", d.begins, bias, saving);
+        }
+    }
+    line(out, "END:VTIMEZONE");
+}
+
+/// How a series' times are written: in its zone, or in UTC.
 struct Writer {
-    off: i64,
+    zone: Zone,
 }
 
 impl Writer {
+    /// UTC ticks of local minutes in the series' time.
+    fn utc(&self, local: i64) -> i64 {
+        self.zone.utc_of(local.saturating_mul(MINUTE))
+    }
+
     /// The parameters and value of local minutes in the series' time: a date, a time in its
     /// zone, or one in UTC.
     fn parts(&self, local: i64, all_day: bool) -> (String, String) {
         if all_day {
             (";VALUE=DATE".into(), date_text(recur::day_of_minutes(local)))
-        } else if self.off == 0 {
-            (String::new(), utc_text(local.saturating_mul(MINUTE)))
+        } else if is_utc(&self.zone) {
+            (String::new(), utc_text(self.utc(local)))
         } else {
-            (format!(";TZID={}", zone_id(self.off)), local_text(local))
+            (format!(";TZID={}", zone_id(&self.zone)), local_text(local))
         }
     }
 
@@ -1106,8 +1244,8 @@ fn rule_text(r: &Recurrence, w: &Writer, all_day: bool) -> Option<String> {
         // UNTIL is a date for an all-day series, else the UTC time of the last occurrence.
         End::On(day) if all_day => text.push_str(&format!(";UNTIL={}", date_text(day))),
         End::On(day) => {
-            let last = recur::minutes_of_day(day).saturating_add(i64::from(r.start_offset)).saturating_sub(w.off);
-            text.push_str(&format!(";UNTIL={}", utc_text(last.saturating_mul(MINUTE))));
+            let last = recur::minutes_of_day(day).saturating_add(i64::from(r.start_offset));
+            text.push_str(&format!(";UNTIL={}", utc_text(w.utc(last))));
         }
     }
     Some(text)
@@ -1166,9 +1304,10 @@ fn alarm(out: &mut String, a: &Appointment) {
 
 /// Appointment items written as one calendar file (RFC 5545), each as [MS-OXCICAL] 2.1.3.1.1
 /// writes it: a series with its rule, the occurrences deleted from it and one event for each
-/// occurrence changed. `here` is where we are, in minutes east, for an all-day event that is
-/// not a series; `now` the time written as each event's stamp; `name` the calendar's.
-pub fn write(items: &[Item], here: i32, now: i64, name: Option<&str>) -> String {
+/// occurrence changed. Each is written in its own zone, defined in the file. `here` is the
+/// zone we are in, for an all-day event that is not a series; `now` the time written as each
+/// event's stamp; `name` the calendar's.
+pub fn write(items: &[Item], here: &Zone, now: i64, name: Option<&str>) -> String {
     let mut out = String::new();
     line(&mut out, "BEGIN:VCALENDAR");
     line(&mut out, "PRODID:-//OpenMailClient//OpenMailClient//EN");
@@ -1179,28 +1318,35 @@ pub fn write(items: &[Item], here: i32, now: i64, name: Option<&str>) -> String 
         line(&mut out, &format!("X-WR-CALNAME:{}", escape(n)));
     }
     let shown: Vec<(&Item, Appointment)> = items.iter().filter_map(|it| Appointment::of(it).map(|a| (it, a))).collect();
-    // A zone for each offset a series is kept at.
-    let mut offsets: Vec<i64> =
-        shown.iter().filter(|(_, a)| a.recurrence.is_some() && !a.all_day).map(|(_, a)| a.series_offset()).filter(|o| *o != 0).collect();
-    offsets.sort_unstable();
-    offsets.dedup();
-    for off in offsets {
-        let text = offset_text(off);
-        line(&mut out, "BEGIN:VTIMEZONE");
-        line(&mut out, &format!("TZID:{}", zone_id(off)));
-        line(&mut out, "BEGIN:STANDARD");
-        line(&mut out, "DTSTART:16010101T000000");
-        line(&mut out, &format!("TZOFFSETFROM:{text}"));
-        line(&mut out, &format!("TZOFFSETTO:{text}"));
-        line(&mut out, "END:STANDARD");
-        line(&mut out, "END:VTIMEZONE");
+    // The zone each event is written in: a series' own; an appointment's that says it was
+    // made in one known by name; else UTC.
+    let zone_of = |a: &Appointment| -> Option<Zone> {
+        match (&a.recurrence, &a.zone) {
+            (_, _) if a.all_day => None,
+            (Some(_), _) => Some(a.series_zone().into_owned()),
+            (None, Some(z)) if !z.id.is_empty() || !z.key.is_empty() => Some(z.clone()),
+            (None, _) => None,
+        }
+        .filter(|z| !is_utc(z))
+    };
+    // Each zone once, by its TZID.
+    let mut zones: Vec<Zone> = Vec::new();
+    for (_, a) in &shown {
+        if let Some(z) = zone_of(a)
+            && !zones.iter().any(|w| zone_id(w) == zone_id(&z))
+        {
+            zones.push(z);
+        }
+    }
+    for z in &zones {
+        write_zone(&mut out, z);
     }
     for (item, a) in &shown {
         let uid = uid(item);
         line(&mut out, "BEGIN:VEVENT");
         event_body(&mut out, a, item, &uid, now);
         let rule = a.recurrence.as_ref().and_then(|r| {
-            let w = Writer { off: if a.all_day { 0 } else { a.series_offset() } };
+            let w = Writer { zone: if a.all_day { Zone::utc() } else { a.series_zone().into_owned() } };
             rule_text(r, &w, a.all_day).map(|t| (r, w, t))
         });
         match &rule {
@@ -1224,10 +1370,18 @@ pub fn write(items: &[Item], here: i32, now: i64, name: Option<&str>) -> String 
                 line(&mut out, &format!("DTSTART;VALUE=DATE:{}", date_text(day)));
                 line(&mut out, &format!("DTEND;VALUE=DATE:{}", date_text(last)));
             }
-            None => {
-                line(&mut out, &format!("DTSTART:{}", utc_text(a.start)));
-                line(&mut out, &format!("DTEND:{}", utc_text(a.end)));
-            }
+            None => match zone_of(a) {
+                Some(z) => {
+                    let id = zone_id(&z);
+                    let local = |t: i64| local_text(t.div_euclid(MINUTE).saturating_add(i64::from(z.offset_at(t))));
+                    line(&mut out, &format!("DTSTART;TZID={id}:{}", local(a.start)));
+                    line(&mut out, &format!("DTEND;TZID={id}:{}", local(a.end)));
+                }
+                None => {
+                    line(&mut out, &format!("DTSTART:{}", utc_text(a.start)));
+                    line(&mut out, &format!("DTEND:{}", utc_text(a.end)));
+                }
+            },
         }
         alarm(&mut out, a);
         line(&mut out, "END:VEVENT");

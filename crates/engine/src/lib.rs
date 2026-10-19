@@ -53,6 +53,7 @@ mod tests_sync;
 pub mod undo;
 pub mod watch;
 
+use openmailclient_model::zone::Zone;
 use openmailclient_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
 use serde_json::{Value, json};
 
@@ -358,8 +359,16 @@ pub struct Session {
     pub alerts: arrival::Alerts,
     pub compose: Option<Draft>,
     pub status: String,
-    /// Minutes east of UTC for dates shown and written into reply headers. Set by the host.
-    pub tz_offset_min: i32,
+    /// The time zone dates are shown in and read in, and written into reply headers: the one
+    /// chosen (`calendar.timeZone`), or the system's.
+    pub zone: Zone,
+    /// The system's zone, as the host finds it ([`Zone::from_system`]).
+    pub system_zone: Zone,
+    /// The zone chosen in place of the system's, by name; `None` to follow the system.
+    pub zone_chosen: Option<String>,
+    /// A second zone whose hours the Calendar's day and week views show beside its own
+    /// (`calendar.secondTimeZone`).
+    pub second_zone: Option<Zone>,
     /// "Now" as UTC FILETIME ticks. Set by the host; tests pin it.
     pub now: i64,
     pub user_name: String,
@@ -461,7 +470,10 @@ impl Session {
             alerts: arrival::Alerts::default(),
             compose: None,
             status: String::new(),
-            tz_offset_min: 0,
+            zone: Zone::utc(),
+            system_zone: Zone::utc(),
+            zone_chosen: None,
+            second_zone: None,
             region: openmailclient_model::time::Region::default(),
             previews: std::collections::HashMap::new(),
             now: openmailclient_model::time::from_unix(i64::try_from(unix).unwrap_or(0)),
@@ -681,7 +693,7 @@ impl Session {
                 (row.preview, row.preview_whole) = (read.preview.clone(), read.whole);
             }
         }
-        let query = search::parse(&self.search, self.tz_offset_min);
+        let query = search::parse(&self.search, &self.zone);
         if !query.is_empty() {
             rows.retain(|r| query.matches(r));
         }
@@ -701,7 +713,7 @@ impl Session {
 
     /// The groups the listed rows stand in, as they are arranged.
     pub fn groups(&self) -> Vec<arrange::Group> {
-        arrange::groups(&self.rows, self.sort, self.now, self.tz_offset_min, self.region.week_start)
+        arrange::groups(&self.rows, self.sort, self.now, &self.zone, self.region.week_start)
     }
 
     pub fn selected_index(&self) -> Option<usize> {
@@ -783,6 +795,29 @@ impl Session {
                 self.open = Some(item);
             }
         }
+        Ok(())
+    }
+
+    /// The system's zone is `zone`, as the host found it; dates are shown in it unless another
+    /// was chosen.
+    pub fn set_system_zone(&mut self, zone: Zone) {
+        self.system_zone = zone;
+        self.zone = self.zone_chosen.as_deref().and_then(Zone::named).unwrap_or_else(|| self.system_zone.clone());
+    }
+
+    /// Dates are shown in the zone known as `name`, or in the system's again with `None`. An
+    /// error, changing nothing, when no zone is known by that name.
+    pub fn choose_zone(&mut self, name: Option<&str>) -> Result<(), EngineError> {
+        match name {
+            None => self.zone_chosen = None,
+            Some(n) => {
+                let zone =
+                    Zone::named(n).ok_or_else(|| EngineError::BadParams("that is not a time zone known; calendar.timeZones lists them".into()))?;
+                // Kept by the name it is known by, whatever it was asked for by.
+                self.zone_chosen = Some(zone.name().to_string());
+            }
+        }
+        self.set_system_zone(self.system_zone.clone());
         Ok(())
     }
 

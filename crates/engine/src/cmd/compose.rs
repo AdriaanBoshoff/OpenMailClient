@@ -4,6 +4,7 @@
 
 use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_u64};
 use crate::{CmdResult, Draft, EngineError, Filed, Session, outgoing};
+use openmailclient_model::zone::Offsets;
 use openmailclient_model::{
     Attachment, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, pid, recipient_email,
     recipient_label, time,
@@ -243,7 +244,7 @@ fn quoted(s: &Session, item: &Item) -> String {
     let mut out = format!("\n\n{}\n", outgoing::ORIGINAL);
     out.push_str(&format!("From: {}\n", mailbox(&item.sender_name(), &item.sender_email())));
     if item.time() > 0 {
-        out.push_str(&format!("Sent: {}\n", s.region.full_stamp(&time::civil(item.time(), s.tz_offset_min))));
+        out.push_str(&format!("Sent: {}\n", s.region.full_stamp(&s.zone.civil(item.time()))));
     }
     out.push_str(&format!("To: {}\n", item.display_recipients(RECIP_TO)));
     let cc = item.display_recipients(RECIP_CC);
@@ -428,13 +429,14 @@ fn when_given(s: &Session, p: &Value) -> Result<Option<i64>, EngineError> {
     }
     let text =
         need_str(p, "at").map_err(|_| EngineError::BadParams("give \"at\": \"2026-10-17 09:00\", \"inMinutes\": n, or \"off\": true".into()))?;
-    parse_local(text, s.tz_offset_min)
+    parse_local(text, &s.zone)
         .map(Some)
         .ok_or_else(|| EngineError::BadParams(format!("\"{}\" is not a date and time such as 2026-10-17 09:00", clamp(text, 64))))
 }
 
-/// "2026-10-17 09:00", "2026-10-17T09:00:30": a date and time `offset` minutes ahead of UTC.
-pub(crate) fn parse_local(text: &str, offset: i32) -> Option<i64> {
+/// "2026-10-17 09:00", "2026-10-17T09:00:30": a date and time where `here` is (a zone, or
+/// minutes ahead of UTC).
+pub(crate) fn parse_local(text: &str, here: impl Offsets) -> Option<i64> {
     let (date, at) = text.trim().split_once(['T', ' '])?;
     let mut d = date.split('-');
     let (year, month, day) = (d.next()?.parse::<i64>().ok()?, d.next()?.parse::<u32>().ok()?, d.next()?.parse::<u32>().ok()?);
@@ -444,15 +446,15 @@ pub(crate) fn parse_local(text: &str, offset: i32) -> Option<i64> {
     if d.next().is_some() || c.next().is_some() || !(1601..=9999).contains(&year) || hour > 23 || minute > 59 || second > 59 {
         return None;
     }
-    let t = time::from_civil(year, month, day, hour, minute, second, offset);
+    let local = time::from_civil(year, month, day, hour, minute, second, 0);
     // A day the month does not have (31 April) comes back as another day: not a date.
-    let back = time::civil(t, offset);
-    (back.month == month && back.day == day).then_some(t)
+    let back = time::civil(local, 0);
+    (back.month == month && back.day == day).then(|| here.utc_of(local))
 }
 
 /// A time as the reading pane says it: "Fri 10/17/2026 9:00 AM", on this machine's clock.
 pub(crate) fn when_shown(s: &Session, t: i64) -> String {
-    s.region.stamp(&time::civil(t, s.tz_offset_min))
+    s.region.stamp(&s.zone.civil(t))
 }
 
 impl Session {

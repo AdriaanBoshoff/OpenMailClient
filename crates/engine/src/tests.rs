@@ -651,7 +651,10 @@ fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
     let told = |key, descending| {
         let mut sorted = rows.clone();
         sort(&mut sorted, key, descending);
-        groups(&sorted, key, now, 0, 0).into_iter().map(|g| (g.label, g.start, g.count, g.unread)).collect::<Vec<_>>()
+        groups(&sorted, key, now, &openmailclient_model::zone::Zone::utc(), 0)
+            .into_iter()
+            .map(|g| (g.label, g.start, g.count, g.unread))
+            .collect::<Vec<_>>()
     };
     let g = |label: &str, start, count, unread| (label.to_string(), start, count, unread);
     assert_eq!(
@@ -670,13 +673,15 @@ fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
     // Wednesday before is this week, by its name.
     let mut sorted = rows.clone();
     sort(&mut sorted, SortKey::Date, true);
-    let labels = |now, start| groups(&sorted, SortKey::Date, now, 0, start).into_iter().map(|g| g.label).collect::<Vec<_>>();
+    let labels = |now, start| {
+        groups(&sorted, SortKey::Date, now, &openmailclient_model::zone::Zone::utc(), start).into_iter().map(|g| g.label).collect::<Vec<_>>()
+    };
     assert_eq!(labels(now, 1), ["Today", "Yesterday", "Wednesday", "Last Week", "Three Weeks Ago", "Older", "No date"]);
     // Seen from November: the month before, and those before it.
     let november = time::from_civil(2026, 11, 28, 12, 0, 0, 0);
     assert_eq!(labels(november, 0), ["Last Month", "Older", "No date"]);
     // A day still to come is told forward.
-    let ahead = |y, m, d| groups(&[row(1, "a", "b", at(y, m, d))], SortKey::Date, now, 0, 0)[0].label.clone();
+    let ahead = |y, m, d| groups(&[row(1, "a", "b", at(y, m, d))], SortKey::Date, now, &openmailclient_model::zone::Zone::utc(), 0)[0].label.clone();
     assert_eq!(
         [
             ahead(2026, 10, 12),
@@ -710,7 +715,10 @@ fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
     assert_eq!(told(SortKey::Attachments, true), [g("With attachments", 0, 1, 0), g("No attachments", 1, 7, 2)]);
     // Earlier in the month than the last two weeks.
     let late = time::from_civil(2026, 10, 30, 12, 0, 0, 0);
-    assert_eq!(groups(&[row(1, "a", "b", at(2026, 10, 2))], SortKey::Date, late, 0, 0)[0].label, "Earlier This Month");
+    assert_eq!(
+        groups(&[row(1, "a", "b", at(2026, 10, 2))], SortKey::Date, late, &openmailclient_model::zone::Zone::utc(), 0)[0].label,
+        "Earlier This Month"
+    );
 
     // Through the session: the groups are told with the rows, and their headings are marked as
     // what the messages say.
@@ -738,13 +746,13 @@ fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
         for descending in [false, true] {
             sort(&mut many, key, descending);
             for (now, tz) in [(i64::MIN, i32::MIN), (i64::MAX, i32::MAX), (0, 0)] {
-                let found = groups(&many, key, now, tz, u32::MAX);
+                let found = groups(&many, key, now, &openmailclient_model::zone::Zone::fixed(tz), u32::MAX);
                 assert_eq!(found.iter().map(|g| g.count).sum::<usize>(), 200);
                 assert!(found.iter().all(|g| g.label.chars().count() <= 80));
             }
         }
     }
-    assert!(groups(&[], SortKey::Date, now, 0, 0).is_empty());
+    assert!(groups(&[], SortKey::Date, now, &openmailclient_model::zone::Zone::utc(), 0).is_empty());
 }
 
 #[test]
@@ -787,7 +795,7 @@ fn search_understands_fields_states_dates_and_sizes() {
     ];
     // Dates are the user's days: here two hours east of UTC.
     let find = |text: &str| -> Vec<usize> {
-        let query = parse(text, 120);
+        let query = parse(text, &openmailclient_model::zone::Zone::fixed(120));
         rows.iter().enumerate().filter(|(_, r)| query.matches(r)).map(|(n, _)| n).collect()
     };
     let all = vec![0, 1, 2, 3];
@@ -923,16 +931,19 @@ fn hostile_queries_never_panic() {
                 format!("before:{a}-{b} after:{b}-{a}"),
             ] {
                 for tz in [0, i32::MIN, i32::MAX] {
-                    let _ = parse(&text, tz).matches(&row);
+                    let _ = parse(&text, &openmailclient_model::zone::Zone::fixed(tz)).matches(&row);
                 }
             }
         }
     }
     // Far more clauses than are kept: those past the cap are left out, and it still answers.
     let long = "word ".repeat(10_000);
-    assert!(parse(&long, 0).matches(&openmailclient_model::Summary { subject: "a word".into(), ..Default::default() }));
-    let _ = parse(&"\"".repeat(100_001), 0);
-    let _ = parse(&"OR ".repeat(50_000), 0);
+    assert!(
+        parse(&long, &openmailclient_model::zone::Zone::utc())
+            .matches(&openmailclient_model::Summary { subject: "a word".into(), ..Default::default() })
+    );
+    let _ = parse(&"\"".repeat(100_001), &openmailclient_model::zone::Zone::utc());
+    let _ = parse(&"OR ".repeat(50_000), &openmailclient_model::zone::Zone::utc());
 }
 
 #[test]
@@ -1204,7 +1215,7 @@ fn a_message_prints_to_a_pdf_file() {
             &item,
             &crate::print::Job {
                 owner: "Alex Morgan",
-                tz_offset_min: 0,
+                zone: &openmailclient_model::zone::Zone::utc(),
                 now: 0,
                 setup: &openmailclient_layout::Setup::default(),
                 links: crate::print::Links::All,
@@ -1851,20 +1862,21 @@ fn page_setup_is_kept_and_printed_with() {
     let item = s.open.clone().unwrap();
     let listing = crate::print::Listing::default();
     let region = openmailclient_model::time::Region::default();
-    let job = |tz: i32| crate::print::Job {
+    let (utc, east_zone) = (openmailclient_model::zone::Zone::utc(), openmailclient_model::zone::Zone::fixed(120));
+    let job = |zone| crate::print::Job {
         owner: "Alex Morgan",
-        tz_offset_min: tz,
+        zone,
         now: openmailclient_model::time::from_civil(2026, 10, 12, 23, 5, 0, 0),
         setup: &kept,
         links: crate::print::Links::default(),
         listing: &listing,
         region: &region,
     };
-    let words = crate::print::words(&item, &job(0));
+    let words = crate::print::words(&item, &job(&utc));
     let word = |words: &[(String, String)], name: &str| words.iter().find(|w| w.0 == name).unwrap().1.clone();
     assert_eq!((word(&words, "Date"), word(&words, "Time")), ("10/12/2026".to_string(), "11:05 PM".to_string()));
     assert_eq!((word(&words, "User"), word(&words, "Subject")), ("Alex Morgan".to_string(), item.subject()));
-    let east = crate::print::words(&item, &job(120));
+    let east = crate::print::words(&item, &job(&east_zone));
     assert_eq!((word(&east, "Date"), word(&east, "Time")), ("10/13/2026".to_string(), "1:05 AM".to_string()));
 
     // Printing uses the setup, and what a print asks for is for that print only. Through the

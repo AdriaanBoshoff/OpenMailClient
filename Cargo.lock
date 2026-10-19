@@ -3030,6 +3030,7 @@ dependencies = [
  "chrono",
  "egui",
  "egui_kittest",
+ "iana-time-zone",
  "image",
  "log",
  "openmailclient-engine",

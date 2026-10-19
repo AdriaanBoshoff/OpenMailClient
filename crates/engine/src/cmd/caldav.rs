@@ -20,6 +20,7 @@ use crate::jobs::Ended;
 use crate::{CmdResult, EngineError, Session};
 use openmailclient_formats::ics;
 use openmailclient_model::calendar;
+use openmailclient_model::zone::Zone;
 use openmailclient_model::{FolderId, FolderKind, Item, ItemId, NameId, NamedKey, Progress, PropValue};
 use openmailclient_net::NetError;
 use openmailclient_net::dav::{self, Dav, Deleted, Put, Sync};
@@ -123,7 +124,7 @@ impl DavPlace {
 /// for itself, and when it was last written, is no change.
 fn hash_of(item: &Item) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in ics::write(std::slice::from_ref(item), 0, 0, None).bytes() {
+    for b in ics::write(std::slice::from_ref(item), &Zone::utc(), 0, None).bytes() {
         h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
     }
     h
@@ -266,7 +267,7 @@ pub(crate) fn sync_from(s: &mut Session, one: Option<usize>, wait: bool) -> CmdR
 fn gather(s: &mut Session, store: usize, setup: &DavSetup) -> (Vec<Here>, Vec<Gone>) {
     let deleted = s.find_folder(store, FolderKind::Deleted);
     let folders: HashSet<FolderId> = s.folders.get(store).map(|f| f.iter().map(|x| x.id).collect()).unwrap_or_default();
-    let (here_tz, now) = (s.tz_offset_min, s.time_now());
+    let (here_tz, now) = (s.zone.clone(), s.time_now());
     let Some(st) = s.stores.get_mut(store) else { return (Vec::new(), Vec::new()) };
     let mut out = Vec::new();
     let mut gone = Vec::new();
@@ -280,13 +281,13 @@ fn gather(s: &mut Session, store: usize, setup: &DavSetup) -> (Vec<Here>, Vec<Go
             let Ok(mut item) = st.load(folder, ItemId(row.id)) else { continue };
             if calendar::global_id(&item).is_none() {
                 // Known on the server for life by its UID, which comes of this.
-                calendar::set_global_id(&mut item, &calendar::new_global_id(now, row.id ^ u64::try_from(here_tz).unwrap_or(0)));
+                calendar::set_global_id(&mut item, &calendar::new_global_id(now, row.id ^ u64::try_from(here_tz.bias).unwrap_or(0)));
                 if st.update(folder, ItemId(row.id), item.clone()).is_err() {
                     continue;
                 }
             }
             let hash = hash_of(&item);
-            let data = || ics::write(std::slice::from_ref(&item), here_tz, now, None).into_bytes();
+            let data = || ics::write(std::slice::from_ref(&item), &here_tz, now, None).into_bytes();
             match DavPlace::of(&item) {
                 Some(place) if place.href.starts_with(&cal.href) && !here.known.contains_key(&place.href) => {
                     let changed = place.hash != hash;
@@ -561,7 +562,7 @@ fn apply(s: &mut Session, store: usize, t: &Took) -> (Vec<Value>, Vec<DavCal>) {
     let was: Vec<DavCal> = s.accounts.iter().find(|a| a.id == t.id).and_then(|a| a.caldav.as_ref()).map(|d| d.calendars.clone()).unwrap_or_default();
     let main = s.find_folder(store, FolderKind::Calendar);
     let deleted = s.find_folder(store, FolderKind::Deleted);
-    let (here_tz, now) = (s.tz_offset_min, s.time_now());
+    let (here_tz, now) = (s.zone.clone(), s.time_now());
     let mut folders: Vec<(FolderId, String)> = s.folders.get(store).map(|f| f.iter().map(|x| (x.id, x.name.clone())).collect()).unwrap_or_default();
     let mut kept = Vec::new();
     let mut shown = Vec::new();
@@ -643,7 +644,7 @@ fn apply(s: &mut Session, store: usize, t: &Took) -> (Vec<Value>, Vec<DavCal>) {
         // 3. Taken down: written onto the one it is here, else added.
         let mut taken = 0usize;
         for (href, etag, data) in &c.fetched {
-            let Ok(file) = ics::read(data, here_tz) else { continue };
+            let Ok(file) = ics::read(data, &here_tz) else { continue };
             let Some(event) = file.events.into_iter().next() else { continue };
             let goid = calendar::global_id_of_uid(&event.uid);
             let mine = by_href.get(href).copied().or_else(|| by_goid.get(&goid).copied());

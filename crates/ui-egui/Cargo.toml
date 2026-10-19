@@ -21,6 +21,10 @@ chrono = { workspace = true }
 # Decodes pictures a message carries as attachments; nothing else is read with it.
 image = { workspace = true, features = ["jpeg", "gif", "bmp"] }
 
+# The name the system gives its time zone; chrono already depends on it.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+iana-time-zone = { version = "0.1", features = ["fallback"] }
+
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 openmailclient-net = { workspace = true, features = ["fake"] }

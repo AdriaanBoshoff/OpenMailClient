@@ -309,7 +309,7 @@ fn main() -> ExitCode {
     if let Err(e) = session.use_this_system() {
         eprintln!("openmailclient: mail servers cannot be reached: {e}");
     }
-    session.tz_offset_min = openmailclient_ui_egui::local_offset_minutes();
+    session.set_system_zone(openmailclient_ui_egui::local_zone());
     session.region = region::of_this_system();
     // Copies of attachments an earlier run opened and could not clear away, a day on.
     openmailclient_engine::attachments::clear_opened(false);
