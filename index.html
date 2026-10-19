@@ -31,7 +31,7 @@
 <main>
 <section class="hero">
   <div class="wrap">
-    <p class="stage">Early · milestone M5 (calendar, people, tasks) in progress: the Calendar's views, appointments and recurring appointments are in, with time zones and their summer time, calendars keep in step with CalDAV servers, and accounts and their mail come over from Outlook</p>
+    <p class="stage">Early · milestone M5 (calendar, people, tasks) in progress: the Calendar's views, appointments and recurring appointments are in, with time zones and their summer time, meetings are sent and answered, Outlook's own included, calendars keep in step with CalDAV servers, and accounts and their mail come over from Outlook</p>
     <h1>The desktop mail client you know, <span>rebuilt in Rust and open.</span></h1>
     <p class="lead">OpenMailClient is a clean-room, open-source mail client aiming at parity with Outlook Classic,
       the Win32 desktop Outlook: the same layout and behaviour, <code>.pst</code> files that go both ways,
@@ -112,6 +112,10 @@
         <figcaption><b>Time zones,</b> a second one's hours beside ours; a series keeps its hour when the clocks change.</figcaption>
       </figure>
       <figure class="shot">
+        <a href="images/openmailclient-meeting.png"><img src="images/openmailclient-meeting.png" width="1280" height="800" loading="lazy" alt="A meeting invitation: a bar above it says when and where, that nothing else is planned then, with Accept, Tentative, Decline and Show in Calendar"></a>
+        <figcaption><b>Meetings,</b> answered from a bar above the invitation; in the calendar only once you answer. Outlook's requests work both ways.</figcaption>
+      </figure>
+      <figure class="shot">
         <a href="images/openmailclient-compose.png"><img src="images/openmailclient-compose.png" width="1440" height="860" loading="lazy" alt="A new message being written, with To, Cc, Subject and a formatted body"></a>
         <figcaption><b>Writing mail,</b> inline or in a window of its own.</figcaption>
       </figure>
@@ -142,7 +146,7 @@
       <li class="done"><b>M3c</b> Proof in Outlook: files we write open in Outlook Classic; 4K-page files</li>
       <li class="done"><b>M4</b> Accounts: sending and receiving, IMAP kept in step both ways, new mail told of as it comes, servers found from the address and its DNS records</li>
       <li><b>M1</b> Checks against Outlook, side by side: an account's mail now listed and dated as Outlook does it; dialogs in the theme's colours, and themes of your own for light and dark</li>
-      <li class="now"><b>M5</b> Calendar, People and Tasks: day, work week, week and month views and appointments (done); import from Outlook, accounts and their data files, shown first and Outlook's files left as they were (done); recurring appointments, one occurrence changed or deleted alone (done); <code>.ics</code> calendar files opened and saved (done); calendars kept in step with a CalDAV server such as Nextcloud, both ways (done); time zones with their summer time, a second zone's hours beside ours (done); meetings next</li>
+      <li class="now"><b>M5</b> Calendar, People and Tasks: day, work week, week and month views and appointments (done); import from Outlook, accounts and their data files, shown first and Outlook's files left as they were (done); recurring appointments, one occurrence changed or deleted alone (done); <code>.ics</code> calendar files opened and saved (done); calendars kept in step with a CalDAV server such as Nextcloud, both ways (done); time zones with their summer time, a second zone's hours beside ours (done); meetings, invitations sent, answered and called off, to and from Outlook (done); People next</li>
       <li><b>M6</b> MCP server, control channel and a web build through WASM</li>
       <li><b>M7</b> Sign-in to Gmail, Microsoft 365, Yahoo and others through OAuth 2.0 (after the first release)</li>
     </ol>
