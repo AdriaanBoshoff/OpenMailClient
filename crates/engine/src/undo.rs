@@ -102,6 +102,7 @@ impl Session {
                 }
                 self.refresh_folders(store);
                 self.reload_calendar()?;
+                self.reload_people()?;
                 return Ok(what);
             }
             Step::Removed { store, folder, was, mut item, .. } => {
@@ -113,6 +114,14 @@ impl Session {
             }
         };
         self.refresh_folders(at_store);
+        if self.module == crate::Module::People {
+            // A contact taken back is chosen where it is, among the others.
+            self.reload_people()?;
+            if crate::cmd::people::people_folder(self) == Some((at_store, at_folder)) {
+                self.people.selected = Some(at_id);
+                return Ok(what);
+            }
+        }
         if self.current != Some((at_store, at_folder)) {
             self.select_folder(at_store, at_folder)?;
         } else {

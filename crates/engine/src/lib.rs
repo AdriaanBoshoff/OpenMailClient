@@ -41,6 +41,8 @@ mod tests_import;
 #[cfg(test)]
 mod tests_meeting;
 #[cfg(test)]
+mod tests_people;
+#[cfg(test)]
 mod tests_pictures;
 #[cfg(test)]
 mod tests_print;
@@ -406,6 +408,8 @@ pub struct Session {
     pub outlook: Option<std::sync::Arc<dyn Fn() -> Vec<outlook::RawProfile> + Send + Sync>>,
     /// What the Calendar module shows.
     pub calendar: cmd::calendar::Shown,
+    /// What the People module shows.
+    pub people: cmd::people::Shown,
 }
 
 impl Default for Session {
@@ -492,6 +496,7 @@ impl Session {
             outlook: None,
             places: cmd::imap_sync::Places::default(),
             calendar: cmd::calendar::Shown::default(),
+            people: cmd::people::Shown::default(),
             certificates: accounts::Shown::default(),
             print_style: print::Style::default(),
             print_list: print::Listing::default(),

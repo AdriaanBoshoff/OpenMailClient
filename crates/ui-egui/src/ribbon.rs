@@ -75,6 +75,60 @@ const CALENDAR_HOME: &[Group] = &[
     ("Actions", &[small(Icon::Open, "Open", "ui.openAppointment"), small(Icon::Delete, "Delete", "calendar.delete")]),
 ];
 
+const PEOPLE_HOME: &[Group] = &[
+    (
+        "New",
+        &[
+            big(
+                Icon::People,
+                "New
+Contact",
+                "ui.contact",
+            ),
+            big(
+                Icon::People,
+                "New Contact
+Group",
+                "ui.contactGroup",
+            ),
+        ],
+    ),
+    ("Delete", &[big(Icon::Delete, "Delete", "people.delete")]),
+    ("Communicate", &[big(Icon::Mail, "E-mail", "people.email")]),
+    (
+        "Current View",
+        &[
+            with(big(Icon::People, "People", "people.view"), r#"{"view":"people"}"#),
+            with(
+                big(
+                    Icon::Page,
+                    "Business
+Card",
+                    "people.view",
+                ),
+                r#"{"view":"businessCard"}"#,
+            ),
+            with(big(Icon::Panes, "Card", "people.view"), r#"{"view":"card"}"#),
+            with(big(Icon::Sort, "Phone", "people.view"), r#"{"view":"phone"}"#),
+            with(big(Icon::Sidebar, "List", "people.view"), r#"{"view":"list"}"#),
+        ],
+    ),
+    (
+        "Share",
+        &[
+            big(
+                Icon::Forward,
+                "Forward
+Contact",
+                "people.forward",
+            ),
+            small(Icon::Save, "Save as vCard", "ui.saveCardsDialog"),
+        ],
+    ),
+    ("Find", &[small(Icon::Search, "Search People", "ui.searchPeople"), small(Icon::Import, "Open vCard", "ui.openCardsDialog")]),
+    ("Actions", &[small(Icon::Open, "Open", "ui.openContact")]),
+];
+
 const SEND_RECEIVE: &[Group] = &[
     (
         "Send & Receive",
@@ -157,6 +211,9 @@ impl MailUi {
             "ui.meeting" => self.session.is_enabled("calendar.newMeeting"),
             "ui.replyWithMeeting" => self.session.is_enabled("mail.replyWithMeeting"),
             "ui.saveCalendarDialog" => self.session.is_enabled("calendar.saveAs"),
+            "ui.contact" => self.session.is_enabled("people.new"),
+            "ui.contactGroup" => self.session.is_enabled("people.newGroup"),
+            "ui.openContact" | "ui.saveCardsDialog" => self.session.people.selected.is_some(),
             c if c.starts_with("ui.") => true,
             c => match menu_of(c) {
                 Some("categorize" | "followup") => self.session.is_enabled("mail.flag"),
@@ -170,13 +227,23 @@ impl MailUi {
 
     /// A button that stands for what is shown now, such as the Calendar's view.
     fn checked(&self, b: &Btn) -> bool {
-        b.cmd == "calendar.view" && b.params.contains(&format!("\"{}\"", self.session.calendar.view.name()))
+        match b.cmd {
+            "calendar.view" => b.params.contains(&format!("\"{}\"", self.session.calendar.view.name())),
+            "people.view" => b.params.contains(&format!("\"{}\"", self.session.people.view.name())),
+            _ => false,
+        }
     }
 
     fn press(&mut self, b: &Btn, below: egui::Pos2) {
         if b.cmd == "ui.openAppointment" {
             if let Some(id) = self.session.calendar.selected {
                 self.act("ui.appointment", json!({ "id": id }));
+            }
+            return;
+        }
+        if b.cmd == "ui.openContact" {
+            if let Some(id) = self.session.people.selected {
+                self.act("ui.contact", json!({ "id": id }));
             }
             return;
         }
@@ -190,6 +257,7 @@ impl MailUi {
     fn groups(&self) -> &'static [Group] {
         match self.tab {
             Tab::Home if self.session.module == openmailclient_engine::Module::Calendar => CALENDAR_HOME,
+            Tab::Home if self.session.module == openmailclient_engine::Module::People => PEOPLE_HOME,
             Tab::Home => HOME,
             Tab::SendReceive => SEND_RECEIVE,
             Tab::Folder => FOLDER,
@@ -683,7 +751,7 @@ impl MailUi {
         let side = Rect::from_min_size(rect.min, vec2(256.0, rect.height()));
         p.rect_filled(rect, 0.0, t.surface);
         p.rect_filled(side, 0.0, t.accent);
-        let entries: [(Icon, &str, &str, Value); 15] = [
+        let entries: [(Icon, &str, &str, Value); 17] = [
             (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
             (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
             (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
@@ -695,6 +763,8 @@ impl MailUi {
             (Icon::Save, "Export to a Data File…", "ui.exportDialog", Value::Null),
             (Icon::Calendar, "Open Calendar…", "ui.openCalendarDialog", Value::Null),
             (Icon::Calendar, "Save Calendar…", "ui.saveCalendarDialog", Value::Null),
+            (Icon::People, "Open vCard File…", "ui.openCardsDialog", Value::Null),
+            (Icon::People, "Save Contacts as vCard…", "ui.saveCardsDialog", json!({ "all": true })),
             (Icon::Close, "Close Data File", "file.closeStore", Value::Null),
             (Icon::Import, "Import from Outlook…", "ui.importOutlook", Value::Null),
             (Icon::People, "Account Settings…", "ui.accountSettings", Value::Null),
@@ -711,6 +781,7 @@ impl MailUi {
                 "ui.exportDialog" => self.session.is_enabled("file.export"),
                 "ui.importOutlook" => self.session.is_enabled("file.importOutlook"),
                 "ui.saveCalendarDialog" => self.session.is_enabled("calendar.saveAs"),
+                "ui.saveCardsDialog" => self.session.is_enabled("people.saveAs") && self.session.people.total > 0,
                 c if c.starts_with("ui.") => true,
                 c => self.session.is_enabled(c),
             };

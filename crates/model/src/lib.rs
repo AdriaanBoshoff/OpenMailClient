@@ -7,6 +7,7 @@
 
 pub mod calendar;
 pub mod codepage;
+pub mod contact;
 pub mod html;
 pub mod meeting;
 pub mod memstore;

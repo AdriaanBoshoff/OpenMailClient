@@ -358,7 +358,70 @@ pub fn sample_store(now: i64) -> MemStore {
     for item in appointments(now) {
         s.push_item(calendar, item);
     }
+    let contacts = s.push_folder(None, "Contacts", "IPF.Contact");
+    for item in people() {
+        s.push_item(contacts, item);
+    }
     s
+}
+
+/// The sample's people: those who write in the sample mail, with invented numbers and places
+/// of example.org, and a group of them.
+fn people() -> Vec<Item> {
+    use openmailclient_model::contact::{Address, Contact, Email, Group, Member, Phone, Place};
+    let person = |(name, address): (&str, &str), given: &str, surname: &str, company: &str, title: &str| Contact {
+        full_name: name.to_string(),
+        given: given.to_string(),
+        surname: surname.to_string(),
+        company: company.to_string(),
+        job_title: title.to_string(),
+        emails: vec![Email { address: address.to_string(), name: String::new() }],
+        ..Contact::default()
+    };
+    let mut priya = person(PRIYA, "Priya", "Raman", "Northwind Studio", "Product Lead");
+    priya.set_phone(Phone::Business, "+1 555 0100 214");
+    priya.set_phone(Phone::Mobile, "+1 555 0142 778");
+    priya.set_address(
+        Place::Business,
+        Address {
+            street: "12 Harbour Road".into(),
+            city: "Port Ellis".into(),
+            postal_code: "40112".into(),
+            country: "Example".into(),
+            ..Address::default()
+        },
+    );
+    priya.mailing = Some(Place::Business);
+    priya.categories = vec!["Launch".into()];
+    let mut tomas = person(TOMAS, "Tomás", "Lindqvist", "Northwind Studio", "Designer");
+    tomas.set_phone(Phone::Mobile, "+1 555 0177 301");
+    tomas.notes = "Prefers a call before noon.".into();
+    let mut june = person(JUNE, "June", "Okafor", "Riverside Print", "Account Manager");
+    june.set_phone(Phone::Business, "+1 555 0190 455");
+    june.web_page = "https://www.example.org/print".into();
+    june.birthday = Some(openmailclient_model::time::to_unix(openmailclient_model::time::from_civil(1990, 3, 14, 0, 0, 0, 0)).div_euclid(86_400));
+    let mut sam = person(("Sam Patel", "sam.patel@example.org"), "Sam", "Patel", "", "");
+    sam.set_phone(Phone::Home, "+1 555 0123 908");
+    sam.set_address(
+        Place::Home,
+        Address { street: "4 Willow Lane".into(), city: "Port Ellis".into(), postal_code: "40118".into(), ..Address::default() },
+    );
+    let mut out: Vec<Item> = [priya, tomas, june, sam]
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut c)| {
+            c.uid = format!("omc-sample-contact-{i}");
+            c.item(0)
+        })
+        .collect();
+    let team = Group {
+        name: "Launch team".into(),
+        members: [PRIYA, TOMAS].iter().map(|(name, address)| Member { name: name.to_string(), address: address.to_string() }).collect(),
+        uid: "omc-sample-group-0".into(),
+        ..Group::default()
+    };
+    out.push(team.item());
+    out
 }
 
 /// The sample calendar: a few days of our own invented plans around `now`, two of them at the

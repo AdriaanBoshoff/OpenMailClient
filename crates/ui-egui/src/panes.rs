@@ -67,6 +67,10 @@ impl MailUi {
             self.calendar_body(ui, rest);
             return;
         }
+        if self.session.module == Module::People {
+            self.people_body(ui, rest);
+            return;
+        }
         if self.session.module != Module::Mail {
             let p = ui.painter_at(rest);
             p.rect_filled(rest, 0.0, t.surface);

@@ -2858,3 +2858,167 @@ fn a_meeting_message_has_a_bar_that_says_what_it_is_and_answers_it() {
     assert!(ui.meeting_bar().is_none());
     draw_window(&mut ui, egui::vec2(1280.0, 800.0));
 }
+
+/// People draws every view, light and dark, at any size, with hostile names in it.
+#[test]
+fn people_draws_every_view_with_hostile_contacts() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "people" })).unwrap();
+    assert_eq!(ui.session.people.items.len(), 5);
+    for name in ["\u{202e}gnol ".repeat(300), "\u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{5e2}\u{5d5}\u{5dc}\u{5dd}".to_string(), "\u{0}\u{7}\t x".to_string()] {
+        ui.execute("people.new", &json!({ "fullName": name, "company": "y".repeat(2000), "notes": "z\n".repeat(5000) })).unwrap();
+    }
+    let n = ui.session.people.items.len();
+    for _ in 0..40 {
+        ui.execute("people.new", &json!({ "fullName": "Same Name", "emails": ["same@example.org"] })).unwrap();
+    }
+    assert_eq!(ui.session.people.items.len(), n + 40);
+    for dark in [false, true] {
+        ui.execute("ui.theme", &json!({ "theme": if dark { "dark" } else { "light" } })).unwrap();
+        for view in ["people", "businessCard", "card", "phone", "list"] {
+            ui.execute("people.view", &json!({ "view": view })).unwrap();
+            for size in [egui::vec2(1280.0, 800.0), egui::vec2(320.0, 240.0), egui::vec2(1.0, 1.0)] {
+                draw_window(&mut ui, size);
+            }
+        }
+    }
+    ui.execute("people.view", &json!({ "view": "people" })).unwrap();
+    ui.execute("view.folderPane", &Value::Null).unwrap();
+    let first = ui.session.people.items[0].0;
+    ui.execute("people.select", &json!({ "id": first })).unwrap();
+    draw_window(&mut ui, egui::vec2(900.0, 600.0));
+    // Nothing found draws too.
+    ui.execute("people.search", &json!({ "query": "nobody-here-at-all" })).unwrap();
+    assert!(ui.session.people.items.is_empty());
+    draw_window(&mut ui, egui::vec2(900.0, 600.0));
+}
+
+/// The contact window opens on a contact as it is, keeps what is not changed, and makes and
+/// changes contacts; the group window does the same for groups.
+#[test]
+fn the_contact_and_group_windows_make_and_change_people() {
+    use openmailclient_formats::vcf::Card;
+    use openmailclient_model::contact::Place;
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "people" })).unwrap();
+    ui.execute("ui.contact", &Value::Null).unwrap();
+    let mut form = ui.contact.clone().unwrap();
+    assert!(form.id.is_none());
+    form.full_name = "Ada Quill".to_string();
+    form.company = "Quill & Ink".to_string();
+    form.emails[0] = "ada@example.org".to_string();
+    form.phones[2] = "+1 555 0100".to_string();
+    form.addresses[1].city = "Lowmoor".to_string();
+    form.mailing = Some(Place::Home);
+    form.birthday = "1985-07-01".to_string();
+    form.categories = "Friends; Book club".to_string();
+    ui.contact = Some(form.clone());
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    let id = ui.execute("people.new", &form.params()).unwrap()["id"].as_u64().unwrap();
+    ui.contact = None;
+    ui.execute("ui.contact", &json!({ "id": id })).unwrap();
+    let opened = ui.contact.clone().unwrap();
+    assert_eq!(opened.id, Some(id));
+    assert_eq!((opened.full_name.as_str(), opened.company.as_str(), opened.emails[0].as_str()), ("Ada Quill", "Quill & Ink", "ada@example.org"));
+    assert_eq!((opened.phones[2].as_str(), opened.addresses[1].city.as_str(), opened.birthday.as_str()), ("+1 555 0100", "Lowmoor", "1985-07-01"));
+    assert_eq!(opened.mailing, Some(Place::Home));
+    assert_eq!(opened.categories, "Friends, Book club");
+    let Ok(Card::Contact(c)) = ui.session.person(id) else { panic!("a contact") };
+    assert_eq!((c.given.as_str(), c.surname.as_str()), ("Ada", "Quill"));
+    // A change that leaves the name alone keeps its parts as they were.
+    let mut changed = opened.clone();
+    changed.job_title = "Editor".to_string();
+    changed.addresses[1] = Default::default();
+    ui.execute("people.change", &changed.params()).unwrap();
+    let Ok(Card::Contact(c)) = ui.session.person(id) else { panic!("a contact") };
+    assert_eq!((c.given.as_str(), c.job_title.as_str(), c.mailing), ("Ada", "Editor", None));
+    assert!(c.address(Place::Home).is_none());
+    // "Surname, Given" is read as a name is written.
+    let mut renamed = changed.clone();
+    renamed.full_name = "Quill, Ada Mae".to_string();
+    ui.execute("people.change", &renamed.params()).unwrap();
+    let Ok(Card::Contact(c)) = ui.session.person(id) else { panic!("a contact") };
+    assert_eq!((c.given.as_str(), c.surname.as_str(), c.display_name().as_str()), ("Ada Mae", "Quill", "Ada Mae Quill"));
+    // A group, made of an address and a contact.
+    ui.contact = None;
+    ui.execute("ui.contactGroup", &Value::Null).unwrap();
+    let mut group = ui.group.clone().unwrap();
+    group.name = "Readers".to_string();
+    group.members = "ada@example.org\n\n\"Ben\" <ben@example.org>\n".to_string();
+    ui.group = Some(group.clone());
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    let gid = ui.execute("people.newGroup", &group.params()).unwrap()["id"].as_u64().unwrap();
+    ui.group = None;
+    ui.execute("ui.contact", &json!({ "id": gid })).unwrap();
+    assert!(ui.contact.is_none(), "a group opens in the group window");
+    let opened = ui.group.clone().unwrap();
+    assert_eq!(opened.members.lines().count(), 2);
+    assert!(opened.members.contains("\"Ben\" <ben@example.org>"));
+    assert!(ui.execute("ui.contact", &json!({ "id": 999_999_999 })).is_err());
+}
+
+/// The keys go through the same commands: arrows choose, Delete takes away, Ctrl+Z puts back.
+#[test]
+fn people_keys_choose_open_and_delete() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "people" })).unwrap();
+    let first = ui.session.people.items[0].0;
+    let second = ui.session.people.items[1].0;
+    let step = |ui: &mut MailUi, by: isize| {
+        ui.people_step(by);
+        for (id, params) in std::mem::take(&mut ui.actions) {
+            ui.execute(&id, &params).unwrap();
+        }
+    };
+    ui.session.people.selected = None;
+    step(&mut ui, 1);
+    assert_eq!(ui.session.people.selected, Some(first));
+    step(&mut ui, 1);
+    assert_eq!(ui.session.people.selected, Some(second));
+    step(&mut ui, isize::MAX);
+    assert_eq!(ui.session.people.selected, ui.session.people.items.last().map(|(id, _)| *id));
+    step(&mut ui, isize::MIN);
+    assert_eq!(ui.session.people.selected, Some(first));
+    let before = ui.session.people.items.len();
+    ui.execute("people.delete", &Value::Null).unwrap();
+    assert_eq!(ui.session.people.items.len(), before - 1);
+    ui.execute("edit.undo", &Value::Null).unwrap();
+    assert_eq!(ui.session.people.items.len(), before);
+    // Save as vCard asks the host where; with nothing chosen it says so.
+    ui.execute("ui.saveCardsDialog", &json!({ "all": true })).unwrap();
+    assert_eq!(ui.requests.last(), Some(&UiRequest::SaveCards(Vec::new())));
+    ui.session.people.selected = None;
+    assert!(ui.execute("ui.saveCardsDialog", &Value::Null).is_err());
+}
+
+/// A vCard file is shown card by card, nothing added till asked, and a card for someone known
+/// already brings them up to date.
+#[test]
+fn a_vcard_file_is_shown_before_its_cards_are_added() {
+    use openmailclient_formats::vcf::Card;
+    let dir = std::env::temp_dir().join(format!("omc-ui-vcf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("cards.vcf");
+    std::fs::write(
+        &path,
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Nell Harper\r\nN:Harper;Nell;;;\r\nEMAIL:nell@example.org\r\nEND:VCARD\r\n\
+         BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Priya Raman\r\nN:Raman;Priya;;;\r\nUID:omc-sample-contact-0\r\nTITLE:Head of Product\r\nEND:VCARD\r\n",
+    )
+    .unwrap();
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "people" })).unwrap();
+    let before = ui.session.people.total;
+    let shown = ui.execute("ui.openCards", &json!({ "path": path })).unwrap();
+    assert_eq!(shown["cards"], 2);
+    assert!(ui.modal_open());
+    draw_window(&mut ui, egui::vec2(1100.0, 760.0));
+    draw_window(&mut ui, egui::vec2(320.0, 240.0));
+    assert_eq!(ui.session.people.total, before, "nothing is added before it is asked for");
+    ui.execute("ui.openCards", &json!({ "import": true })).unwrap();
+    assert!(ui.cards_file.is_none());
+    assert_eq!(ui.session.people.total, before + 1, "one added, one brought up to date");
+    assert!(ui.session.people.items.iter().any(|(_, c)| matches!(c, Card::Contact(c) if c.job_title == "Head of Product")));
+    assert!(ui.execute("ui.openCards", &json!({ "import": true })).is_err(), "the window is closed");
+    assert!(ui.execute("ui.openCards", &json!({ "path": dir.join("none.vcf") })).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

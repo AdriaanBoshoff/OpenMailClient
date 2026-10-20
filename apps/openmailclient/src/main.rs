@@ -171,6 +171,41 @@ impl App {
                         self.run("calendar.saveAs", json!({ "path": path }));
                     }
                 }
+                UiRequest::OpenCards => {
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Open vCard file")
+                        .add_filter("vCard file", &["vcf", "vcard"])
+                        .add_filter("All files", &["*"])
+                        .pick_file();
+                    if let Some(path) = picked
+                        && let Err(e) = self.ui.execute("ui.openCards", &json!({ "path": path }))
+                    {
+                        self.ui.session.status = e;
+                    }
+                }
+                UiRequest::SaveCards(ids) => {
+                    // One card is named after its contact; several after the folder.
+                    let named = match ids.as_slice() {
+                        [id] => self.ui.session.person(*id).ok().map(|c| c.name()),
+                        _ => None,
+                    };
+                    let stem: String = named
+                        .unwrap_or_else(|| "Contacts".to_string())
+                        .chars()
+                        .map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
+                        .take(80)
+                        .collect();
+                    let stem = if stem.trim().is_empty() { "Contact".to_string() } else { stem.trim().to_string() };
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Save as vCard")
+                        .set_file_name(format!("{stem}.vcf"))
+                        .add_filter("vCard file", &["vcf"])
+                        .save_file();
+                    if let Some(path) = picked {
+                        let params = if ids.is_empty() { json!({ "path": path, "all": true }) } else { json!({ "path": path, "ids": ids }) };
+                        self.run("people.saveAs", params);
+                    }
+                }
                 UiRequest::OpenLink(address) => {
                     self.ui.session.status = match open_in_browser(&address) {
                         Ok(()) => "Opened in the browser".to_string(),

@@ -18,6 +18,7 @@ mod import;
 mod line_edit;
 mod meeting;
 mod panes;
+mod people;
 mod pictures;
 mod preview;
 mod progress;
@@ -83,6 +84,11 @@ pub enum UiRequest {
     OpenCalendar,
     /// Pick where the calendar is saved as a calendar file (`calendar.saveAs`).
     SaveCalendar,
+    /// Pick a vCard file (.vcf) to open (`ui.openCards`).
+    OpenCards,
+    /// Pick where contacts are saved as a vCard file (`people.saveAs`): the ones named, or
+    /// every one in the folder shown when there are none.
+    SaveCards(Vec<u64>),
     /// Hand a web address to the system's browser. Queued only when the person presses Open in
     /// the link dialog, with an address the engine has checked.
     OpenLink(String),
@@ -217,6 +223,20 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         label: "New Appointment",
         params: r#"{"id": an appointment's id to open it; none for a new one, "occurrence": "YYYY-MM-DD" to open one occurrence of a series (default: the one chosen)}"#,
     },
+    UiCommand { id: "ui.contact", label: "New Contact", params: r#"{"id": a contact's or group's id to open it; none for a new contact}"# },
+    UiCommand { id: "ui.contactGroup", label: "New Contact Group", params: "" },
+    UiCommand { id: "ui.openCardsDialog", label: "Open vCard File…", params: "" },
+    UiCommand {
+        id: "ui.saveCardsDialog",
+        label: "Save as vCard…",
+        params: r#"{"all": true for every contact in the folder (default: the one chosen)}"#,
+    },
+    UiCommand {
+        id: "ui.openCards",
+        label: "Open vCard File",
+        params: r#"{"path": a vCard file, or "attachment": the number of an attachment of the open message} opens the window on what it holds (people.import), every card chosen; {"import": true, "only": [card numbers] (default: those chosen)} adds them and shows People; {"close": true} closes it"#,
+    },
+    UiCommand { id: "ui.searchPeople", label: "Search People", params: "" },
     UiCommand { id: "ui.quit", label: "Exit", params: "" },
 ];
 
@@ -366,6 +386,16 @@ pub struct MailUi {
     pub(crate) cal_scroll: bool,
     /// The appointment window, open.
     pub(crate) appointment: Option<calendar::AppointmentForm>,
+    /// The contact and contact group windows, open, and Open vCard File.
+    pub(crate) contact: Option<people::ContactForm>,
+    pub(crate) group: Option<people::GroupForm>,
+    pub(crate) cards_file: Option<people::CardsWindow>,
+    /// What is typed in People's search box, the box to be focused, the list to scroll to the
+    /// one chosen, and the chosen contact's picture.
+    pub(crate) people_query: String,
+    pub(crate) people_search_focus: bool,
+    pub(crate) people_scroll: bool,
+    pub(crate) people_face: people::Face,
     /// The bar above the open meeting message, by the message it was worked out for.
     pub(crate) invitation: Option<(String, Option<meeting::Bar>)>,
 }
@@ -583,6 +613,13 @@ impl MailUi {
             cal_nav: None,
             cal_scroll: true,
             appointment: None,
+            contact: None,
+            group: None,
+            cards_file: None,
+            people_query: String::new(),
+            people_search_focus: false,
+            people_scroll: false,
+            people_face: people::Face::default(),
             invitation: None,
         }
     }
@@ -775,6 +812,25 @@ impl MailUi {
             "ui.openCalendarDialog" => self.requests.push(UiRequest::OpenCalendar),
             "ui.saveCalendarDialog" => self.requests.push(UiRequest::SaveCalendar),
             "ui.openCalendar" => return self.calendar_file_command(params),
+            "ui.contact" => return self.contact_command(params),
+            "ui.contactGroup" => return self.group_command(),
+            "ui.openCardsDialog" => self.requests.push(UiRequest::OpenCards),
+            "ui.saveCardsDialog" => {
+                if !self.session.is_enabled("people.saveAs") {
+                    return Err("There are no contacts to save".to_string());
+                }
+                let ids = if params.get("all").and_then(Value::as_bool) == Some(true) {
+                    Vec::new()
+                } else {
+                    vec![self.session.people.selected.ok_or("No contact is chosen")?]
+                };
+                self.requests.push(UiRequest::SaveCards(ids));
+            }
+            "ui.openCards" => return self.cards_command(params),
+            "ui.searchPeople" => {
+                self.execute("nav.module", &json!({ "module": "people" }))?;
+                self.people_search_focus = true;
+            }
             "ui.printPreview" => {
                 if params.get("close").and_then(Value::as_bool) == Some(true) {
                     self.preview = None;
@@ -1113,6 +1169,9 @@ impl MailUi {
         self.time_zones_window(&ctx);
         self.alert_window(&ctx);
         self.appointment_window(&ctx);
+        self.contact_window(&ctx);
+        self.group_window(&ctx);
+        self.cards_file_window(&ctx);
 
         for (id, params) in std::mem::take(&mut self.actions) {
             if let Err(e) = self.execute(&id, &params) {
@@ -1132,6 +1191,9 @@ impl MailUi {
             || self.themes_window.is_some()
             || self.import_window.is_some()
             || self.calendar_file.is_some()
+            || self.contact.is_some()
+            || self.group.is_some()
+            || self.cards_file.is_some()
     }
 
     fn shortcuts(&mut self, ui: &mut Ui) {
@@ -1153,7 +1215,49 @@ impl MailUi {
         if hit(ctrl_shift, Key::A) {
             run.push(("ui.appointment", Value::Null));
         }
+        if hit(ctrl_shift, Key::C) {
+            run.push(("ui.contact", Value::Null));
+        }
+        if hit(ctrl_shift, Key::L) {
+            run.push(("ui.contactGroup", Value::Null));
+        }
         let calendar = self.session.module == openmailclient_engine::Module::Calendar;
+        let people = self.session.module == openmailclient_engine::Module::People;
+        if people {
+            // People's own keys: a new contact on Ctrl+N, the arrows through the list, Enter
+            // to open the one chosen, Ctrl+F to send it on as a card, Ctrl+E to search.
+            if hit(ctrl, Key::N) {
+                run.push(("ui.contact", Value::Null));
+            }
+            if hit(ctrl, Key::E) {
+                self.people_search_focus = true;
+            }
+            if hit(ctrl, Key::F) {
+                run.push(("people.forward", Value::Null));
+            }
+            if hit(ctrl, Key::D) || (!typing && hit(Modifiers::NONE, Key::Delete)) {
+                run.push(("people.delete", Value::Null));
+            }
+            if !typing {
+                for (key, by) in [
+                    (Key::ArrowDown, 1),
+                    (Key::ArrowUp, -1),
+                    (Key::PageDown, 10),
+                    (Key::PageUp, -10),
+                    (Key::Home, isize::MIN),
+                    (Key::End, isize::MAX),
+                ] {
+                    if hit(Modifiers::NONE, key) {
+                        self.people_step(by);
+                    }
+                }
+                if let Some(id) = self.session.people.selected
+                    && hit(Modifiers::NONE, Key::Enter)
+                {
+                    run.push(("ui.contact", json!({ "id": id })));
+                }
+            }
+        }
         if calendar {
             // The Calendar's own keys: views on Ctrl+Alt+1 to 4, a new appointment on Ctrl+N,
             // the days before and after on Alt+Up and Alt+Down.
@@ -1182,14 +1286,15 @@ impl MailUi {
                 run.push(("ui.appointment", json!({ "id": id })));
             }
         }
+        let mail_keys = !calendar && !people;
         for (key, id) in [
-            (Key::N, if calendar { "" } else { "mail.new" }),
-            (Key::R, "mail.reply"),
-            (Key::F, "mail.forward"),
+            (Key::N, if mail_keys { "mail.new" } else { "" }),
+            (Key::R, if people { "" } else { "mail.reply" }),
+            (Key::F, if people { "" } else { "mail.forward" }),
             (Key::O, "ui.openDialog"),
-            (Key::Q, "mail.markRead"),
-            (Key::U, "mail.markUnread"),
-            (Key::D, "mail.delete"),
+            (Key::Q, if people { "" } else { "mail.markRead" }),
+            (Key::U, if people { "" } else { "mail.markUnread" }),
+            (Key::D, if people { "" } else { "mail.delete" }),
             (Key::S, "compose.saveDraft"),
         ] {
             if !id.is_empty() && hit(ctrl, key) {
@@ -1222,7 +1327,7 @@ impl MailUi {
         if !typing && hit(ctrl, Key::Z) {
             run.push(("edit.undo", Value::Null));
         }
-        if !typing && !calendar {
+        if !typing && mail_keys {
             for (key, id) in [
                 (Key::ArrowDown, "mail.next"),
                 (Key::ArrowUp, "mail.previous"),
@@ -1259,6 +1364,8 @@ impl MailUi {
         icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(16.0, 16.0)), Icon::Mail, t.title_text);
         let place = if self.session.module == openmailclient_engine::Module::Calendar {
             "Calendar".to_string()
+        } else if self.session.module == openmailclient_engine::Module::People {
+            "Contacts".to_string()
         } else {
             self.session.current_folder().map(|f| f.name.clone()).unwrap_or_else(|| "No data file".to_string())
         };

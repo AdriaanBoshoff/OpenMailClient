@@ -10,6 +10,7 @@ pub mod links;
 pub mod metafile;
 pub mod rich;
 pub mod rtf;
+pub mod vcf;
 mod wmf;
 mod words;
 

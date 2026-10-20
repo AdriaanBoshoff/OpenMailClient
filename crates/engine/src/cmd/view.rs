@@ -107,6 +107,9 @@ fn module(s: &mut Session, p: &Value) -> CmdResult {
     if s.module == Module::Calendar {
         s.reload_calendar()?;
     }
+    if s.module == Module::People {
+        s.reload_people()?;
+    }
     ok()
 }
 

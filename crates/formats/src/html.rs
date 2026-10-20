@@ -1378,7 +1378,7 @@ fn family(v: &str) -> Option<Arc<str>> {
 
 /// Base64 (RFC 4648 section 4, either alphabet) to bytes. White space is passed over and the
 /// data ends at the first `=`; anything else that is not base64 means there is no picture.
-fn base64(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn base64(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() / 4 * 3);
     let (mut held, mut bits) = (0u32, 0u32);
     for byte in text.bytes() {
