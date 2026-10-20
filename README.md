@@ -38,8 +38,11 @@ Every picture is the app drawing its own invented sample mailbox, headless, with
 | ![Opening an attachment whose name reads as a PDF but is a web page: it can be saved, not opened](docs/images/openmailclient-attachment.png) | ![A recurring appointment's window on the whole series: weekly on Monday and Wednesday, eight times, said in words with the first days it falls on; behind it, each occurrence with a loop and a changed one with the loop struck through](docs/images/openmailclient-recurrence.png) |
 | **Opening an attachment.** A file passing for another kind is only saved. | **Recurring appointments.** One occurrence or the whole series, the pattern in words as you choose it. |
 | ![Open Calendar: a calendar file's events shown before they are added, each with its time, place and pattern, chosen one by one](docs/images/openmailclient-open-calendar.png) | ![Time Zones: dates shown in Berlin's time, with New York's hours beside them in the work week view and the time now in each](docs/images/openmailclient-time-zones.png) |
-| ![A meeting invitation: a bar above it says when and where, that nothing else is planned then, with Accept, Tentative, Decline and Show in Calendar](docs/images/openmailclient-meeting.png) | |
-| **Open Calendar.** Each event shown and chosen; one you have already is brought up to date. | |
+| **Open Calendar.** Each event shown and chosen; one you have already is brought up to date. | **Time zones.** Summer time kept, a second zone's hours beside ours. |
+| ![A meeting invitation: a bar above it says when and where, that nothing else is planned then, with Accept, Tentative, Decline and Show in Calendar](docs/images/openmailclient-meeting.png) | ![People: the sample contacts listed by surname beside the chosen contact group's card with its members](docs/images/openmailclient-people.png) |
+| **Meetings,** answered from a bar above the invitation, to and from Outlook. | **People,** found in every field as you type; vCard files shown card by card first. |
+| ![People's Business Card view: a card for each contact with company, title, numbers and address](docs/images/openmailclient-business-cards.png) | |
+| **Five views** as Outlook has them: People, Business Card, Card, Phone and List. | |
 
 ## Progress
 
@@ -57,13 +60,13 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | M3b | **The do-later batch**: journalled changes, a save into the data file where it is, and what M2 and M3 left | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
 | M3c | **Proof in Outlook, 4K-page writing**: files we write open in Outlook Classic (done); 4K-page data files written (done); changes saved on their own (done); a changed message's size (done); files from before M3c.1 (done); hidden items exported from an `.ost` (done); compressed 4K-page blocks (done) | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
 | M4 | **Accounts**: IMAP, POP3 and SMTP; protocol clients tested against a fake server (done); TLS with checked certificates, passwords in the system's credential store (done); a server's own certificate trusted on the owner's word, for that server only (done); accounts added, tested and kept (done); mail sent and kept in Sent Items (done); mail received by POP3 and IMAP, F9 (done); new mail told of at the corner of the screen and with a sound of our own, Send/Receive on a timer, its progress in a window of its own with a way to stop it (done); Delay Delivery and Expires After, a held message going at its minute (done); Account Settings in the window, the servers found from the address and its domain's DNS records (done); each account in a data file of its own (done); pictures on a server downloaded when asked for, over HTTPS only (done); attachments opened or saved on a double-click, a program or script only saved (done); checked against a real server (done). OAuth sign-in is M7 | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
-| M5 | **Calendar, People and Tasks**: the Calendar's day, work week, week and month views, appointments made, changed and deleted (done); Import from Outlook: accounts and their mail, calendar, contacts and tasks (done); recurring appointments, one occurrence changed alone (done); `.ics` calendar files opened and saved (done); calendars kept in step with a CalDAV server, as with Nextcloud (done); time zones (done); meetings, invitations sent and answered (done); time zones with their summer time, a second zone beside ours (done); meetings, People and Tasks (next, in that order) | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
+| M5 | **Calendar, People and Tasks**: the Calendar's day, work week, week and month views, appointments made, changed and deleted (done); Import from Outlook: accounts and their mail, calendar, contacts and tasks (done); recurring appointments, one occurrence changed alone (done); `.ics` calendar files opened and saved (done); calendars kept in step with a CalDAV server, as with Nextcloud (done); time zones (done); meetings, invitations sent and answered (done); time zones with their summer time, a second zone beside ours (done); People, contacts and contact groups in five views and vCard files opened and saved (done); Tasks (next) | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
 | M6 | **MCP server, control channel, web build** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M7 | **Third-party sign-in**: Gmail, Outlook.com and Microsoft 365, Yahoo and others through OAuth 2.0 (XOAUTH2, OAUTHBEARER), signed in through the system's browser, tokens in the system's credential store; until then such accounts sign in with an app password | ![after release](https://img.shields.io/badge/-after%20release-lightgrey) |
 
 Closed milestones still have work left over: it is not dropped. Each piece is a row in
 [Do later](ROADMAP.md#do-later-from-m2) with the slot it lands in, and is struck when it lands.
-67 rows are done; 29 are open: 17 in M5, 1 in M6, 1 in M7 (after the first release), 1 with M1's checks against
+67 rows are done; 32 are open: 20 in M5, 1 in M6, 1 in M7 (after the first release), 1 with M1's checks against
 Outlook, and 9 that wait on something we do not have yet (an Outlook-written file of a kind we may
 read, a reader we can try without driving a window, a printer we may use).
 
@@ -71,13 +74,13 @@ read, a reader we can try without driving a window, a printer we may use).
 
 | Area | Done | | |
 |---|---|---|---|
-| Mail | 37 of 68 | `██████████░░░░░░░░░░` | 54% |
+| Mail | 38 of 68 | `███████████░░░░░░░░░` | 56% |
 | File | 12 of 16 | `███████████████░░░░░` | 75% |
 | Message window | 6 of 18 | `██████░░░░░░░░░░░░░░` | 33% |
 | Calendar | 17 of 19 | `█████████████████░░░` | 89% |
-| People | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
+| People | 4 of 5 | `████████████████░░░░` | 80% |
 | Tasks | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
-| **All** | **72 of 131** | `███████████░░░░░░░░░` | **55%** |
+| **All** | **77 of 131** | `████████████░░░░░░░░` | **59%** |
 
 ### File formats and protocols
 
@@ -161,7 +164,7 @@ read, a reader we can try without driving a window, a printer we may use).
   on screen beyond what egui shapes; metafiles that copy with a mask or see-through; the
   printer's own settings (trays, two-sided). Each is scheduled in
   [ROADMAP.md](ROADMAP.md#do-later-from-m2).
-- People and Tasks; the Scheduling Assistant.
+- Tasks; CardDAV, the Address Book and Mail Merge; the Scheduling Assistant.
 - The MCP server, the control channel and the web build.
 
 ## Run it
