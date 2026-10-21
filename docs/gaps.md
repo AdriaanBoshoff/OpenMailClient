@@ -1,12 +1,12 @@
 # Gaps
 
-**Status:** revision 117 · 2026-10-21 · ranked: the top of the list is what hurts most.
+**Status:** revision 118 · 2026-10-21 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
 0. **No sign-in to Gmail, Outlook.com, Microsoft 365 or Yahoo.** They refuse a password over IMAP
    and SMTP (or ask for an app password); they want OAuth 2.0 (SASL XOAUTH2 or OAUTHBEARER,
-   RFC 7628). This is M7, put after the first release by the owner's choice: sign-in through the
+   RFC 7628). This is M8, put after the first release by the owner's choice: sign-in through the
    system's browser with PKCE, tokens kept and renewed in the system's credential store. Until
    then such accounts sign in with an app password, and Find settings says so.
 1. **IMAP is kept in step by message, not by folder, and there is no Exchange.** Accounts are kept
@@ -58,7 +58,9 @@
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **The Tasks** module shows a placeholder (M5.9). People has its five views, contacts and groups and vCard files (M5.8); CardDAV, the Address Book and Mail Merge are do-laters in ROADMAP (M5.11). The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6) and meetings, invitations sent, answered and called off (M5.7); the Scheduling Assistant is a do-later in ROADMAP.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
-6. **Web build.** The engine and everything under it compiles for wasm32; there is no web app.
+6. **Web build and web access.** The engine and everything under it compiles for wasm32; there is no web app (M6),
+   and the mailbox cannot be reached from a browser on another device (M7: served over HTTPS by
+   OpenMailClient itself from the machine it runs on, paired once and signed in with a passkey).
 
 ## Built but unproven
 
@@ -91,6 +93,7 @@
 
 ## Revision history
 
+- 118 · 2026-10-21 — milestones renumbered: web access is M7, third-party sign-in M8.
 - 117 · 2026-10-21 — M4.16: mail shown as it comes down; closing while it does.
 - 116 · 2026-10-20 — M5.8: People: contacts, contact groups and vCard files.
 - 115 · 2026-10-19 — M5.10 (first part): a Calendar folder made in a data file that has none.
@@ -104,14 +107,14 @@
 - 107 · 2026-10-17 — M5.2: Import from Outlook: accounts and their data files.
 - 106 · 2026-10-17 — M1.9: dialogs in the theme's colours; themes of your own for light and dark.
 - 105 · 2026-10-17 — M5.1: the Calendar: views and appointments made, changed and deleted.
-- 104 · 2026-10-17 — M7 (OAuth sign-in) put after the first release; M5 next.
+- 104 · 2026-10-17 — M8 (OAuth sign-in) put after the first release; M5 next.
 - 103 · 2026-10-17 — M4.15: an account's servers found from its domain's DNS records; M4 closed.
 - 102 · 2026-10-17 — M4.14: an account's servers found from its address.
 - 101 · 2026-10-17 — M4.13: pictures decoded off the thread that draws the window.
 - 100 · 2026-10-17 — M4.12: the places of messages read apart from the window.
 - 99 · 2026-10-17 — M4.12: Drafts on the server.
 - 98 · 2026-10-17 — M4.12: IMAP folders renamed, moved and deleted followed both ways.
-- 97 · 2026-10-17 — M1.8: shown as Outlook shows it; third-party sign-in (OAuth 2.0) is the last milestone, M7.
+- 97 · 2026-10-17 — M1.8: shown as Outlook shows it; third-party sign-in (OAuth 2.0) is the last milestone, M8.
 - 96 · 2026-10-15 — M4.12: new mail told of as it comes (IDLE).
 - 95 · 2026-10-15 — M4.12: only what changed fetched from an IMAP server (CONDSTORE, QRESYNC).
 - 94 · 2026-10-15 — M4.9: Delay Delivery and Expires After.

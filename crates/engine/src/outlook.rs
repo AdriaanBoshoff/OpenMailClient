@@ -218,7 +218,7 @@ pub fn read(raw: &RawProfile, at: usize) -> Profile {
             (None, None) => {
                 out.skipped.push(Skipped {
                     name: name_of,
-                    why: "it is not an IMAP or POP3 account (an Exchange or Microsoft 365 account is signed in to as M7 comes)".into(),
+                    why: "it is not an IMAP or POP3 account (an Exchange or Microsoft 365 account is signed in to as M8 comes)".into(),
                 });
                 continue;
             }
