@@ -323,6 +323,9 @@ pub(crate) struct Prompt {
     pub focus: bool,
 }
 
+/// How long a window asked to close waits for Send/Receive to stop, in milliseconds.
+const LEAVE_WAIT_MS: u64 = 3_000;
+
 pub struct MailUi {
     pub session: Session,
     pub requests: Vec<UiRequest>,
@@ -339,6 +342,10 @@ pub struct MailUi {
     pub(crate) calendar_file: Option<calendar_file::CalendarFileWindow>,
     /// Exit was asked for once while changes were unsaved.
     quit_asked: bool,
+    /// Exit was asked for while work ran on threads of its own: it was asked to stop, and the
+    /// window closes once it has (`close_now`), counted from the first time it was looked at.
+    leaving: bool,
+    leaving_since: Option<u64>,
     /// Messages are read as plain text even when they have a formatted body.
     pub(crate) plain_bodies: bool,
     /// The open message's formatted body, kept until another message is opened.
@@ -581,6 +588,8 @@ impl MailUi {
             import_window: None,
             calendar_file: None,
             quit_asked: false,
+            leaving: false,
+            leaving_since: None,
             plain_bodies: false,
             body_doc: None,
             pictures: pictures::Pictures::default(),
@@ -744,6 +753,15 @@ impl MailUi {
     /// True when the window may close. With unsaved changes the first asking only says so;
     /// asking again straight after throws them away. No data file is written by closing.
     pub fn may_quit(&mut self) -> bool {
+        // Send/Receive and the like are stopped, never waited out: the window closes as soon
+        // as they have handed back what they have, as `close_now` says.
+        if !self.session.jobs.is_empty() {
+            self.session.stop_jobs();
+            self.leaving = true;
+            self.session.status = "Stopping Send/Receive: the window closes once the mail that came is kept…".to_string();
+            return false;
+        }
+        (self.leaving, self.leaving_since) = (false, None);
         // A save that is running is waited for: leaving does not cut it short.
         self.session.finish_saves();
         if !self.session.unsaved() || self.quit_asked {
@@ -758,6 +776,29 @@ impl MailUi {
             "There are unsaved changes: Ctrl+S saves them. Exit again to leave; they come back, unsaved, when the data file is opened.".to_string()
         };
         false
+    }
+
+    /// Whether the window, asked to close while work ran, is to be closed now (`ms` counts up
+    /// from the start of the run): once the work has stopped, or after `LEAVE_WAIT_MS`, when
+    /// what has not handed back is left, to come again next time.
+    pub fn close_now(&mut self, ms: u64) -> bool {
+        if !self.leaving {
+            return false;
+        }
+        let since = *self.leaving_since.get_or_insert(ms);
+        if self.session.jobs.is_empty() {
+            return true;
+        }
+        if ms.saturating_sub(since) >= LEAVE_WAIT_MS {
+            self.session.leave_jobs(std::time::Duration::ZERO);
+            return true;
+        }
+        false
+    }
+
+    /// Whether the window is waiting for work to stop before it closes.
+    pub fn leaving(&self) -> bool {
+        self.leaving
     }
 
     /// Run a command by id: engine commands and `ui.*` commands alike. Never opens a dialog by

@@ -423,3 +423,88 @@ fn a_sent_copy_the_server_refuses_leaves_what_went_as_it_went() {
     assert!(s.status.contains("could not be put in the server's Sent folder"), "{}", s.status);
     assert_eq!(fake.state().submitted.len(), 1);
 }
+
+fn many(fake: &Fake, n: usize) {
+    let mut state = fake.state();
+    let inbox = state.mailbox("INBOX").unwrap();
+    for i in 0..n {
+        inbox.add(&message(&format!("m{i}")), &[]);
+    }
+}
+
+fn subjects(s: &mut Session) -> Vec<String> {
+    s.run("folder.select", &json!({ "folder": "Inbox" })).unwrap();
+    s.rows.iter().map(|r| r.subject.clone()).collect()
+}
+
+#[test]
+fn mail_shows_in_the_inbox_as_it_comes_down() {
+    let fake = Fake::default();
+    many(&fake, 450);
+    let mut s = with(&fake, "imap", json!({}));
+    let total = inbox(&s).0;
+    s.run("account.receive", &json!({ "wait": false })).unwrap();
+    // A part is taken while the receive still runs: one part a time round, so the end is
+    // never taken in the same round as the first part.
+    let mut waited = 0;
+    while inbox(&s).0 == total {
+        s.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        waited += 1;
+        assert!(waited < 3000, "no part came: {}", s.status);
+    }
+    assert!(!s.jobs.is_empty(), "the first part came before the receive ended");
+    let part = inbox(&s).0 - total;
+    assert!(part > 0 && part < 450, "{part}");
+    assert!(s.status.contains("so far"), "{}", s.status);
+    let here = subjects(&mut s);
+    // Into a data file that is not the account's own, mail comes in the server's order.
+    assert!(here.iter().any(|t| t == "m0") && !here.iter().any(|t| t == "m449"));
+    settle(&mut s);
+    assert_eq!(inbox(&s).0, total + 450);
+    assert!(s.status.starts_with("450 new messages"), "{}", s.status);
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 0, "nothing twice");
+}
+
+#[test]
+fn a_receive_stopped_part_way_takes_the_rest_next_time_and_nothing_twice() {
+    let fake = Fake::default();
+    many(&fake, 450);
+    let mut s = with(&fake, "imap", json!({}));
+    let total = inbox(&s).0;
+    s.run("account.receive", &json!({ "wait": false })).unwrap();
+    let mut waited = 0;
+    while inbox(&s).0 == total && !s.jobs.is_empty() {
+        s.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        waited += 1;
+        assert!(waited < 3000, "no part came: {}", s.status);
+    }
+    // As when the window is closed.
+    s.leave_jobs(std::time::Duration::from_secs(5));
+    assert!(s.jobs.is_empty());
+    let kept = inbox(&s).0 - total;
+    assert!(kept > 0 && kept <= 450, "{kept}");
+    s.run("account.receive", &Value::Null).unwrap();
+    assert_eq!(inbox(&s).0, total + 450, "the rest came, none of it twice");
+    let here = subjects(&mut s);
+    for i in [0, 1, 224, 448, 449] {
+        assert_eq!(here.iter().filter(|t| **t == format!("m{i}")).count(), 1, "m{i}");
+    }
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 0);
+}
+
+#[test]
+fn leaving_is_never_kept_waiting_for_a_server() {
+    let fake = Fake::default();
+    many(&fake, 300);
+    let mut s = with(&fake, "imap", json!({}));
+    s.run("account.receive", &json!({ "wait": false })).unwrap();
+    let began = std::time::Instant::now();
+    s.leave_jobs(std::time::Duration::ZERO);
+    assert!(s.jobs.is_empty());
+    assert!(began.elapsed() < std::time::Duration::from_secs(2), "{:?}", began.elapsed());
+    // The thread left behind ends alone, and what it had not kept comes again.
+    s.run("account.receive", &Value::Null).unwrap();
+    assert_eq!(subjects(&mut s).iter().filter(|t| t.starts_with('m')).count(), 300);
+}

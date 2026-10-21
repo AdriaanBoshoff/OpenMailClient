@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); third-party sign-in (M7) comes after the first release · revision 124 · 2026-10-20
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); third-party sign-in (M7) comes after the first release · revision 125 · 2026-10-21
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 72 of 131 (55%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 628, all passing |
+| Tests | 635, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
@@ -159,7 +159,8 @@
 106. Done: Time zones and daylight saving: dates shown in the system's zone or one chosen, with its summer time; an appointment kept in its own zone, so a series keeps its hour there across the change; zones written into data files as Outlook keeps them and defined in calendar files; a second zone's hours beside ours in the day and week views (M5.6, `crates/model/src/zone.rs`, `calendar.timeZone`, Calendar > Home > Time Zones).
 107. Done: Meetings: an appointment with attendees, required, optional and rooms, sent to them as an invitation Outlook and other mail programs show as one (RFC 5546 iTIP by RFC 6047 iMIP, [MS-OXOCAL] meeting messages); an invitation that comes answered from a bar above it, Accept, Tentative or Decline, and only then put in the calendar; answers and cancellations taken in only from the one they have to come from; the organizer's tracking of who answered how; updates and cancellations sent; Reply with Meeting (M5.7, `crates/model/src/meeting.rs`, `crates/engine/src/cmd/meeting.rs`, `crates/ui-egui/src/meeting.rs`).
 108. Done: People: the Contacts folder's contacts and contact groups in Outlook's five Current Views (People, Business Card, Card, Phone, List), found in every field as they are typed for, made, changed and deleted in windows of their own, every change undone; vCard files (2.1, 3.0 and 4.0) shown card by card before anything is added, someone already there brought up to date instead of added twice, and contacts saved as one; a contact sent on as a card, mail written to a contact or a group, and a message's sender added to Contacts (M5.8, `crates/model/src/contact.rs`, `crates/formats/src/vcf.rs`, `crates/engine/src/cmd/people.rs`, `crates/ui-egui/src/people.rs`).
-109. Next: M5.9: Tasks.
+109. Done: Mail shown as it comes down: a receive hands back what it has in parts, the newest first into an account's own data file, several messages to a command, memory bounded and the data file saved as it goes; the window closes while mail is received, at most three seconds later, and nothing is lost (M4.16, `Session::begin_in_parts`, `Imap::fetch_many`, `MailUi::close_now`).
+110. Next: M5.9: Tasks.
 
 ## M5 plan
 
@@ -2383,3 +2384,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   and `print`. Improved on Outlook: one click for the body alone, with the preview showing it.
   More screenshots in the README. Tests use a printer that keeps what it is sent; nothing was
   put on paper (the Windows path was tried with the spooler's preview, which prints nothing).
+- **2026-10-21** - M4.16: mail shown as it comes down; the window closes while mail is received.
+  A receive hands what it has taken down back in parts while it runs: every 200 messages,
+  16 MB or second, whichever comes first, so a new account's Inbox fills as it downloads
+  instead of all at the end. Into an account's own data file the newest come first, as Outlook
+  does, and what was not come to is known next time by each message's place on the server, so
+  a receive stopped part way loses nothing and takes nothing twice. Several messages are asked
+  for in one command (`Imap::fetch_many`, up to 25 or 8 MB), not one by one. Memory stays
+  bounded however big the mailbox: at most four parts wait to be taken (the receive waits for
+  the window, not the other way round), the window takes one part of each job a frame, and the
+  account's data file is saved in place after every 64 MB taken in, so a 50 GB mailbox never
+  sits in memory. Closing the window while mail is received no longer freezes it: the receive is
+  told to stop, what it has is kept, and the window closes as soon as it has handed that back,
+  three seconds at the most (`MailUi::close_now`, `Session::leave_jobs`); what was left comes
+  with the next Send/Receive. The status bar counts what has come so far, and the end counts
+  every part. Better than Outlook: closing never waits on a server. 7 tests.

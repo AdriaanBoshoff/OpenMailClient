@@ -851,6 +851,31 @@ impl Imap {
         Ok(None)
     }
 
+    /// Several messages of the selected folder, whole, in one command, without marking them
+    /// read: each by its id, in the order asked for; one that is gone by now is left out. The
+    /// caller keeps the ids few and the messages small enough together to be held at once.
+    pub fn fetch_many(&mut self, uids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>, NetError> {
+        if uids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if uids.len() > MAX_LITERALS {
+            return Err(NetError::TooLarge("messages asked for at once"));
+        }
+        let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let (data, _) = self.run(vec![Part::Text(format!("UID FETCH {set} (UID BODY.PEEK[])"))])?;
+        let mut by: std::collections::HashMap<u32, Vec<u8>> = std::collections::HashMap::new();
+        for d in data {
+            let Some(items) = fetched(&d) else { continue };
+            let Some(uid) = item(items, "UID").and_then(Tok::number).and_then(|u| u32::try_from(u).ok()) else { continue };
+            if let Some(Tok::Str(body)) = item(items, "BODY[]")
+                && uids.contains(&uid)
+            {
+                by.insert(uid, body.clone());
+            }
+        }
+        Ok(uids.iter().filter_map(|u| by.remove(u).map(|b| (*u, b))).collect())
+    }
+
     /// Puts flags on a message of the selected folder, or takes them off.
     pub fn flag(&mut self, uid: u32, on: bool, flags: &[&str]) -> Result<(), NetError> {
         if flags.iter().any(|f| f.is_empty() || f.chars().any(|c| c.is_control() || matches!(c, ' ' | '(' | ')' | '"' | '{'))) {

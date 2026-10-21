@@ -298,6 +298,8 @@ pub struct Session {
     pub jobs: Vec<jobs::Job>,
     /// The last `Job::id` given.
     pub(crate) job_seq: u64,
+    /// What the parts of the receive that runs came to, account by account.
+    pub(crate) parts: Vec<cmd::receive::PartsOf>,
     /// What the jobs that ended last came to, the newest last.
     pub finished: Vec<Value>,
     /// The Outbox is to be sent again once the send under way ends: more was put in it.
@@ -443,6 +445,7 @@ impl Session {
             connector: None,
             jobs: Vec::new(),
             job_seq: 0,
+            parts: Vec::new(),
             finished: Vec::new(),
             send_again: false,
             saves: Vec::new(),

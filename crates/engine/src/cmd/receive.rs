@@ -12,6 +12,12 @@
 //! (`BODY.PEEK`), and a POP3 message is taken off the server, when the account says so, only on
 //! a later receive, once the data file it went into has been saved; a message is never removed
 //! from a server before it is kept here.
+//!
+//! While a receive runs, what has come is handed back part by part (`Parts`) and kept as it
+//! comes, so the mail is seen as it arrives and only a part is ever held; an account's own
+//! data file is saved every `SAVE_EVERY` bytes on the way. Into an account's own data file,
+//! where each message knows its place on the server, each folder comes newest first: what was
+//! not come to is known by its place and taken next time.
 
 use super::account::Reach;
 use super::imap_sync::{self, Local, Map, Place, Synced};
@@ -24,11 +30,28 @@ use openmailclient_net::NetError;
 use openmailclient_net::imap::{Folder, Imap, Selected, Summary};
 use openmailclient_net::pop3::Pop3;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 /// Messages taken down from one account in one receive, and how many bytes of them; the rest
 /// come with the next.
 const MAX_PER_RUN: usize = 300;
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
+/// The same where what comes is kept part by part, so that little is held at once: a
+/// mailbox of any size comes down in one receive.
+const MAX_PER_RUN_IN_PARTS: usize = 2_000_000;
+const MAX_BYTES_IN_PARTS: u64 = 1 << 40;
+/// Messages asked for in one command, and the bytes they may come to together.
+const FETCH_AT_ONCE: usize = 25;
+const FETCH_BYTES: u64 = 8 * 1024 * 1024;
+/// A part is handed back once it holds this many messages or bytes, or this long after the
+/// last one, in milliseconds.
+const PART_MESSAGES: usize = 200;
+const PART_BYTES: u64 = 16 * 1024 * 1024;
+#[cfg(not(target_arch = "wasm32"))]
+const PART_MS: u128 = 1_000;
+/// An account's own data file is saved after every so many bytes taken in: what is not saved
+/// yet is held beside the file, so this is what a receive holds at most.
+const SAVE_EVERY: u64 = 64 * 1024 * 1024;
 
 /// The words a receive job begins with; one is under way while a job so named is.
 pub(crate) const RECEIVING: &str = "Receiving";
@@ -149,13 +172,22 @@ struct Took {
     passed: u32,
     /// IMAP: what keeping in step with the server came to.
     synced: Synced,
-    local: Option<Local>,
+    local: Option<Arc<Local>>,
     /// IMAP: a folder could not be opened, so not every one was looked through.
     partial: bool,
     error: Option<NetError>,
+    /// IMAP: whether what is in the Inbox now is not told of as new: the first receive, one
+    /// after the server numbered it anew, or one before it was ever taken whole. Read on the
+    /// receive's own thread from the account as it was, so that each part says the same.
+    first: Option<bool>,
+    /// The Inbox comes newest first: its mark moves on only once it has come whole (`passed`).
+    newest_first: bool,
+    /// A part handed back while the receive runs, not what it came to at the end; how many
+    /// messages have come so far, and whether the data file is to be saved now.
+    part: Option<(usize, bool)>,
 }
 
-/// What was taken down from one IMAP folder other than the Inbox.
+/// What was taken down from one IMAP folder other than the Inbox; cloned without its mail.
 struct FromFolder {
     raw: String,
     /// The folder's place as it reads, its parents first.
@@ -170,14 +202,80 @@ struct FromFolder {
     here: Option<FolderId>,
     /// The server's own id for it ([RFC 8474]), when it gives one.
     mailbox_id: Option<String>,
+    /// It comes newest first: its mark moves on only once it has come whole (`passed`).
+    newest_first: bool,
 }
 
 /// What one receive may still take down from an account, shared by its folders.
 struct Budget {
     /// Messages that may still come.
     messages: usize,
-    /// Bytes taken down so far.
+    /// Bytes taken down so far, and how many may be.
     bytes: u64,
+    max_bytes: u64,
+}
+
+/// Handing back what has come so far, part by part, while a receive runs.
+struct Handing<'a> {
+    /// Hands a part back; false when there is no one to take it any more.
+    give: &'a dyn Fn(Took) -> bool,
+    /// Whether parts are taken as they come; where they are not, everything comes at the end.
+    streams: bool,
+    /// Messages handed back so far, and bytes since the data file was last saved.
+    so_far: usize,
+    unsaved: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    last: std::time::Instant,
+}
+
+impl Handing<'_> {
+    /// Whether a part holding `n` messages of `bytes` is to be handed back now.
+    fn due(&self, n: usize, bytes: u64) -> bool {
+        if !self.streams || n == 0 {
+            return false;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let late = self.last.elapsed().as_millis() >= PART_MS;
+        #[cfg(target_arch = "wasm32")]
+        let late = false;
+        n >= PART_MESSAGES || bytes >= PART_BYTES || late
+    }
+
+    /// Hand back `part`, which holds `got` messages of `bytes`. False when no one takes it.
+    fn hand(&mut self, mut part: Took, got: usize, bytes: u64) -> bool {
+        self.so_far = self.so_far.saturating_add(got);
+        self.unsaved = self.unsaved.saturating_add(bytes);
+        let save = self.unsaved >= SAVE_EVERY;
+        if save {
+            self.unsaved = 0;
+        }
+        part.part = Some((self.so_far, save));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.last = std::time::Instant::now();
+        }
+        (self.give)(part)
+    }
+}
+
+impl Clone for FromFolder {
+    fn clone(&self) -> Self {
+        FromFolder {
+            raw: self.raw.clone(),
+            path: self.path.clone(),
+            kind: self.kind,
+            uid_validity: self.uid_validity,
+            got: Vec::new(),
+            passed: self.passed,
+            here: self.here,
+            mailbox_id: self.mailbox_id.clone(),
+            newest_first: self.newest_first,
+        }
+    }
+}
+
+fn bytes_of(got: &[Got]) -> u64 {
+    got.iter().map(|g| u64::try_from(g.data.len()).unwrap_or(u64::MAX)).fold(0, u64::saturating_add)
 }
 
 /// The kind of folder a server's folder is: by the special use it is marked with
@@ -297,18 +395,31 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
         [one] => format!("{RECEIVING} from {}", one.reach.account.name),
         all => format!("{RECEIVING} from {} accounts", all.len()),
     };
-    s.begin(what, wait, move |progress| {
+    s.parts.clear();
+    s.begin_in_parts(what, wait, move |progress, parts| {
         progress.begin(u64::try_from(taking.len()).unwrap_or(u64::MAX));
         let mut took = Vec::new();
         for mut t in taking {
             if progress.stopped() {
                 break;
             }
-            let mut one = match t.reach.account.kind {
+            let give = |part: Took| {
+                let targets = targets.clone();
+                parts.hand(Box::new(move |s: &mut Session| ended(s, &targets, vec![part], Vec::new())))
+            };
+            let mut handing = Handing {
+                give: &give,
+                streams: parts.streams(),
+                so_far: 0,
+                unsaved: 0,
+                #[cfg(not(target_arch = "wasm32"))]
+                last: std::time::Instant::now(),
+            };
+            let one = match t.reach.account.kind {
                 Kind::Imap => match t.gather.take().map(|g| g.finish(progress)).transpose() {
                     Ok(local) => {
                         t.local = local;
-                        from_imap(&mut t, progress)
+                        from_imap(&mut t, progress, &mut handing)
                     }
                     Err(e) => {
                         let mut out = self::took(&t);
@@ -318,11 +429,6 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
                 },
                 Kind::Pop3 => from_pop3(&t, progress),
             };
-            // What was to go on the server is not wanted any more.
-            one.local = t.local.take().map(|mut l| {
-                l.items.iter_mut().for_each(|i| i.upload = None);
-                l
-            });
             took.push(one);
             progress.step();
         }
@@ -346,18 +452,21 @@ fn took(t: &Taking) -> Took {
         local: None,
         partial: false,
         error: None,
+        first: None,
+        newest_first: false,
+        part: None,
     }
 }
 
-fn from_imap(t: &mut Taking, progress: &openmailclient_model::Progress) -> Took {
+fn from_imap(t: &mut Taking, progress: &openmailclient_model::Progress, handing: &mut Handing) -> Took {
     let mut out = took(t);
-    if let Err(e) = imap_into(t, progress, &mut out) {
+    if let Err(e) = imap_into(t, progress, &mut out, handing) {
         out.error = Some(e);
     }
     out
 }
 
-fn imap_into(t: &mut Taking, progress: &openmailclient_model::Progress, out: &mut Took) -> Result<(), NetError> {
+fn imap_into(t: &mut Taking, progress: &openmailclient_model::Progress, out: &mut Took, handing: &mut Handing) -> Result<(), NetError> {
     let login = t.reach.login()?;
     let mut imap = Imap::open(&*t.reach.connector, &t.reach.account.incoming_endpoint(), &login)?;
     // What was done here goes to the server first, so that what is taken down after is the
@@ -373,34 +482,60 @@ fn imap_into(t: &mut Taking, progress: &openmailclient_model::Progress, out: &mu
         folders = Some(if out.synced.created.is_empty() && !moved { listed } else { imap.folders()? });
         map = Some(m);
     }
+    // What was to go on the server has gone; what is left is only read from now on, and
+    // shared with each part handed back.
+    let shared: Option<Arc<Local>> = t.local.take().map(|mut l| {
+        l.items.iter_mut().for_each(|i| i.upload = None);
+        Arc::new(l)
+    });
+    out.local = shared.clone();
     let t: &Taking = t;
-    let sync = t.local.as_ref().zip(map.as_ref());
+    let sync = shared.as_deref().zip(map.as_ref());
     let step = sync.and(t.received.step("INBOX"));
     let inbox = imap.select_since("INBOX", step.map(|s| (s.uid_validity, s.modseq)))?;
     out.uid_validity = inbox.uid_validity;
-    let mut budget = Budget { messages: MAX_PER_RUN, bytes: 0 };
+    // Newest first where what was not come to is known by its place next time.
+    out.newest_first = sync.is_some();
+    out.first =
+        inbox.uid_validity.map(|v| t.received.uid_validity == 0 || v != t.received.uid_validity || (out.newest_first && t.received.last_uid == 0));
+    let mut budget = match handing.streams {
+        true => Budget { messages: MAX_PER_RUN_IN_PARTS, bytes: 0, max_bytes: MAX_BYTES_IN_PARTS },
+        false => Budget { messages: MAX_PER_RUN, bytes: 0, max_bytes: MAX_BYTES },
+    };
     let whole = in_step(&mut imap, sync, "INBOX", &inbox, step, &mut out.synced)?;
+    let (uid_validity, first, newest_first) = (out.uid_validity, out.first, out.newest_first);
+    let hand = |got: &mut Vec<Got>, h: &mut Handing| {
+        let bytes = bytes_of(got);
+        if !h.due(got.len(), bytes) {
+            return true;
+        }
+        let got = std::mem::take(got);
+        let n = got.len();
+        let part = Took { got, uid_validity, first, newest_first, local: shared.clone(), ..took(t) };
+        h.hand(part, n, bytes)
+    };
     let (got, waiting, passed) = take(
         &mut imap,
         &inbox,
-        t.received.uid_validity,
-        t.received.last_uid,
+        (t.received.uid_validity, t.received.last_uid),
         &mut budget,
         progress,
         whole.as_deref(),
         sync.map(|(l, _)| l),
         "INBOX",
         &out.synced,
+        newest_first,
+        &mut |got| hand(got, handing),
     )?;
     (out.got, out.waiting, out.passed) = (got, waiting, passed);
     // What the Inbox gave is kept even when the other folders cannot be read.
     if t.folders
-        && let Err(e) = others_into(&mut imap, t, folders, sync, &mut budget, progress, out)
+        && let Err(e) = others_into(&mut imap, t, folders, sync, &mut budget, progress, out, handing)
     {
         out.error = Some(e);
         return Ok(());
     }
-    if let Some(local) = &t.local {
+    if let Some(local) = &shared {
         out.synced.matched = !local.matched && !out.partial && !progress.stopped();
     }
     imap.logout()
@@ -459,29 +594,34 @@ fn in_step(
     Ok(Some(listed))
 }
 
-/// The new messages of the selected folder, as far as the budget goes: those after `last_uid`,
-/// or every one when the folder was numbered anew or never read. `whole` is the folder's list
-/// when it was read already. A message a message here has the place of already (this receive
-/// put it there, or a move here did) is passed over. Returns them, how many are left for next
-/// time, and the highest id passed over.
+/// The new messages of the selected folder, as far as the budget goes: those after the mark's
+/// `last_uid`, or every one when the folder was numbered anew (the mark's UIDVALIDITY) or never
+/// read. `whole` is the folder's list when it was read already. A message a message here has
+/// the place of already (this receive put it there, or a move here did) is passed over. With
+/// `newest_first` the newest come first, and what is passed over moves the mark on only once
+/// the folder has come whole. What has come is given to `hand` part by part as it comes;
+/// returns the rest, how many are left for next time, and the highest id passed over.
 #[allow(clippy::too_many_arguments)]
 fn take(
     imap: &mut Imap,
     selected: &Selected,
-    uid_validity: u32,
-    last_uid: u32,
+    (uid_validity, last_uid): (u32, u32),
     budget: &mut Budget,
     progress: &openmailclient_model::Progress,
     whole: Option<&[Summary]>,
     local: Option<&Local>,
     raw: &str,
     synced: &Synced,
+    newest_first: bool,
+    hand: &mut dyn FnMut(&mut Vec<Got>) -> bool,
 ) -> Result<(Vec<Got>, usize, u32), NetError> {
     let same = selected.uid_validity.is_some_and(|v| v == uid_validity);
     let from = if same { last_uid.saturating_add(1) } else { 1 };
-    // Nothing came since, as the folder's next id says: there is nothing to ask for.
+    // Nothing came since, as the folder's next id says: there is nothing to ask for. A folder
+    // that holds nothing has come whole.
     if selected.exists == 0 || (same && selected.uid_next.is_some_and(|next| next <= from)) {
-        return Ok((Vec::new(), 0, 0));
+        let passed = if newest_first && selected.exists == 0 { selected.uid_next.unwrap_or(1).saturating_sub(1) } else { 0 };
+        return Ok((Vec::new(), 0, passed));
     }
     let listed = match whole {
         Some(all) => all.iter().filter(|m| m.uid >= from).cloned().collect(),
@@ -499,30 +639,74 @@ fn take(
                 .collect()
         })
         .unwrap_or_default();
+    let mut todo: Vec<&Summary> = listed.iter().collect();
+    if newest_first {
+        todo.reverse();
+    }
     let mut got = Vec::new();
     let mut passed = 0;
-    for (n, m) in listed.iter().enumerate() {
-        if here.contains(&m.uid) || synced.ours.contains(&(raw.to_string(), m.uid)) {
-            passed = passed.max(m.uid);
-            continue;
+    let mut at = 0usize;
+    loop {
+        // The next few to ask for together, as far as the budget goes.
+        let (mut ask, mut ask_bytes, mut full) = (Vec::<&Summary>::new(), 0u64, false);
+        while let Some(m) = todo.get(at).copied() {
+            if here.contains(&m.uid) || synced.ours.contains(&(raw.to_string(), m.uid)) {
+                if !newest_first {
+                    passed = passed.max(m.uid);
+                }
+                at += 1;
+                continue;
+            }
+            // The first message of a receive comes whatever its size; after it, what fits.
+            let taken = budget.bytes.saturating_add(ask_bytes);
+            let fits = taken == 0 || taken.saturating_add(m.size) <= budget.max_bytes;
+            if budget.messages <= ask.len() || !fits || progress.stopped() {
+                full = true;
+                break;
+            }
+            if !ask.is_empty() && (ask.len() >= FETCH_AT_ONCE || ask_bytes.saturating_add(m.size) > FETCH_BYTES) {
+                break;
+            }
+            ask.push(m);
+            ask_bytes = ask_bytes.saturating_add(m.size);
+            at += 1;
         }
-        // The first message of a receive comes whatever its size; after it, what fits.
-        let fits = budget.bytes == 0 || budget.bytes.saturating_add(m.size) <= MAX_BYTES;
-        if budget.messages == 0 || !fits || progress.stopped() {
-            return Ok((got, listed.len().saturating_sub(n), passed));
+        if ask.is_empty() && !full {
+            break;
         }
+        let uids: Vec<u32> = ask.iter().map(|m| m.uid).collect();
         // One that is gone by now is passed over.
-        if let Some(data) = imap.fetch(m.uid)? {
+        let fetched = match uids.as_slice() {
+            [] => Vec::new(),
+            [one] => imap.fetch(*one)?.map(|data| vec![(*one, data)]).unwrap_or_default(),
+            many => imap.fetch_many(many)?,
+        };
+        for (uid, data) in fetched {
+            let Some(m) = ask.iter().find(|m| m.uid == uid) else { continue };
+            let len = u64::try_from(data.len()).unwrap_or(u64::MAX).max(1);
             budget.messages = budget.messages.saturating_sub(1);
-            budget.bytes = budget.bytes.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX).max(1));
+            budget.bytes = budget.bytes.saturating_add(len);
             let has = |flag: &str| m.flags.iter().any(|f| f.eq_ignore_ascii_case(flag));
-            got.push(Got { uid: Uid::Imap(m.uid), read: has("\\Seen"), flagged: has("\\Flagged"), draft: has("\\Draft"), data });
+            got.push(Got { uid: Uid::Imap(uid), read: has("\\Seen"), flagged: has("\\Flagged"), draft: has("\\Draft"), data });
         }
+        // Handed back once there is enough of it, or it has waited long enough.
+        if !hand(&mut got) {
+            full = true;
+        }
+        if full {
+            let passed = if newest_first { 0 } else { passed };
+            return Ok((got, todo.len().saturating_sub(at), passed));
+        }
+    }
+    // Come whole: newest first, the mark goes past every message the folder has.
+    if newest_first {
+        passed = listed.last().map_or(0, |m| m.uid);
     }
     Ok((got, 0, passed))
 }
 
 /// Every folder of the server but the Inbox, each from where it was left.
+#[allow(clippy::too_many_arguments)]
 fn others_into(
     imap: &mut Imap,
     t: &Taking,
@@ -531,6 +715,7 @@ fn others_into(
     budget: &mut Budget,
     progress: &openmailclient_model::Progress,
     out: &mut Took,
+    handing: &mut Handing,
 ) -> Result<(), NetError> {
     let folders = match folders {
         Some(f) => f,
@@ -557,19 +742,43 @@ fn others_into(
         };
         let whole = in_step(imap, sync, &f.raw, &selected, step, &mut out.synced)?;
         let mark = t.received.folders.iter().find(|m| m.raw == f.raw).cloned().unwrap_or_default();
-        let (got, waiting, passed) =
-            take(imap, &selected, mark.uid_validity, mark.last_uid, budget, progress, whole.as_deref(), sync.map(|(l, _)| l), &f.raw, &out.synced)?;
-        out.waiting = out.waiting.saturating_add(waiting);
-        out.others.push(FromFolder {
+        let from = FromFolder {
             raw: f.raw.clone(),
             path,
             kind: kind_of(f, &path_of(f)),
             uid_validity: selected.uid_validity,
-            got,
-            passed,
+            got: Vec::new(),
+            passed: 0,
             here: sync.and_then(|(_, m)| m.here(&f.raw)),
             mailbox_id: selected.mailbox_id.clone(),
-        });
+            newest_first: out.newest_first,
+        };
+        let (uid_validity, first, newest_first, local) = (out.uid_validity, out.first, out.newest_first, out.local.clone());
+        let hand = |got: &mut Vec<Got>, h: &mut Handing| {
+            let bytes = bytes_of(got);
+            if !h.due(got.len(), bytes) {
+                return true;
+            }
+            let n = got.len();
+            let part = FromFolder { got: std::mem::take(got), ..from.clone() };
+            let part = Took { others: vec![part], uid_validity, first, newest_first, local: local.clone(), ..took(t) };
+            h.hand(part, n, bytes)
+        };
+        let (got, waiting, passed) = take(
+            imap,
+            &selected,
+            (mark.uid_validity, mark.last_uid),
+            budget,
+            progress,
+            whole.as_deref(),
+            sync.map(|(l, _)| l),
+            &f.raw,
+            &out.synced,
+            newest_first,
+            &mut |got| hand(got, handing),
+        )?;
+        out.waiting = out.waiting.saturating_add(waiting);
+        out.others.push(FromFolder { got, passed, ..from });
     }
     Ok(())
 }
@@ -735,21 +944,23 @@ fn keep_folder(
                     let item = item_of(got, now, sync.local.is_some().then_some(from.raw.as_str()).zip(from.uid_validity));
                     let id = item.props.str(pid::INTERNET_MESSAGE_ID).map(str::trim).unwrap_or_default().to_string();
                     // One put on the server from here: the message here is it.
+                    // Newest first, the mark moves on only once the folder has come whole.
+                    let past = if from.newest_first { mark.last_uid } else { mark.last_uid.max(uid) };
                     if sync.adopt(s, store, folder, &from.raw, &id, &item) {
-                        mark.last_uid = mark.last_uid.max(uid);
+                        mark.last_uid = past;
                         received.sent_here.retain(|m| *m != id);
                         continue;
                     }
                     if sent && !id.is_empty() && received.sent_here.contains(&id) {
                         received.sent_here.retain(|m| *m != id);
-                        mark.last_uid = mark.last_uid.max(uid);
+                        mark.last_uid = past;
                         continue;
                     }
                     match s.stores.get_mut(store).map(|st| st.add(folder, item)) {
                         Some(Ok(_)) => {
                             kept += 1;
                             unread += usize::from(!got.read);
-                            mark.last_uid = mark.last_uid.max(uid);
+                            mark.last_uid = past;
                         }
                         Some(Err(e)) => {
                             why = Some(format!("a message could not be kept: {e}"));
@@ -779,7 +990,60 @@ fn keep_folder(
 
 /// Take back what a receive came to: each message into the Inbox, and the account moved on
 /// past it only once it is there.
-fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut said: Vec<String>) -> (String, Value) {
+/// What the parts of a receive that runs came to for one account, counted into what its end
+/// says.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PartsOf {
+    id: String,
+    kept: usize,
+    unread: usize,
+    /// A part could not be kept: nothing more of the account's is kept this time, and its
+    /// marks stay where they were.
+    failed: bool,
+}
+
+fn parts_of<'a>(s: &'a mut Session, id: &str) -> &'a mut PartsOf {
+    if let Some(at) = s.parts.iter().position(|p| p.id == id) {
+        &mut s.parts[at]
+    } else {
+        s.parts.push(PartsOf { id: id.to_string(), ..PartsOf::default() });
+        let last = s.parts.len() - 1;
+        &mut s.parts[last]
+    }
+}
+
+fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, said: Vec<String>) -> (String, Value) {
+    // A part handed back while the receive runs: what came is kept, and the rest waits.
+    if let [one] = took.as_slice()
+        && let Some((so_far, save)) = one.part
+    {
+        let (id, name) = (one.id.clone(), one.name.clone());
+        // After a part that could not be kept, nothing more is: it all comes next time.
+        if !s.parts.iter().any(|p| p.id == id && p.failed) {
+            let (_, value) = kept(s, targets, took, said, false);
+            if value["failed"].as_bool() == Some(true) {
+                parts_of(s, &id).failed = true;
+            } else if save {
+                for (_, t) in targets.iter().filter(|(a, t)| *a == id && t.own) {
+                    let status = std::mem::take(&mut s.status);
+                    let _ = super::file::save_in_background(s, t.store);
+                    s.status = status;
+                }
+            }
+        }
+        let status = match so_far {
+            1 => format!("{RECEIVING} from {name}: 1 message so far…"),
+            n => format!("{RECEIVING} from {name}: {n} messages so far…"),
+        };
+        return (status, Value::Null);
+    }
+    kept(s, targets, took, said, true)
+}
+
+/// Keep what a receive came to, or a part of it (`last` false): only what came, without what
+/// keeping in step with the server did, which comes with the end.
+fn kept(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut said: Vec<String>, last: bool) -> (String, Value) {
+    let mut failed = false;
     let now = s.now.max(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -795,14 +1059,18 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
     let mut meetings: Vec<String> = Vec::new();
     for t in took {
         let Some(&(_, Target { store, folder, own })) = targets.iter().find(|(id, _)| *id == t.id) else { continue };
+        let unread_at = unread;
         let into = into_of(s, Target { store, folder, own });
         let mut received = s.accounts.iter().find(|a| a.id == t.id).map(|a| a.received.kept_in(&into)).unwrap_or_default();
         // Mail already on a server the first time it is received from, or all of an Inbox the
         // server numbered anew, is not told of as new: only what came since.
-        let first = match t.uid_validity {
+        let first = t.first.unwrap_or_else(|| match t.uid_validity {
             Some(v) => received.uid_validity == 0 || v != received.uid_validity,
             None => received.seen.is_empty() && !s.arrived.heard_from.contains(&t.id),
-        };
+        });
+        // A part of this receive could not be kept: the marks stay where they are, so that
+        // what came after it comes again.
+        let broken = last && s.parts.iter().any(|p| p.id == t.id && p.failed);
         if s.arrived.heard_from.len() < crate::accounts::MAX_ACCOUNTS && !s.arrived.heard_from.contains(&t.id) {
             s.arrived.heard_from.push(t.id.clone());
         }
@@ -829,18 +1097,26 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
         let mut kept = 0usize;
         let mut trouble = t.error.as_ref().map(ToString::to_string);
         // What was done on the server, and what went there from here, is taken in first.
-        let applied = t.local.as_ref().map(|l| imap_sync::apply(s, store, l, &t.synced, &mut received)).unwrap_or_default();
+        let applied = match (&t.local, last) {
+            (Some(l), true) => imap_sync::apply(s, store, l, &t.synced, &mut received),
+            _ => Default::default(),
+        };
         if let Some(why) = &applied.why {
             trouble.get_or_insert(why.clone());
         }
-        let (folders_moved, why) = if t.local.is_some() { folders_here(s, store, &t.synced) } else { (0, None) };
+        let (folders_moved, why) = if t.local.is_some() && last { folders_here(s, store, &t.synced) } else { (0, None) };
         if let Some(why) = why {
             trouble.get_or_insert(why);
         }
         let in_step = applied.changed + applied.removed + t.synced.pushed + folders_moved + t.synced.replaced.len().min(1);
-        let mut sync = Adopting { local: t.local.as_ref(), adopted: std::collections::HashSet::new() };
+        let mut sync = Adopting { local: t.local.as_deref(), adopted: std::collections::HashSet::new() };
         for from in &t.others {
+            let was = received.folders.iter().find(|m| m.raw == from.raw).map(|m| m.last_uid);
             let (n, unread_here, why) = keep_folder(s, store, from, &mut received, now, &mut sync);
+            if broken && let Some(m) = received.folders.iter_mut().find(|m| m.raw == from.raw) {
+                m.last_uid = was.unwrap_or(0).min(m.last_uid);
+            }
+            failed |= why.is_some();
             kept += n;
             unread += unread_here;
             if let Some(why) = why {
@@ -848,7 +1124,7 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
             }
         }
         // Marks of folders the server no longer has are forgotten.
-        if let Some(listed) = &t.listed {
+        if let Some(listed) = t.listed.as_ref().filter(|_| last) {
             received.folders.retain(|m| listed.contains(&m.raw));
         }
         // Each pair as it stands now is what the two agree on, so neither side follows it back.
@@ -868,10 +1144,12 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
             super::meeting::dress(&mut item, &s.zone, true);
             let is_unread = !got.read;
             let id = item.props.str(pid::INTERNET_MESSAGE_ID).map(str::trim).unwrap_or_default().to_string();
+            // Newest first, the mark moves on only once the Inbox has come whole.
+            let past = |was: u32, uid: u32| if t.newest_first { was } else { was.max(uid) };
             if let Uid::Imap(uid) = &got.uid
                 && sync.adopt(s, store, folder, "INBOX", &id, &item)
             {
-                received.last_uid = received.last_uid.max(*uid);
+                received.last_uid = past(received.last_uid, *uid);
                 continue;
             }
             let told = (is_unread && !first).then(|| crate::arrival::Told::of(&item));
@@ -888,7 +1166,7 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
                     kept += 1;
                     unread += usize::from(is_unread);
                     match &got.uid {
-                        Uid::Imap(uid) => received.last_uid = received.last_uid.max(*uid),
+                        Uid::Imap(uid) => received.last_uid = past(received.last_uid, *uid),
                         Uid::Pop(uid) => new_seen.push(uid.clone()),
                     }
                 }
@@ -904,7 +1182,8 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
                 }
             }
         }
-        if inbox_kept {
+        failed |= !inbox_kept;
+        if inbox_kept && !broken {
             received.last_uid = received.last_uid.max(t.passed);
         }
         // The POP3 ids remembered are those the server still has; ids it no longer has are
@@ -920,6 +1199,17 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
         }
         if let Some(a) = s.accounts.iter_mut().find(|a| a.id == t.id) {
             a.received = received;
+        }
+        // A part counts what it kept toward the end; the end says all that came.
+        if last {
+            if let Some(p) = s.parts.iter().find(|p| p.id == t.id) {
+                kept = kept.saturating_add(p.kept);
+                unread = unread.saturating_add(p.unread);
+            }
+        } else {
+            let p = parts_of(s, &t.id);
+            p.kept = p.kept.saturating_add(kept);
+            p.unread = p.unread.saturating_add(unread.saturating_sub(unread_at));
         }
         all += kept;
         changes += in_step;
@@ -958,6 +1248,10 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
         s.refresh_folders(x.store);
     }
     let _ = s.reload_rows();
+    if !last {
+        return (String::new(), json!({ "received": all, "accounts": accounts, "failed": failed }));
+    }
+    s.parts.clear();
     // An account's own data file is saved once mail is in it, on a thread of its own: the
     // owner is never asked to save mail that only came, and POP3 mail can leave the server.
     for x in touched.iter().filter(|x| x.own) {

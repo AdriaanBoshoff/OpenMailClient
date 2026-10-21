@@ -987,3 +987,48 @@ fn a_data_file_that_cannot_be_read_apart_is_not_kept_in_step_and_nothing_goes_fr
     assert_eq!(on_server(&fake, "INBOX"), 1, "nothing went from the server");
     done(s, dir);
 }
+
+fn subjects(s: &mut Session) -> Vec<String> {
+    s.run("folder.select", &json!({ "store": 1, "folder": "Inbox" })).unwrap();
+    s.rows.iter().map(|r| r.subject.clone()).collect()
+}
+
+#[test]
+fn into_the_account_s_own_data_file_the_newest_come_first_and_a_stop_loses_nothing() {
+    let fake = Fake::default();
+    {
+        let mut state = fake.state();
+        let inbox = state.mailbox("INBOX").unwrap();
+        for i in 0..450 {
+            inbox.add(&message(&format!("m{i}")), &[]);
+        }
+    }
+    let (mut s, dir) = account(&fake, "newest");
+    s.run("account.receive", &json!({ "wait": false })).unwrap();
+    let mut waited = 0;
+    while count(&s, "Inbox") == 0 {
+        s.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        waited += 1;
+        assert!(waited < 3000, "no part came: {}", s.status);
+    }
+    assert!(!s.jobs.is_empty(), "the first part came before the receive ended");
+    let here = subjects(&mut s);
+    assert!(here.iter().any(|t| t == "m449") && !here.iter().any(|t| t == "m0"), "the newest come first");
+    // Stopped, as when the window is closed: what came is kept, and the rest comes next time.
+    s.leave_jobs(std::time::Duration::from_secs(5));
+    settle(&mut s);
+    let kept = count(&s, "Inbox");
+    assert!(kept > 0 && kept <= 450, "{kept}");
+    receive(&mut s);
+    assert_eq!(count(&s, "Inbox"), 450, "the rest came, none of it twice");
+    let here = subjects(&mut s);
+    for i in [0, 1, 224, 448, 449] {
+        assert_eq!(here.iter().filter(|t| **t == format!("m{i}")).count(), 1, "m{i}");
+    }
+    // Then only what is new.
+    fake.state().mailbox("INBOX").unwrap().add(&message("later"), &[]);
+    assert_eq!(receive(&mut s)["received"], 1);
+    assert_eq!(count(&s, "Inbox"), 451);
+    done(s, dir);
+}

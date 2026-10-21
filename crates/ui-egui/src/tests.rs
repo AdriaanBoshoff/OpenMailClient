@@ -3022,3 +3022,61 @@ fn a_vcard_file_is_shown_before_its_cards_are_added() {
     assert!(ui.execute("ui.openCards", &json!({ "path": dir.join("none.vcf") })).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn closing_while_mail_is_received_stops_it_and_never_waits_long() {
+    let fake = openmailclient_net::fake::Fake::default();
+    {
+        let mut state = fake.state();
+        let inbox = state.mailbox("INBOX").unwrap();
+        for i in 0..300 {
+            inbox.add(format!("From: june@example.test\r\nSubject: m{i}\r\n\r\nHello.\r\n").as_bytes(), &[]);
+        }
+    }
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.connector = Some(std::sync::Arc::new(fake.clone()));
+    ui.session
+        .run(
+            "account.add",
+            &json!({ "email": "pat@example.test", "kind": "imap",
+                     "incoming": { "host": "mail.example.test", "security": "starttls" },
+                     "outgoing": { "host": "mail.example.test", "security": "starttls" }, "password": "not a real password" }),
+        )
+        .unwrap();
+    assert!(!ui.close_now(0), "nothing asked to close");
+    ui.session.run("account.receive", &json!({ "wait": false })).unwrap();
+    assert!(!ui.may_quit(), "the receive is stopped first, not waited out");
+    assert!(ui.leaving() && ui.session.jobs.iter().all(|j| j.progress.stopped()));
+    // Closed once the job has handed back what it had, or after the wait at the latest.
+    let mut ms = 0;
+    while !ui.close_now(ms) {
+        ui.session.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        ms += 10;
+        assert!(ms <= LEAVE_WAIT_MS + 100, "the window was kept waiting");
+    }
+    assert!(ui.session.jobs.is_empty());
+    // With nothing running, closing goes as it always did.
+    assert!(ui.may_quit() && !ui.leaving());
+}
+
+#[test]
+fn a_job_that_will_not_end_is_left_once_the_wait_is_over() {
+    let fake = openmailclient_net::fake::Fake::default();
+    fake.state().mailbox("INBOX").unwrap().add(b"Subject: one\r\n\r\nx\r\n", &[]);
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.connector = Some(std::sync::Arc::new(fake));
+    ui.session
+        .run(
+            "account.add",
+            &json!({ "email": "pat@example.test", "kind": "imap",
+                     "incoming": { "host": "mail.example.test", "security": "starttls" }, "password": "not a real password" }),
+        )
+        .unwrap();
+    ui.session.run("account.receive", &json!({ "wait": false })).unwrap();
+    assert!(!ui.may_quit());
+    // Never polled, so the job is never taken: the wait running out closes all the same.
+    assert!(!ui.close_now(1_000));
+    assert!(ui.close_now(1_000 + LEAVE_WAIT_MS));
+    assert!(ui.session.jobs.is_empty());
+}

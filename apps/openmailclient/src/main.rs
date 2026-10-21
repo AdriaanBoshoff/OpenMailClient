@@ -293,10 +293,16 @@ impl eframe::App for App {
         if ctx.input(|i| i.viewport().close_requested()) && !self.ui.may_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
+        let ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        // Asked to close while mail was coming: closed as soon as it has stopped.
+        if self.ui.close_now(ms) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if self.ui.leaving() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.serve(&ctx);
         self.settle();
         // Unsaved changes that have waited long enough are saved on their own.
-        let ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if self.ui.session.autosave(ms) {
             ctx.request_repaint();
         }
@@ -318,6 +324,8 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        // Work on threads of its own is stopped, not waited out.
+        self.ui.session.leave_jobs(std::time::Duration::from_secs(2));
         self.ui.session.finish_saves();
         self.ui.session.settle();
         self.keep_settings(true);

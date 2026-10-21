@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 116 · 2026-10-20 · ranked: the top of the list is what hurts most.
+**Status:** revision 117 · 2026-10-21 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 117 · 2026-10-21 — M4.16: mail shown as it comes down; closing while it does.
 - 116 · 2026-10-20 — M5.8: People: contacts, contact groups and vCard files.
 - 115 · 2026-10-19 — M5.10 (first part): a Calendar folder made in a data file that has none.
 - 114 · 2026-10-19 — M5.7: meetings to and from Outlook.

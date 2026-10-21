@@ -17,7 +17,7 @@ mod meeting;
 pub mod people;
 mod picture;
 mod progress;
-mod receive;
+pub(crate) mod receive;
 mod send;
 pub(crate) mod settings;
 mod view;

@@ -526,3 +526,23 @@ fn a_server_that_ends_a_wait_or_chatters_is_dealt_with() {
     );
     assert!(asked >= 100, "{asked}");
 }
+
+#[test]
+fn several_messages_are_fetched_in_one_command_in_the_order_asked_and_gone_ones_left_out() {
+    let mut state = State::default();
+    if let Some(inbox) = state.mailbox("INBOX") {
+        inbox.add(b"Subject: one\r\n\r\n1\r\n", &[]);
+        inbox.add(b"Subject: two\r\n\r\n2\r\n", &[]);
+        inbox.add(b"Subject: three\r\n\r\n3\r\n", &[]);
+    }
+    let fake = Fake::new(state);
+    let mut i = Imap::open(&fake, &Fake::endpoint(Protocol::Imap), &login()).unwrap();
+    i.select("INBOX").unwrap();
+    let got = i.fetch_many(&[3, 99, 1]).unwrap();
+    assert_eq!(got.iter().map(|(u, _)| *u).collect::<Vec<_>>(), [3, 1]);
+    assert_eq!(got[1].1, b"Subject: one\r\n\r\n1\r\n");
+    assert!(i.fetch_many(&[]).unwrap().is_empty());
+    assert!(matches!(i.fetch_many(&vec![1; 100_000]), Err(NetError::TooLarge(_))));
+    let fetches = fake.state().heard.iter().filter(|l| l.contains("UID FETCH 3,99,1")).count();
+    assert_eq!(fetches, 1, "one command for all of them");
+}
