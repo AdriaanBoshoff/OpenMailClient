@@ -14,6 +14,7 @@ pub mod memstore;
 pub mod props;
 pub mod recur;
 pub mod rtf;
+pub mod task;
 pub mod time;
 pub mod zone;
 

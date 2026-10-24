@@ -173,7 +173,12 @@ pub fn sample_store(now: i64) -> MemStore {
     ));
     launch.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(0x10));
     launch.props.set(pid::IMPORTANCE, PropValue::Int32(2));
-    launch.set_flag(Flag::Flagged);
+    {
+        // Flagged for this week, as the Follow Up menu flags it, so it stands on the To-Do List.
+        let today = openmailclient_model::calendar::day_of(now, 0i32);
+        let (start, due) = openmailclient_model::task::FollowUp::ThisWeek.days(today);
+        openmailclient_model::task::follow_up(&mut launch, start, due, now, 0i32);
+    }
     launch.categories = vec!["Red category".to_string()];
     s.push_item(inbox, launch);
 
@@ -362,7 +367,44 @@ pub fn sample_store(now: i64) -> MemStore {
     for item in people() {
         s.push_item(contacts, item);
     }
+    let tasks = s.push_folder(None, "Tasks", "IPF.Task");
+    for item in tasks_of(now) {
+        s.push_item(tasks, item);
+    }
     s
+}
+
+/// The sample's tasks: our own invented work around the launch in the sample mail, one late,
+/// one under way, one waiting on someone, one done and one with no day at all.
+fn tasks_of(now: i64) -> Vec<Item> {
+    use openmailclient_model::task::{Status, Task};
+    let today = openmailclient_model::calendar::day_of(now, 0i32);
+    let task = |subject: &str, start: Option<i64>, due: Option<i64>, status: Status, percent: u8| Task {
+        subject: subject.to_string(),
+        start,
+        due,
+        status,
+        percent,
+        importance: 1,
+        owner: ME.0.to_string(),
+        ..Task::default()
+    };
+    let mut late = task("Send the venue the final head count", Some(today - 4), Some(today - 1), Status::NotStarted, 0);
+    late.importance = 2;
+    late.notes = "June has the list from the sign-up sheet.".to_string();
+    let mut going = task("Write the welcome email for new customers", Some(today - 2), Some(today + 2), Status::InProgress, 50);
+    going.categories = vec!["Blue category".to_string()];
+    going.total_work = 4 * 60;
+    going.actual_work = 2 * 60;
+    going.reminder = Some(now.saturating_add(DAY));
+    let mut waiting = task("Pricing page sign-off", Some(today), Some(today + 3), Status::Waiting, 25);
+    waiting.notes = "Waiting on Tomás for the last wording.".to_string();
+    waiting.companies = vec!["Northgate Print Depot".to_string()];
+    let mut done = task("Book the support rota", Some(today - 7), Some(today - 3), Status::Complete, 100);
+    done.completed = Some(today - 3);
+    let mut someday = task("Tidy the shared drive", None, None, Status::NotStarted, 0);
+    someday.importance = 0;
+    [late, going, waiting, done, someday].iter().map(|t| t.item(today, now, 0i32)).collect()
 }
 
 /// The sample's people: those who write in the sample mail, with invented numbers and places

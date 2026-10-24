@@ -129,6 +129,78 @@ Contact",
     ("Actions", &[small(Icon::Open, "Open", "ui.openContact")]),
 ];
 
+const TASKS_HOME: &[Group] = &[
+    (
+        "New",
+        &[big(
+            Icon::Tasks,
+            "New
+Task",
+            "ui.task",
+        )],
+    ),
+    ("Delete", &[big(Icon::Delete, "Delete", "tasks.delete")]),
+    (
+        "Manage Task",
+        &[
+            big(
+                Icon::Check,
+                "Mark
+Complete",
+                "tasks.markComplete",
+            ),
+            big(
+                Icon::Close,
+                "Remove
+from List",
+                "tasks.removeFromList",
+            ),
+        ],
+    ),
+    (
+        "Follow Up",
+        &[
+            with(small(Icon::Flag, "Today", "tasks.followUp"), r#"{"when":"today"}"#),
+            with(small(Icon::Flag, "Tomorrow", "tasks.followUp"), r#"{"when":"tomorrow"}"#),
+            with(small(Icon::Flag, "This Week", "tasks.followUp"), r#"{"when":"thisWeek"}"#),
+            with(small(Icon::Flag, "Next Week", "tasks.followUp"), r#"{"when":"nextWeek"}"#),
+            with(small(Icon::Flag, "No Date", "tasks.followUp"), r#"{"when":"noDate"}"#),
+        ],
+    ),
+    (
+        "Current View",
+        &[
+            with(
+                big(
+                    Icon::Flag,
+                    "To-Do
+List",
+                    "tasks.view",
+                ),
+                r#"{"view":"toDoList"}"#,
+            ),
+            with(
+                big(
+                    Icon::Sidebar,
+                    "Simple
+List",
+                    "tasks.view",
+                ),
+                r#"{"view":"simpleList"}"#,
+            ),
+            with(big(Icon::Panes, "Detailed", "tasks.view"), r#"{"view":"detailed"}"#),
+            with(big(Icon::Importance, "Prioritized", "tasks.view"), r#"{"view":"prioritized"}"#),
+            with(small(Icon::Tasks, "Active", "tasks.view"), r#"{"view":"active"}"#),
+            with(small(Icon::Check, "Completed", "tasks.view"), r#"{"view":"completed"}"#),
+            with(small(Icon::Today, "Today", "tasks.view"), r#"{"view":"today"}"#),
+            with(small(Icon::WeekView, "Next 7 Days", "tasks.view"), r#"{"view":"next7Days"}"#),
+            with(small(Icon::Clock, "Overdue", "tasks.view"), r#"{"view":"overdue"}"#),
+        ],
+    ),
+    ("Find", &[small(Icon::Search, "Search Tasks", "ui.searchTasks")]),
+    ("Actions", &[small(Icon::Open, "Open", "ui.openTask")]),
+];
+
 const SEND_RECEIVE: &[Group] = &[
     (
         "Send & Receive",
@@ -214,6 +286,8 @@ impl MailUi {
             "ui.contact" => self.session.is_enabled("people.new"),
             "ui.contactGroup" => self.session.is_enabled("people.newGroup"),
             "ui.openContact" | "ui.saveCardsDialog" => self.session.people.selected.is_some(),
+            "ui.task" => self.session.is_enabled("tasks.new"),
+            "ui.openTask" => self.session.tasks.selected.is_some(),
             c if c.starts_with("ui.") => true,
             c => match menu_of(c) {
                 Some("categorize" | "followup") => self.session.is_enabled("mail.flag"),
@@ -230,6 +304,7 @@ impl MailUi {
         match b.cmd {
             "calendar.view" => b.params.contains(&format!("\"{}\"", self.session.calendar.view.name())),
             "people.view" => b.params.contains(&format!("\"{}\"", self.session.people.view.name())),
+            "tasks.view" => b.params.contains(&format!("\"{}\"", self.session.tasks.view.name())),
             _ => false,
         }
     }
@@ -239,6 +314,10 @@ impl MailUi {
             if let Some(id) = self.session.calendar.selected {
                 self.act("ui.appointment", json!({ "id": id }));
             }
+            return;
+        }
+        if b.cmd == "ui.openTask" {
+            self.act("ui.task", json!({ "open": true }));
             return;
         }
         if b.cmd == "ui.openContact" {
@@ -258,6 +337,7 @@ impl MailUi {
         match self.tab {
             Tab::Home if self.session.module == openmailclient_engine::Module::Calendar => CALENDAR_HOME,
             Tab::Home if self.session.module == openmailclient_engine::Module::People => PEOPLE_HOME,
+            Tab::Home if self.session.module == openmailclient_engine::Module::Tasks => TASKS_HOME,
             Tab::Home => HOME,
             Tab::SendReceive => SEND_RECEIVE,
             Tab::Folder => FOLDER,
@@ -416,7 +496,11 @@ impl MailUi {
                 items
             }
             Menu::FollowUp => vec![
-                MenuItem { swatch: Some(self.tokens.flag), ..item("Flag Message", "mail.flag", Value::Null) },
+                MenuItem { swatch: Some(self.tokens.flag), ..item("Today", "mail.followUp", json!({ "when": "today" })) },
+                MenuItem { swatch: Some(self.tokens.flag), ..item("Tomorrow", "mail.followUp", json!({ "when": "tomorrow" })) },
+                MenuItem { swatch: Some(self.tokens.flag), ..item("This Week", "mail.followUp", json!({ "when": "thisWeek" })) },
+                MenuItem { swatch: Some(self.tokens.flag), ..item("Next Week", "mail.followUp", json!({ "when": "nextWeek" })) },
+                MenuItem { swatch: Some(self.tokens.flag), ..item("No Date", "mail.followUp", json!({ "when": "noDate" })) },
                 item("Mark Complete", "mail.flagComplete", Value::Null),
                 item("Clear Flag", "mail.clearFlag", Value::Null),
             ],

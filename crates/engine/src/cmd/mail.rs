@@ -1,8 +1,9 @@
 //! Mail commands: selecting, read state, flags, delete, move, categories.
 
-use super::{CommandSpec, always, has_folder, has_selection, has_selection_writable, need_str, ok, p_str, p_u64};
+use super::{CommandSpec, always, clock, has_folder, has_selection, has_selection_writable, need_str, ok, p_str, p_u64};
 use crate::undo::Step;
 use crate::{CmdResult, EngineError, Session};
+use openmailclient_model::task::{self, FollowUp};
 use openmailclient_model::{Flag, FolderKind, StoreError};
 use serde_json::{Value, json};
 
@@ -233,18 +234,30 @@ fn toggle_read(s: &mut Session, _: &Value) -> CmdResult {
     ok()
 }
 
+/// Insert flags a message for today, as a quick click on the flag does, and takes a flag
+/// that is there away; the flag carries its days and goes on the to-do list
+/// ([MS-OXOFLAG] 3.1.4.1.1).
 fn toggle_flag(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected("Follow Up", |it| it.set_flag(if it.flag() == Flag::Flagged { Flag::None } else { Flag::Flagged }))?;
+    let (today, now, zone) = (s.today(), clock(s), s.zone.clone());
+    let (start, due) = FollowUp::Today.days(today);
+    s.edit_selected("Follow Up", |it| {
+        if it.flag() == Flag::Flagged {
+            task::clear_flag(it);
+        } else {
+            task::follow_up(it, start, due, now, &zone);
+        }
+    })?;
     ok()
 }
 
 fn flag_complete(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected("Mark Complete", |it| it.set_flag(Flag::Complete))?;
+    let (today, now) = (s.today(), clock(s));
+    s.edit_selected("Mark Complete", |it| task::mark_complete(it, today, now))?;
     ok()
 }
 
 fn clear_flag(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected("Clear Flag", |it| it.set_flag(Flag::None))?;
+    s.edit_selected("Clear Flag", task::clear_flag)?;
     ok()
 }
 

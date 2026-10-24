@@ -110,6 +110,9 @@ fn module(s: &mut Session, p: &Value) -> CmdResult {
     if s.module == Module::People {
         s.reload_people()?;
     }
+    if s.module == Module::Tasks {
+        s.reload_tasks()?;
+    }
     ok()
 }
 

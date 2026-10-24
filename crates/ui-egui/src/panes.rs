@@ -71,22 +71,8 @@ impl MailUi {
             self.people_body(ui, rest);
             return;
         }
-        if self.session.module != Module::Mail {
-            let p = ui.painter_at(rest);
-            p.rect_filled(rest, 0.0, t.surface);
-            let (icon, name) = match self.session.module {
-                Module::People => (Icon::People, "People"),
-                _ => (Icon::Tasks, "Tasks"),
-            };
-            icons::paint(&p, Rect::from_center_size(rest.center() - vec2(0.0, 40.0), vec2(56.0, 56.0)), icon, t.disabled);
-            p.text(rest.center() + vec2(0.0, 12.0), Align2::CENTER_CENTER, format!("{name} is not built yet"), font(16.0), t.text_dim);
-            p.text(
-                rest.center() + vec2(0.0, 36.0),
-                Align2::CENTER_CENTER,
-                "This first milestone covers mail and data files.",
-                font(12.5),
-                t.text_faint,
-            );
+        if self.session.module == Module::Tasks {
+            self.tasks_body(ui, rest);
             return;
         }
         let mut left = rest.left();

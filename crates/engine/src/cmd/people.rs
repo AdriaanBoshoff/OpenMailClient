@@ -532,7 +532,7 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// One line of text: control characters left out, cut, trimmed.
-fn line_param(p: &Value, key: &str) -> Result<Option<String>, EngineError> {
+pub(super) fn line_param(p: &Value, key: &str) -> Result<Option<String>, EngineError> {
     match p.get(key) {
         None => Ok(None),
         Some(Value::Null) => Ok(Some(String::new())),
@@ -554,7 +554,7 @@ fn address_param(v: &str) -> Result<String, EngineError> {
     Ok(a.to_string())
 }
 
-fn categories_param(v: &Value) -> Result<Vec<String>, EngineError> {
+pub(super) fn categories_param(v: &Value) -> Result<Vec<String>, EngineError> {
     let bad = || EngineError::BadParams("\"categories\" is a list of names".into());
     let list = v.as_array().ok_or_else(bad)?;
     let mut out = Vec::new();

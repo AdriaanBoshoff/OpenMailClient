@@ -54,6 +54,8 @@ mod tests_remote;
 mod tests_send;
 #[cfg(test)]
 mod tests_sync;
+#[cfg(test)]
+mod tests_tasks;
 pub mod undo;
 pub mod watch;
 
@@ -412,6 +414,8 @@ pub struct Session {
     pub calendar: cmd::calendar::Shown,
     /// What the People module shows.
     pub people: cmd::people::Shown,
+    /// What the Tasks module shows.
+    pub tasks: cmd::tasks::Shown,
 }
 
 impl Default for Session {
@@ -500,6 +504,7 @@ impl Session {
             places: cmd::imap_sync::Places::default(),
             calendar: cmd::calendar::Shown::default(),
             people: cmd::people::Shown::default(),
+            tasks: cmd::tasks::Shown::default(),
             certificates: accounts::Shown::default(),
             print_style: print::Style::default(),
             print_list: print::Listing::default(),

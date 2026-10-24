@@ -2991,6 +2991,145 @@ fn people_keys_choose_open_and_delete() {
     assert!(ui.execute("ui.saveCardsDialog", &Value::Null).is_err());
 }
 
+/// Tasks draws every view, light and dark, at any size, with hostile tasks in it, and the
+/// To-Do List with flagged mail beside the tasks.
+#[test]
+fn tasks_draws_every_view_with_hostile_tasks() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "tasks" })).unwrap();
+    ui.execute("tasks.view", &json!({ "view": "simpleList" })).unwrap();
+    assert_eq!(ui.session.tasks.rows.len(), 5);
+    for subject in ["\u{202e}gnol ".repeat(300), "\u{5e9}\u{5dc}\u{5d5}\u{5dd}".to_string(), "\u{0}\u{7}\t x".to_string()] {
+        ui.execute("tasks.new", &json!({ "subject": subject, "notes": "z\n".repeat(5000), "categories": ["c".repeat(500)], "percent": 55 })).unwrap();
+    }
+    for _ in 0..40 {
+        ui.execute("tasks.new", &json!({ "subject": "Same", "due": "2001-01-01" })).unwrap();
+    }
+    for dark in [false, true] {
+        ui.execute("ui.theme", &json!({ "theme": if dark { "dark" } else { "light" } })).unwrap();
+        for view in openmailclient_engine::cmd::tasks::View::ALL {
+            ui.execute("tasks.view", &json!({ "view": view.name() })).unwrap();
+            for size in [egui::vec2(1280.0, 800.0), egui::vec2(320.0, 240.0), egui::vec2(1.0, 1.0)] {
+                draw_window(&mut ui, size);
+            }
+        }
+    }
+    ui.execute("tasks.view", &json!({ "view": "toDoList" })).unwrap();
+    assert!(ui.session.tasks.rows.iter().any(|r| r.task.flagged_mail), "the To-Do List shows flagged mail");
+    let key = ui.session.tasks.rows[0].key();
+    ui.execute("tasks.select", &json!({ "id": key.2, "store": key.0, "folder": key.1.0 })).unwrap();
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    ui.execute("view.folderPane", &Value::Null).unwrap();
+    draw_window(&mut ui, egui::vec2(900.0, 600.0));
+    ui.execute("tasks.search", &json!({ "query": "nobody-here-at-all" })).unwrap();
+    assert!(ui.session.tasks.rows.is_empty());
+    draw_window(&mut ui, egui::vec2(900.0, 600.0));
+}
+
+/// The task window opens on a task as it is, makes and changes tasks with nothing lost, and on
+/// a flagged message changes only its follow-up.
+#[test]
+fn the_task_window_makes_and_changes_tasks() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "tasks" })).unwrap();
+    ui.execute("ui.task", &Value::Null).unwrap();
+    let mut form = ui.task.clone().unwrap();
+    assert!(form.key.is_none());
+    form.subject = "Order the banners".to_string();
+    form.due = "2031-03-04".to_string();
+    form.importance = 2;
+    form.total_work = "2 days".to_string();
+    form.actual_work = "90 minutes".to_string();
+    form.categories = "Red category; Print".to_string();
+    form.companies = "Northgate".to_string();
+    form.notes = "Two of them".to_string();
+    ui.task = Some(form.clone());
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    let made = ui.execute("tasks.new", &form.params().unwrap()).unwrap();
+    ui.task = None;
+    ui.execute("ui.task", &made).unwrap();
+    let opened = ui.task.clone().unwrap();
+    assert_eq!(opened.subject, "Order the banners");
+    assert_eq!((opened.due.as_str(), opened.importance), ("2031-03-04", 2));
+    assert_eq!((opened.total_work.as_str(), opened.actual_work.as_str()), ("2 days", "90 minutes"));
+    assert_eq!(opened.categories, "Red category, Print");
+    // Saved again unchanged, nothing is lost.
+    ui.execute("tasks.change", &opened.params().unwrap()).unwrap();
+    ui.task = None;
+    ui.execute("ui.task", &made).unwrap();
+    let again = ui.task.clone().unwrap();
+    assert_eq!((again.notes.as_str(), again.companies.as_str(), again.total_work.as_str()), ("Two of them", "Northgate", "2 days"));
+    // Work that cannot be read says so.
+    let mut bad = again.clone();
+    bad.total_work = "lots".to_string();
+    assert!(bad.params().is_err());
+    // A flagged message opens as its follow-up, and only that is sent.
+    ui.task = None;
+    ui.execute("tasks.view", &json!({ "view": "toDoList" })).unwrap();
+    let mail = ui.session.tasks.rows.iter().find(|r| r.task.flagged_mail).unwrap().key();
+    ui.execute("ui.task", &json!({ "id": mail.2, "store": mail.0, "folder": mail.1.0 })).unwrap();
+    let flagged = ui.task.clone().unwrap();
+    assert!(flagged.flagged_mail);
+    let p = flagged.params().unwrap();
+    assert!(p.get("notes").is_none() && p.get("importance").is_none());
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    assert!(ui.execute("ui.task", &json!({ "id": 999_999_999u64 })).is_err());
+}
+
+/// What is typed on the add line, and work in hours, days and weeks, are read safely.
+#[test]
+fn quick_tasks_and_work_are_read_safely() {
+    use crate::tasks::{parse_work, quick_task};
+    let today = 20_000;
+    assert_eq!(quick_task("Call the printer tomorrow", today), json!({ "subject": "Call the printer", "due": "2024-10-05", "start": "2024-10-05" }));
+    assert_eq!(quick_task("Pay rent 2030-01-31", today)["due"], "2030-01-31");
+    assert_eq!(quick_task("today", today), json!({ "subject": "today" }));
+    // Letters whose lower case is longer never cut a letter in two.
+    for text in ["\u{130}\u{130}\u{130} today", "\u{130} TODAY", "x\u{130}oday", "\u{130}\u{130}\u{130}\u{130}\u{130}\u{130}\u{130}\u{130}\u{130}"] {
+        let _ = quick_task(text, today);
+    }
+    assert_eq!(parse_work(""), Ok(0));
+    assert_eq!(parse_work("3"), Ok(180));
+    assert_eq!(parse_work("1.5 days"), Ok(720));
+    assert_eq!(parse_work("2w"), Ok(4800));
+    assert!(parse_work("1e300 weeks").is_err());
+    assert!(parse_work("-3").is_err());
+    assert!(parse_work("3 fortnights").is_err());
+}
+
+/// The keys go through the same commands: arrows choose, Delete takes away, Ctrl+Z puts back.
+#[test]
+fn tasks_keys_choose_and_delete() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "tasks" })).unwrap();
+    ui.execute("tasks.view", &json!({ "view": "simpleList" })).unwrap();
+    let keys: Vec<_> = ui.session.tasks.rows.iter().map(|r| r.key()).collect();
+    let step = |ui: &mut MailUi, by: isize| {
+        ui.tasks_step(by);
+        for (id, params) in std::mem::take(&mut ui.actions) {
+            ui.execute(&id, &params).unwrap();
+        }
+    };
+    ui.session.tasks.selected = None;
+    step(&mut ui, 1);
+    assert_eq!(ui.session.tasks.selected, keys.first().copied());
+    step(&mut ui, 1);
+    assert_eq!(ui.session.tasks.selected, keys.get(1).copied());
+    step(&mut ui, isize::MAX);
+    assert_eq!(ui.session.tasks.selected, keys.last().copied());
+    step(&mut ui, isize::MIN);
+    assert_eq!(ui.session.tasks.selected, keys.first().copied());
+    ui.execute("ui.task", &json!({ "open": true })).unwrap();
+    assert!(ui.task.is_some());
+    ui.task = None;
+    ui.execute("tasks.delete", &Value::Null).unwrap();
+    assert_eq!(ui.session.tasks.rows.len(), keys.len() - 1);
+    ui.execute("edit.undo", &Value::Null).unwrap();
+    assert_eq!(ui.session.tasks.rows.len(), keys.len());
+    ui.execute("ui.searchTasks", &Value::Null).unwrap();
+    assert!(ui.tasks_search_focus);
+}
+
 /// A vCard file is shown card by card, nothing added till asked, and a card for someone known
 /// already brings them up to date.
 #[test]

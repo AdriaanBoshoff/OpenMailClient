@@ -51,6 +51,16 @@ impl Session {
                 {
                     *id = now;
                 }
+                // What was made or brought up to date is known by its id too, so a delete
+                // taken back before it does not leave it behind.
+                Step::Imported { store, folder, added, updated, .. } if *store == in_store && *folder == in_folder => {
+                    for id in added.iter_mut().filter(|id| **id == was) {
+                        *id = now;
+                    }
+                    for (id, _) in updated.iter_mut().filter(|(id, _)| *id == was) {
+                        *id = now;
+                    }
+                }
                 _ => {}
             }
         }
@@ -103,6 +113,7 @@ impl Session {
                 self.refresh_folders(store);
                 self.reload_calendar()?;
                 self.reload_people()?;
+                self.reload_tasks()?;
                 return Ok(what);
             }
             Step::Removed { store, folder, was, mut item, .. } => {
@@ -114,6 +125,14 @@ impl Session {
             }
         };
         self.refresh_folders(at_store);
+        if self.module == crate::Module::Tasks {
+            // A task taken back is chosen where it is, among the others.
+            self.tasks.selected = Some((at_store, at_folder, at_id));
+            self.reload_tasks()?;
+            if self.tasks.rows.iter().any(|r| r.key() == (at_store, at_folder, at_id)) {
+                return Ok(what);
+            }
+        }
         if self.module == crate::Module::People {
             // A contact taken back is chosen where it is, among the others.
             self.reload_people()?;

@@ -155,10 +155,13 @@ pub const FEATURES: &[Feature] = &[
     f("People", "Home", "Actions", "Mail Merge", ""),
     f("People", "Home", "Share", "Forward Contact", "people.forward"),
     // Tasks
-    f("Tasks", "Home", "New", "New Task", ""),
-    f("Tasks", "Home", "Manage Task", "Mark Complete", ""),
-    f("Tasks", "Home", "Follow Up", "Today, Tomorrow, This Week", ""),
-    f("Tasks", "Home", "Current View", "To-Do List, Detailed, Simple List", ""),
+    f("Tasks", "Home", "New", "New Task", "tasks.new"),
+    f("Tasks", "Home", "Delete", "Delete", "tasks.delete"),
+    f("Tasks", "Home", "Manage Task", "Mark Complete", "tasks.markComplete"),
+    f("Tasks", "Home", "Manage Task", "Remove from List", "tasks.removeFromList"),
+    f("Tasks", "Home", "Follow Up", "Today, Tomorrow, This Week", "tasks.followUp"),
+    f("Tasks", "Home", "Current View", "To-Do List, Detailed, Simple List", "tasks.view"),
+    f("Tasks", "Home", "Find", "Search Tasks", "tasks.search"),
     f("Tasks", "Task", "Manage Task", "Assign Task", ""),
 ];
 

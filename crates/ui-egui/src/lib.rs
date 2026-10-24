@@ -23,6 +23,7 @@ mod pictures;
 mod preview;
 mod progress;
 mod ribbon;
+mod tasks;
 pub mod theme;
 mod themes;
 
@@ -237,6 +238,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         params: r#"{"path": a vCard file, or "attachment": the number of an attachment of the open message} opens the window on what it holds (people.import), every card chosen; {"import": true, "only": [card numbers] (default: those chosen)} adds them and shows People; {"close": true} closes it"#,
     },
     UiCommand { id: "ui.searchPeople", label: "Search People", params: "" },
+    UiCommand {
+        id: "ui.task",
+        label: "New Task",
+        params: r#"{"id", "store", "folder": a task's or flagged message's row to open it, or "open": true for the one chosen; none for a new task}"#,
+    },
+    UiCommand { id: "ui.searchTasks", label: "Search Tasks", params: "" },
     UiCommand { id: "ui.quit", label: "Exit", params: "" },
 ];
 
@@ -403,6 +410,13 @@ pub struct MailUi {
     pub(crate) people_search_focus: bool,
     pub(crate) people_scroll: bool,
     pub(crate) people_face: people::Face,
+    /// The task window, what is typed in the Tasks search box and on the line that adds a
+    /// task, the box to be focused, and the list to scroll to the one chosen.
+    pub(crate) task: Option<tasks::TaskForm>,
+    pub(crate) tasks_query: String,
+    pub(crate) tasks_add: String,
+    pub(crate) tasks_search_focus: bool,
+    pub(crate) tasks_scroll: bool,
     /// The bar above the open meeting message, by the message it was worked out for.
     pub(crate) invitation: Option<(String, Option<meeting::Bar>)>,
 }
@@ -629,6 +643,11 @@ impl MailUi {
             people_search_focus: false,
             people_scroll: false,
             people_face: people::Face::default(),
+            task: None,
+            tasks_query: String::new(),
+            tasks_add: String::new(),
+            tasks_search_focus: false,
+            tasks_scroll: false,
             invitation: None,
         }
     }
@@ -871,6 +890,11 @@ impl MailUi {
             "ui.searchPeople" => {
                 self.execute("nav.module", &json!({ "module": "people" }))?;
                 self.people_search_focus = true;
+            }
+            "ui.task" => return self.task_command(params),
+            "ui.searchTasks" => {
+                self.execute("nav.module", &json!({ "module": "tasks" }))?;
+                self.tasks_search_focus = true;
             }
             "ui.printPreview" => {
                 if params.get("close").and_then(Value::as_bool) == Some(true) {
@@ -1213,6 +1237,7 @@ impl MailUi {
         self.contact_window(&ctx);
         self.group_window(&ctx);
         self.cards_file_window(&ctx);
+        self.task_window(&ctx);
 
         for (id, params) in std::mem::take(&mut self.actions) {
             if let Err(e) = self.execute(&id, &params) {
@@ -1235,6 +1260,7 @@ impl MailUi {
             || self.contact.is_some()
             || self.group.is_some()
             || self.cards_file.is_some()
+            || self.task.is_some()
     }
 
     fn shortcuts(&mut self, ui: &mut Ui) {
@@ -1261,6 +1287,9 @@ impl MailUi {
         }
         if hit(ctrl_shift, Key::L) {
             run.push(("ui.contactGroup", Value::Null));
+        }
+        if hit(ctrl_shift, Key::K) {
+            run.push(("ui.task", Value::Null));
         }
         let calendar = self.session.module == openmailclient_engine::Module::Calendar;
         let people = self.session.module == openmailclient_engine::Module::People;
@@ -1296,6 +1325,36 @@ impl MailUi {
                     && hit(Modifiers::NONE, Key::Enter)
                 {
                     run.push(("ui.contact", json!({ "id": id })));
+                }
+            }
+        }
+        if self.session.module == openmailclient_engine::Module::Tasks {
+            // The Tasks module's own keys: a new task on Ctrl+N, the arrows through the list,
+            // Enter to open the one chosen, Ctrl+E to search, Ctrl+D or Delete to delete it.
+            if hit(ctrl, Key::N) {
+                run.push(("ui.task", Value::Null));
+            }
+            if hit(ctrl, Key::E) {
+                self.tasks_search_focus = true;
+            }
+            if hit(ctrl, Key::D) || (!typing && hit(Modifiers::NONE, Key::Delete)) {
+                run.push(("tasks.delete", Value::Null));
+            }
+            if !typing {
+                for (key, by) in [
+                    (Key::ArrowDown, 1),
+                    (Key::ArrowUp, -1),
+                    (Key::PageDown, 10),
+                    (Key::PageUp, -10),
+                    (Key::Home, isize::MIN),
+                    (Key::End, isize::MAX),
+                ] {
+                    if hit(Modifiers::NONE, key) {
+                        self.tasks_step(by);
+                    }
+                }
+                if self.session.tasks.selected.is_some() && hit(Modifiers::NONE, Key::Enter) {
+                    run.push(("ui.task", json!({ "open": true })));
                 }
             }
         }
@@ -1407,6 +1466,8 @@ impl MailUi {
             "Calendar".to_string()
         } else if self.session.module == openmailclient_engine::Module::People {
             "Contacts".to_string()
+        } else if self.session.module == openmailclient_engine::Module::Tasks {
+            if self.session.tasks.view == openmailclient_engine::cmd::tasks::View::ToDoList { "To-Do List" } else { "Tasks" }.to_string()
         } else {
             self.session.current_folder().map(|f| f.name.clone()).unwrap_or_else(|| "No data file".to_string())
         };
