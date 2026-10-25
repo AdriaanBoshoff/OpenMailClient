@@ -38,7 +38,7 @@
       and every feature reachable as a command from the window, a CLI and, later, an MCP server for agents.</p>
     <div class="actions">
       <a class="button" href="https://github.com/AdriaanBoshoff/OpenMailClient">View on GitHub</a>
-      <a class="button ghost" href="#start">Build it</a>
+      <a class="button ghost" href="https://github.com/AdriaanBoshoff/OpenMailClient/releases">Download for Windows</a>
     </div>
     <figure class="shot">
       <picture>
@@ -188,7 +188,10 @@
 <section id="start">
   <div class="wrap">
     <h2>Get started</h2>
-    <p class="muted">There are no packaged releases yet. With a Rust toolchain (1.90 or newer):</p>
+    <p>The first pre-release, <b>0.1.0-alpha.1</b>, is out for Windows 10 and 11 (x64).</p>
+    <p><a class="button" href="https://github.com/AdriaanBoshoff/OpenMailClient/releases">Download the installer</a></p>
+    <p class="muted">It installs for you alone without an administrator, and asks whether to put OpenMailClient on the Start menu and the desktop. Help, Check for Updates keeps it up to date from GitHub, pre-releases too if you like, and checks each installer against the release's SHA-256 sums before anything runs. The installer is not signed yet, so SmartScreen may ask first. It is an alpha: keep a copy of any data file you open with it.</p>
+    <p class="muted">Or build it with a Rust toolchain (1.90 or newer):</p>
     <pre><code>git clone https://github.com/AdriaanBoshoff/OpenMailClient
 cd OpenMailClient
 cargo run --release -p openmailclient -- --sample</code></pre>
