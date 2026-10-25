@@ -307,6 +307,10 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
         self.ui.session.tick_clock();
+        // The newest release is asked after on its own once a day; that only ever tells.
+        if self.ui.session.update_due() {
+            self.run("help.checkForUpdates", json!({ "auto": true, "wait": false }));
+        }
         // Mail is sent and received on its own every so often, counted from the last time.
         if let Some(left) = self.ui.session.send_receive_due(ms) {
             ctx.request_repaint_after(std::time::Duration::from_millis(left.clamp(50, 60_000)));
@@ -331,6 +335,13 @@ impl eframe::App for App {
         self.keep_settings(true);
         // The copies of attachments opened this run go with it.
         openmailclient_engine::attachments::clear_opened(true);
+        // An update asked to be installed is run last, once everything is saved or kept: it
+        // closes what is left of this run and starts the program again when it is done.
+        if let (Some(ready), Some(dir)) = (self.ui.session.update.install.take(), self.ui.session.update_dir.clone())
+            && let Err(e) = openmailclient_engine::update::launch(&ready, &dir)
+        {
+            eprintln!("openmailclient: {e}");
+        }
     }
 }
 
@@ -345,6 +356,17 @@ fn settings_path() -> Option<std::path::PathBuf> {
         var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|home| home.join(".config")))?.join("openmailclient")
     };
     Some(dir.join("settings.json"))
+}
+
+/// Where updates are brought down: the per-user folder for what can be made again, as the
+/// installer itself is kept.
+fn updates_path() -> Option<std::path::PathBuf> {
+    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+    if cfg!(target_os = "windows") {
+        Some(var("LOCALAPPDATA")?.join("OpenMailClient").join("Updates"))
+    } else {
+        settings_path().and_then(|p| p.parent().map(|dir| dir.join("Updates")))
+    }
 }
 
 fn main() -> ExitCode {
@@ -363,6 +385,7 @@ fn main() -> ExitCode {
     // Each account's mail is kept in a data file of its own beside the settings, as Outlook
     // keeps one per account, apart from any data file opened.
     session.account_dir = settings_path().and_then(|p| p.parent().map(|dir| dir.join("Accounts")));
+    session.update_dir = updates_path();
     // Outlook's profiles are read only when an import from Outlook is asked for.
     session.outlook = Some(std::sync::Arc::new(openmailclient_engine::outlook::system_profiles));
     let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null, written: None, settled: None, started: std::time::Instant::now() };
@@ -397,7 +420,8 @@ fn main() -> ExitCode {
         .with_title("OpenMailClient")
         .with_inner_size(place.map_or(openmailclient_ui_egui::FIRST_WINDOW, |w| w.size))
         .with_min_inner_size(openmailclient_ui_egui::MIN_WINDOW)
-        .with_maximized(place.is_some_and(|w| w.maximized));
+        .with_maximized(place.is_some_and(|w| w.maximized))
+        .with_icon(egui::IconData { rgba: openmailclient_ui_egui::app_icon::rgba(64), width: 64, height: 64 });
     if let Some(pos) = place.and_then(|w| w.pos) {
         viewport = viewport.with_position(pos);
     }

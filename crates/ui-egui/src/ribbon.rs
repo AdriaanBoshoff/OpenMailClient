@@ -255,7 +255,7 @@ const ICON_ONLY: &[&str] = &[
     "view.reverseSort",
 ];
 
-const HELP: &[Group] = &[("Help", &[big(Icon::Info, "About\nOpenMailClient", "ui.about")])];
+const HELP: &[Group] = &[("Help", &[big(Icon::Info, "About\nOpenMailClient", "ui.about"), big(Icon::Update, "Check for\nUpdates", "ui.updates")])];
 
 fn menu_of(cmd: &str) -> Option<&str> {
     cmd.strip_prefix("menu:")

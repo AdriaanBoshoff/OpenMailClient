@@ -25,6 +25,7 @@ resvg = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 log = { workspace = true }
 # The time zone the machine keeps.
 chrono = { workspace = true }

@@ -6,8 +6,14 @@
 //! cargo xtask layers    no crate depends on a layer above it; no GUI crates below the UI
 //! cargo xtask parity    write docs/parity-checklist.md from the feature catalog
 //! cargo xtask wasm      the engine and everything under it builds for wasm32
+//! cargo xtask icon      draw the program's icon into apps/openmailclient/assets
+//! cargo xtask package   build for release and make the Windows installer and its sums
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+#[path = "../../crates/ui-egui/src/app_icon.rs"]
+mod app_icon;
+mod package;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -63,7 +69,9 @@ fn main() -> ExitCode {
         "layers" => layers(),
         "parity" => parity(),
         "wasm" => wasm(),
-        _ => Err("usage: cargo xtask <ci | assets | layers | parity | wasm>".to_string()),
+        "icon" => icon(),
+        "package" => package::package(),
+        _ => Err("usage: cargo xtask <ci | assets | layers | parity | wasm | icon | package>".to_string()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -193,4 +201,40 @@ fn wasm() -> Result<(), String> {
         args.extend(["-p", name]);
     }
     cargo(&args)
+}
+
+/// The sizes Windows picks from for the taskbar, Start, the desktop and Explorer.
+const ICON_SIZES: &[u32] = &[16, 20, 24, 32, 40, 48, 64, 256];
+
+/// The program's icon, drawn by `app_icon` at each size, written as an `.ico` of PNG images.
+fn icon() -> Result<(), String> {
+    let path = root().join("apps/openmailclient/assets/openmailclient.ico");
+    let mut images = Vec::new();
+    for &size in ICON_SIZES {
+        let mut png = Vec::new();
+        let rgba = image::RgbaImage::from_raw(size, size, app_icon::rgba(size)).ok_or("the icon came out the wrong size")?;
+        rgba.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+        images.push((size, png));
+    }
+    // ICONDIR, then an ICONDIRENTRY per image, then the images (a size of 256 is written as 0).
+    let mut ico = Vec::new();
+    ico.extend_from_slice(&[0, 0, 1, 0]);
+    ico.extend_from_slice(&(images.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * images.len();
+    for (size, png) in &images {
+        let side = if *size >= 256 { 0 } else { *size as u8 };
+        ico.extend_from_slice(&[side, side, 0, 0, 1, 0, 32, 0]);
+        ico.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        ico.extend_from_slice(&(offset as u32).to_le_bytes());
+        offset += png.len();
+    }
+    for (_, png) in &images {
+        ico.extend_from_slice(png);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, ico).map_err(|e| format!("{}: {e}", path.display()))?;
+    println!("icon: wrote {}", path.display());
+    Ok(())
 }

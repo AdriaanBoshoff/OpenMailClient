@@ -3219,3 +3219,52 @@ fn a_job_that_will_not_end_is_left_once_the_wait_is_over() {
     assert!(ui.close_now(1_000 + LEAVE_WAIT_MS));
     assert!(ui.session.jobs.is_empty());
 }
+
+#[test]
+fn check_for_updates_draws_in_every_state_and_shows_a_release_s_words_as_text() {
+    use openmailclient_engine::update::{Asset, Ready, Release, Version};
+    let mut ui = MailUi::new(Session::with_sample());
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    assert!(ui.execute("ui.updates", &json!({ "open": "yes" })).is_err());
+    // No network here: opened, nothing is asked and it says nothing was checked.
+    ui.execute("ui.updates", &json!({ "open": true })).unwrap();
+    frame(&mut ui, &ctx, Vec::new(), None);
+    assert!(ui.updates_open && ui.session.running().is_empty());
+    ui.session.update.checked = true;
+    frame(&mut ui, &ctx, Vec::new(), None);
+    let asset = |name: &str| Asset {
+        name: name.into(),
+        url: format!("https://github.com/AdriaanBoshoff/OpenMailClient/releases/download/v9.0.0/{name}"),
+        size: 12_345_678,
+    };
+    let hostile = format!("{}\u{202e}reversed\u{200b}\n<script>alert(1)</script>\n{}", "# Notes\n".repeat(400), "x".repeat(50_000));
+    ui.session.update.found = Some(Release {
+        tag: "v9.0.0-beta.1".into(),
+        version: Version::parse("9.0.0-beta.1").unwrap(),
+        name: "\u{202e}A very long name\n".repeat(30),
+        notes: hostile,
+        prerelease: true,
+        page: "https://github.com/AdriaanBoshoff/OpenMailClient/releases/tag/v9.0.0-beta.1".into(),
+        published: "2026-10-25T10:00:00Z".into(),
+        setup: Some(asset("OpenMailClient-9.0.0-beta.1-windows-x64-setup.exe")),
+        sums: Some(asset("SHA256SUMS.txt")),
+    });
+    ui.session.update.failed = Some("Updates could not be checked for:\n\u{0}line".into());
+    for _ in 0..2 {
+        frame(&mut ui, &ctx, Vec::new(), None);
+    }
+    // Downloaded, then asked to be installed on close: each draws; nothing is run by drawing.
+    let ready = Ready { path: std::env::temp_dir().join("not-there-setup.exe"), sha256: [0; 32], version: Version::parse("9.0.0-beta.1").unwrap() };
+    ui.session.update.ready = Some(ready.clone());
+    frame(&mut ui, &ctx, Vec::new(), None);
+    ui.session.update.install = Some(ready);
+    frame(&mut ui, &ctx, Vec::new(), None);
+    // An installer that is not where it was checked is refused, not run.
+    ui.session.update.install = None;
+    assert!(ui.session.run("help.installUpdate", &Value::Null).is_err());
+    assert!(ui.session.update.install.is_none());
+    ui.execute("ui.updates", &json!({ "open": false })).unwrap();
+    frame(&mut ui, &ctx, Vec::new(), None);
+    assert!(!ui.updates_open);
+}

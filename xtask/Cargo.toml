@@ -10,3 +10,5 @@ workspace = true
 
 [dependencies]
 openmailclient-engine = { workspace = true }
+image = { workspace = true }
+sha2 = { workspace = true }

@@ -56,7 +56,10 @@ mod tests_send;
 mod tests_sync;
 #[cfg(test)]
 mod tests_tasks;
+#[cfg(test)]
+mod tests_update;
 pub mod undo;
+pub mod update;
 pub mod watch;
 
 use openmailclient_model::zone::Zone;
@@ -416,6 +419,11 @@ pub struct Session {
     pub people: cmd::people::Shown,
     /// What the Tasks module shows.
     pub tasks: cmd::tasks::Shown,
+    /// Where updates of the program stand (`help.checkForUpdates`).
+    pub update: update::Updates,
+    /// A folder of the program's own where updates are brought down. Set by the host; `None`
+    /// brings none down.
+    pub update_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Session {
@@ -505,6 +513,8 @@ impl Session {
             calendar: cmd::calendar::Shown::default(),
             people: cmd::people::Shown::default(),
             tasks: cmd::tasks::Shown::default(),
+            update: update::Updates::new(),
+            update_dir: None,
             certificates: accounts::Shown::default(),
             print_style: print::Style::default(),
             print_list: print::Listing::default(),

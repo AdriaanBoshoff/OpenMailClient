@@ -108,6 +108,22 @@ impl Conn {
         Ok(out)
     }
 
+    /// What has come or comes next, no more than `max` bytes of it; nothing once the other end
+    /// has closed.
+    pub fn some(&mut self, max: usize) -> Result<Vec<u8>, NetError> {
+        if self.pending().is_empty() {
+            match self.fill() {
+                Ok(()) => {}
+                Err(NetError::Closed) => return Ok(Vec::new()),
+                Err(e) => return Err(e),
+            }
+        }
+        let take = max.max(1).min(self.pending().len());
+        let out = self.pending().get(..take).unwrap_or_default().to_vec();
+        self.at += take;
+        Ok(out)
+    }
+
     /// How long a read waits from now on; what it waited before, where the stream can say.
     pub(crate) fn set_wait(&mut self, wait: std::time::Duration) -> Result<Option<std::time::Duration>, NetError> {
         Ok(self.s.set_wait(wait)?)

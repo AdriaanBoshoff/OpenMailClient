@@ -21,6 +21,7 @@ pub(crate) mod receive;
 mod send;
 pub(crate) mod settings;
 pub mod tasks;
+mod update;
 mod view;
 
 use crate::{CmdResult, EngineError, Session};
@@ -65,6 +66,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(calendar::commands());
         v.extend(people::commands());
         v.extend(tasks::commands());
+        v.extend(update::commands());
         v.extend(calendar_file::commands());
         v.extend(meeting::commands());
         v.extend(caldav::commands());

@@ -99,3 +99,65 @@ fn hostile_web_servers_are_capped() {
     let f = fake(&[("pictures.example.com/head.png", &many)]);
     assert!(matches!(get(&f, "https://pictures.example.com/head.png", 1024), Err(NetError::TooLarge(_))));
 }
+
+/// A large file comes down a piece at a time, by its length, in chunks or to the end, after
+/// a redirect to a long signed address; how far it is is heard, and it can be stopped.
+#[test]
+fn a_file_comes_down_in_pieces_and_can_be_stopped() {
+    use crate::http::download;
+    let body: Vec<u8> = (0..700_000u32).map(|n| (n % 251) as u8).collect();
+    let mut sized = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+    sized.extend(&body);
+    let mut chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    for part in body.chunks(300_000) {
+        chunked.extend(format!("{:x}\r\n", part.len()).as_bytes());
+        chunked.extend(part);
+        chunked.extend(b"\r\n");
+    }
+    chunked.extend(b"0\r\n\r\n");
+    let mut ended = b"HTTP/1.0 200 OK\r\n\r\n".to_vec();
+    ended.extend(&body);
+    let signed = format!("/f?sig={}", "a".repeat(3000));
+    let moved = format!("HTTP/1.1 302 Found\r\nLocation: https://files.example.com{signed}\r\n\r\n").into_bytes();
+    let f = fake(&[
+        ("files.example.com/sized", &sized),
+        ("files.example.com/chunked", &chunked),
+        ("files.example.com/ended", &ended),
+        ("releases.example.com/moved", &moved),
+        (&format!("files.example.com{signed}"), &sized),
+        ("files.example.com/plain", b"HTTP/1.1 302 Found\r\nLocation: http://files.example.com/sized\r\n\r\n"),
+    ]);
+    for path in [
+        "https://files.example.com/sized",
+        "https://files.example.com/chunked",
+        "https://files.example.com/ended",
+        "https://releases.example.com/moved",
+    ] {
+        let mut out = Vec::new();
+        let mut heard = Vec::new();
+        let got = download(&f, path, 1 << 20, &mut out, &mut |n, total| {
+            heard.push((n, total));
+            true
+        })
+        .unwrap();
+        assert_eq!(got, body.len() as u64, "{path}");
+        assert!(out == body, "{path}");
+        assert!(heard.len() >= 3, "heard in pieces: {path}");
+        assert!(heard.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+    // Stopped part way: an error, and no more than was heard is written.
+    let mut out = Vec::new();
+    let stopped = download(&f, "https://files.example.com/sized", 1 << 20, &mut out, &mut |n, _| n < 300_000);
+    assert!(matches!(stopped, Err(NetError::Refused(_))));
+    assert!(out.len() < body.len());
+    // Larger than asked for, by its length, in chunks or to the end: refused as it comes.
+    for path in ["https://files.example.com/sized", "https://files.example.com/chunked", "https://files.example.com/ended"] {
+        let mut out = Vec::new();
+        assert!(matches!(download(&f, path, 100_000, &mut out, &mut |_, _| true), Err(NetError::TooLarge(_))), "{path}");
+        assert!(out.len() <= 100_000);
+    }
+    // Never over plain HTTP, never from this machine.
+    assert!(download(&f, "https://files.example.com/plain", 1 << 20, &mut Vec::new(), &mut |_, _| true).is_err());
+    assert!(download(&f, "https://127.0.0.1/sized", 1 << 20, &mut Vec::new(), &mut |_, _| true).is_err());
+    assert!(download(&f, &format!("https://files.example.com/{}", "a".repeat(9000)), 1 << 20, &mut Vec::new(), &mut |_, _| true).is_err());
+}

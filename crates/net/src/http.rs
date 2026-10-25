@@ -1,5 +1,7 @@
 //! Pictures a message names on a web server, fetched only when the reader asks: one `GET`
-//! over HTTPS ([RFC 9110], [RFC 9112]), through the same connector the mail clients use.
+//! over HTTPS ([RFC 9110], [RFC 9112]), through the same connector the mail clients use. The
+//! same `GET` asks a web service what it knows (`get_as`) and brings a large file down a piece
+//! at a time into wherever it is put (`download`), as an update of the program is.
 //!
 //! What the request says about the reader is as little as can be: no cookies, no referrer, a
 //! plain user agent and no language. Plain HTTP is not used, so what is fetched cannot be
@@ -19,6 +21,13 @@ const MAX_HEAD_LINES: usize = 100;
 const MAX_URL: usize = 2048;
 /// Chunks of a chunked body.
 const MAX_CHUNKS: usize = 100_000;
+/// The largest file downloaded, such as an update of the program.
+pub const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
+/// The longest address followed to a download: a release's file is handed out at a long
+/// signed address.
+const MAX_LONG_URL: usize = 8192;
+/// Bytes read and handed on at a time while a file comes down.
+const PIECE: usize = 256 * 1024;
 
 /// A picture as a server sent it.
 #[derive(Debug)]
@@ -40,8 +49,12 @@ pub struct Address {
 /// Read a `https:` address ([RFC 9110] 4.2.2). Anything else, an address with a user name or
 /// password in it, and a server on this machine or the local network, is refused.
 pub fn address(url: &str) -> Result<Address, NetError> {
+    address_within(url, MAX_URL)
+}
+
+fn address_within(url: &str, longest: usize) -> Result<Address, NetError> {
     let url = url.trim();
-    if url.len() > MAX_URL || url.chars().any(|c| c.is_control() || c == ' ') {
+    if url.len() > longest || url.chars().any(|c| c.is_control() || c == ' ') {
         return Err(NetError::Unsupported("the address of the picture is not one that is fetched".into()));
     }
     let scheme_end = url.find("://").ok_or_else(|| NetError::Unsupported("the picture has no web address".into()))?;
@@ -166,17 +179,148 @@ enum Answer {
 
 /// Fetch a settings file a domain publishes for mail programs, as `get` fetches a picture.
 pub fn get_settings(with: &dyn Connector, url: &str, limit: usize) -> Result<Fetched, NetError> {
+    get_as(with, url, limit, "text/xml, application/xml")
+}
+
+/// Fetch what a web service answers, saying what is wanted (`Accept`), as `get` fetches a
+/// picture: such as what a project's releases are.
+pub fn get_as(with: &dyn Connector, url: &str, limit: usize, accept: &str) -> Result<Fetched, NetError> {
+    let accept: String = accept.chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(200).collect();
     let mut at = address(url)?;
     for _ in 0..=MAX_REDIRECTS {
-        match once(with, &at, limit.min(MAX_PICTURE), "text/xml, application/xml")? {
+        match once(with, &at, limit.min(MAX_PICTURE), &accept)? {
             Answer::Got(fetched) => return Ok(fetched),
             Answer::Moved(to) => at = address(&joined(&at, &to))?,
         }
     }
-    Err(NetError::Refused("the settings were moved too many times".into()))
+    Err(NetError::Refused("what was asked for was moved too many times".into()))
+}
+
+/// Bring a file down into `into` a piece at a time, following up to five redirects to other
+/// HTTPS addresses, so that however large it is no more than a piece of it is held. `heard`
+/// is told how many bytes have come and how many there are when the server says, and stops
+/// the download by answering false. A file larger than `limit` is an error before or as it
+/// comes. Gives back how many bytes came.
+pub fn download(
+    with: &dyn Connector,
+    url: &str,
+    limit: u64,
+    into: &mut dyn std::io::Write,
+    heard: &mut dyn FnMut(u64, Option<u64>) -> bool,
+) -> Result<u64, NetError> {
+    let limit = limit.min(MAX_DOWNLOAD);
+    let mut at = address_within(url, MAX_LONG_URL)?;
+    for _ in 0..=MAX_REDIRECTS {
+        let (mut conn, head) = ask(with, &at, "application/octet-stream")?;
+        match head.code {
+            200 => return body_into(&mut conn, &head, limit, into, heard),
+            301 | 302 | 303 | 307 | 308 => {
+                let to = head.location.ok_or_else(|| NetError::protocol("moved, but not said where"))?;
+                at = address_within(&joined(&at, &to), MAX_LONG_URL)?;
+            }
+            code => return Err(NetError::Refused(format!("the web server answered {code}"))),
+        }
+    }
+    Err(NetError::Refused("the file was moved too many times".into()))
+}
+
+/// The body of an answer, handed on a piece at a time.
+fn body_into(
+    conn: &mut Conn,
+    head: &Head,
+    limit: u64,
+    into: &mut dyn std::io::Write,
+    heard: &mut dyn FnMut(u64, Option<u64>) -> bool,
+) -> Result<u64, NetError> {
+    let mut got: u64 = 0;
+    let mut take = |piece: &[u8], got: &mut u64, total: Option<u64>| -> Result<(), NetError> {
+        into.write_all(piece)?;
+        *got = got.saturating_add(piece.len() as u64);
+        if heard(*got, total) { Ok(()) } else { Err(NetError::Refused("the download was stopped".into())) }
+    };
+    if head.chunked {
+        for _ in 0..MAX_CHUNKS {
+            let line = conn.line()?;
+            let size = String::from_utf8_lossy(&line);
+            let size = size.split(';').next().unwrap_or("").trim();
+            let size = u64::from_str_radix(size, 16).map_err(|_| NetError::protocol("a chunk size that is not a number"))?;
+            if size == 0 {
+                return Ok(got);
+            }
+            if size > limit.saturating_sub(got) {
+                return Err(NetError::TooLarge("the file"));
+            }
+            let mut left = size;
+            while left > 0 {
+                let n = usize::try_from(left).unwrap_or(PIECE).min(PIECE);
+                let piece = conn.exact(n)?;
+                take(&piece, &mut got, None)?;
+                left = left.saturating_sub(n as u64);
+            }
+            conn.line()?;
+        }
+        return Err(NetError::TooLarge("the number of chunks of the file"));
+    }
+    if let Some(length) = head.length {
+        if length > limit {
+            return Err(NetError::TooLarge("the file"));
+        }
+        let mut left = length;
+        while left > 0 {
+            let n = usize::try_from(left).unwrap_or(PIECE).min(PIECE);
+            let piece = conn.exact(n)?;
+            take(&piece, &mut got, Some(length))?;
+            left = left.saturating_sub(n as u64);
+        }
+    } else {
+        loop {
+            let piece = conn.some(PIECE)?;
+            if piece.is_empty() {
+                break;
+            }
+            if piece.len() as u64 > limit.saturating_sub(got) {
+                return Err(NetError::TooLarge("the file"));
+            }
+            take(&piece, &mut got, None)?;
+        }
+    }
+    Ok(got)
+}
+
+/// What the head of a web server's answer says.
+struct Head {
+    code: u16,
+    length: Option<u64>,
+    chunked: bool,
+    kind: String,
+    location: Option<String>,
 }
 
 fn once(with: &dyn Connector, at: &Address, limit: usize, accept: &str) -> Result<Answer, NetError> {
+    let (mut conn, head) = ask(with, at, accept)?;
+    match head.code {
+        200 => {}
+        301 | 302 | 303 | 307 | 308 => {
+            return head.location.map(Answer::Moved).ok_or_else(|| NetError::protocol("moved, but not said where"));
+        }
+        code => return Err(NetError::Refused(format!("the web server answered {code}"))),
+    }
+    let bytes = if head.chunked {
+        chunks(&mut conn, limit, "the picture")?
+    } else if let Some(length) = head.length {
+        let length = usize::try_from(length).map_err(|_| NetError::TooLarge("the picture"))?;
+        if length > limit {
+            return Err(NetError::TooLarge("the picture"));
+        }
+        conn.exact(length)?
+    } else {
+        conn.until_closed(limit)?
+    };
+    Ok(Answer::Got(Fetched { bytes, kind: head.kind }))
+}
+
+/// Send the request, and read the status line and the head after it.
+fn ask(with: &dyn Connector, at: &Address, accept: &str) -> Result<(Conn, Head), NetError> {
     let to = Endpoint { protocol: Protocol::Https, host: at.host.clone(), port: at.port, security: Security::Tls, trusted: None };
     let mut conn = Conn::new(with.connect(&to)?);
     let host = if at.port == 443 { at.host.clone() } else { format!("{}:{}", at.host, at.port) };
@@ -191,7 +335,7 @@ fn once(with: &dyn Connector, at: &Address, limit: usize, accept: &str) -> Resul
     let version = parts.next().unwrap_or("");
     let code = parts.next().and_then(|c| c.parse::<u16>().ok()).filter(|_| version.starts_with("HTTP/1."));
     let Some(code) = code else { return Err(NetError::protocol(format!("not a web server's answer: {status}"))) };
-    let (mut length, mut chunked, mut kind, mut location) = (None::<usize>, false, String::new(), None::<String>);
+    let (mut length, mut chunked, mut kind, mut location) = (None::<u64>, false, String::new(), None::<String>);
     for n in 0.. {
         let line = conn.line()?;
         if line.is_empty() {
@@ -204,31 +348,14 @@ fn once(with: &dyn Connector, at: &Address, limit: usize, accept: &str) -> Resul
         let Some((name, value)) = line.split_once(':') else { continue };
         let value = value.trim();
         match name.trim().to_ascii_lowercase().as_str() {
-            "content-length" => length = Some(value.parse::<usize>().map_err(|_| NetError::protocol("a length that is not a number"))?),
+            "content-length" => length = Some(value.parse::<u64>().map_err(|_| NetError::protocol("a length that is not a number"))?),
             "transfer-encoding" => chunked = value.to_ascii_lowercase().split(',').any(|v| v.trim() == "chunked"),
             "content-type" => kind = value.split(';').next().unwrap_or("").trim().to_ascii_lowercase().chars().take(100).collect(),
-            "location" => location = Some(value.chars().take(MAX_URL + 1).collect()),
+            "location" => location = Some(value.chars().take(MAX_LONG_URL + 1).collect()),
             _ => {}
         }
     }
-    match code {
-        200 => {}
-        301 | 302 | 303 | 307 | 308 => {
-            return location.map(Answer::Moved).ok_or_else(|| NetError::protocol("moved, but not said where"));
-        }
-        _ => return Err(NetError::Refused(format!("the web server answered {code}"))),
-    }
-    let bytes = if chunked {
-        chunks(&mut conn, limit, "the picture")?
-    } else if let Some(length) = length {
-        if length > limit {
-            return Err(NetError::TooLarge("the picture"));
-        }
-        conn.exact(length)?
-    } else {
-        conn.until_closed(limit)?
-    };
-    Ok(Answer::Got(Fetched { bytes, kind }))
+    Ok((conn, Head { code, length, chunked, kind, location }))
 }
 
 /// A chunked body ([RFC 9112] 7.1): each chunk's size in hexadecimal, then the chunk.

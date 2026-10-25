@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 119 · 2026-10-24 · ranked: the top of the list is what hurts most.
+**Status:** revision 120 · 2026-10-25 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -90,9 +90,13 @@
 16. Password-protected and encrypted data files are refused or opened without the password check.
 17. No localisation; times use a 12-hour clock and month/day/year order.
 18. A long formatted body is laid out in full on every repaint; nothing skips the part off screen.
+19. The installer is not signed, so SmartScreen asks before it runs, and an update is trusted on
+    GitHub's word and the release's own sums; signing both is R2. There are no packages for macOS
+    or Linux yet (R3).
 
 ## Revision history
 
+- 120 · 2026-10-25 — R1: the first pre-release; item 19 added.
 - 119 · 2026-10-24 — M5.9: Tasks and the To-Do List.
 - 118 · 2026-10-21 — milestones renumbered: web access is M7, third-party sign-in M8.
 - 117 · 2026-10-21 — M4.16: mail shown as it comes down; closing while it does.

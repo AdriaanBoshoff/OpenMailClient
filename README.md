@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M5%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-62%20of%20123%20%C2%B7%2050%25-yellow)
-![tests](https://img.shields.io/badge/tests-652%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-662%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -152,6 +152,9 @@ read, a reader we can try without driving a window, a printer we may use).
 - **Import from Outlook.** Every IMAP and POP3 account of the Outlook profiles, with its servers and
   without its password, and the profiles' data files: shown first, then copied without changing
   Outlook's own files, an `.ost` made a `.pst` of our own.
+- **An installer and updates.** A Windows installer with Start menu and desktop shortcuts, and
+  Check for Updates from this repository's GitHub releases, pre-releases too, each installer
+  checked by its SHA-256 before it is run.
 - A sample mailbox with invented content, for trying things without any real mail.
 
 ## What does not work yet
@@ -167,8 +170,34 @@ read, a reader we can try without driving a window, a printer we may use).
   [ROADMAP.md](ROADMAP.md#do-later-from-m2).
 - Reminders and the To-Do Bar; CardDAV, the Address Book and Mail Merge; the Scheduling Assistant.
 - The MCP server, the control channel and the web build.
+- Signed installers, and packages for macOS and Linux.
 
-## Run it
+## Download
+
+The first pre-release, **0.1.0-alpha.1**, is on the
+[releases page](https://github.com/AdriaanBoshoff/OpenMailClient/releases) for Windows 10 and 11
+(x64): `OpenMailClient-0.1.0-alpha.1-windows-x64-setup.exe`. It installs for you alone unless you
+choose everyone, needs no administrator, and asks whether to put OpenMailClient on the Start menu
+and the desktop. Uninstalling it leaves your mail, settings and accounts where they are.
+`SHA256SUMS.txt` beside it gives the installer's SHA-256.
+
+The installer is not signed yet, so Windows SmartScreen may ask whether to run it ("More info",
+then "Run anyway"). It is an alpha: keep a copy of any data file you open with it.
+
+**Updates.** Help, Check for Updates asks GitHub for the newest release, shows what it says of
+itself, downloads its installer and checks it against the release's `SHA256SUMS.txt` before
+anything is run; it is installed when OpenMailClient closes, after every change is saved, and
+OpenMailClient starts again. Pre-releases are offered when "Offer pre-releases too" is on, and
+always to a pre-release. It looks once a day on its own and only tells; nothing is downloaded or
+installed without being asked. Installers are taken only from this repository's releases.
+
+To make the installer yourself (Windows, [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
+
+```bash
+cargo xtask package
+```
+
+## Run it from source
 
 ```bash
 cargo run --release -p openmailclient -- --sample

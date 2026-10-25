@@ -8,6 +8,7 @@
 
 mod accounts;
 mod alert;
+pub mod app_icon;
 mod body;
 mod calendar;
 mod calendar_file;
@@ -26,6 +27,7 @@ mod ribbon;
 mod tasks;
 pub mod theme;
 mod themes;
+mod updates;
 
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Key, Modifiers, Painter, Pos2, Rect, Sense, Ui, pos2, vec2};
@@ -220,6 +222,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.bodyFormat", label: "Read as Plain Text", params: r#"{"format": "formatted" | "plain"}; none switches"# },
     UiCommand { id: "ui.about", label: "About OpenMailClient", params: "" },
     UiCommand {
+        id: "ui.updates",
+        label: "Check for Updates",
+        params: r#"{"open": true or false; toggles when not given}; opens on what was last found and asks GitHub again when nothing was"#,
+    },
+    UiCommand {
         id: "ui.appointment",
         label: "New Appointment",
         params: r#"{"id": an appointment's id to open it; none for a new one, "occurrence": "YYYY-MM-DD" to open one occurrence of a series (default: the one chosen)}"#,
@@ -389,6 +396,8 @@ pub struct MailUi {
     chimes: u32,
     /// The Send/Receive Progress window is open (`ui.showProgress`).
     pub(crate) progress_open: bool,
+    /// Check for Updates is open.
+    pub(crate) updates_open: bool,
     /// The Time Zones window is open.
     pub(crate) time_zones_open: bool,
     /// What is typed in the compose window's Delivery menu: a time to go, and to expire.
@@ -630,6 +639,7 @@ impl MailUi {
             alert: None,
             chimes: 0,
             progress_open: false,
+            updates_open: false,
             time_zones_open: false,
             go_at_text: String::new(),
             expire_at_text: String::new(),
@@ -1001,6 +1011,18 @@ impl MailUi {
                     Some(_) => return Err("\"open\" is true or false".to_string()),
                 };
             }
+            "ui.updates" => {
+                self.updates_open = match params.get("open") {
+                    None | Some(Value::Null) => !self.updates_open,
+                    Some(Value::Bool(open)) => *open,
+                    Some(_) => return Err("\"open\" is true or false".to_string()),
+                };
+                // Opened on nothing found yet: asked at once, on a thread of its own.
+                let asking = self.session.running().iter().any(|r| r.what == openmailclient_engine::update::CHECKING);
+                if self.updates_open && !self.session.update.checked && !asking && self.session.connector.is_some() {
+                    let _ = self.session.run("help.checkForUpdates", &json!({ "wait": false }));
+                }
+            }
             "ui.showProgress" => {
                 self.progress_open = match params.get("open") {
                     None | Some(Value::Null) => !self.progress_open,
@@ -1231,6 +1253,7 @@ impl MailUi {
         self.attachment_window(&ctx);
         self.preview_window(&ctx);
         self.progress_window(&ctx);
+        self.updates_window(&ctx);
         self.time_zones_window(&ctx);
         self.alert_window(&ctx);
         self.appointment_window(&ctx);
@@ -1582,6 +1605,23 @@ impl MailUi {
         let right_w = text_width(&p, right, font(11.5));
         p.text(pos2(rect.right() - 10.0, rect.center().y), Align2::RIGHT_CENTER, right, font(11.5), t.bar_text);
         let mut show_progress = false;
+        let mut show_update = false;
+        if let Some(found) = &s.update.found {
+            // A newer release was found: said at the corner until it is looked at.
+            let said = format!("Update: {}", found.version);
+            let w = text_width(&p, &said, bold(11.5)) + 22.0;
+            let at = rect.right() - right_w - 30.0 - w;
+            if at > x + 120.0 {
+                let hit = Rect::from_min_size(pos2(at - 4.0, rect.top()), vec2(w + 8.0, rect.height()));
+                let resp = ui.interact(hit, egui::Id::new("status-update"), Sense::click());
+                if resp.hovered() {
+                    p.rect_filled(hit.shrink2(vec2(0.0, 3.0)), 2.0, t.bar_text.gamma_multiply(0.2));
+                }
+                icons::paint(&p, Rect::from_center_size(pos2(at + 7.0, rect.center().y), vec2(14.0, 14.0)), Icon::Update, t.bar_text);
+                p.text(pos2(at + 20.0, rect.center().y), Align2::LEFT_CENTER, &said, bold(11.5), t.bar_text);
+                show_update = resp.on_hover_text("A newer OpenMailClient is available: Check for Updates").clicked();
+            }
+        }
         if let Some((what, done)) = s.working() {
             // A save or an export that runs: what it is, a bar that fills, and how far it is;
             // a click on its words shows everything that runs.
@@ -1611,6 +1651,9 @@ impl MailUi {
         }
         if show_progress {
             self.progress_open = true;
+        }
+        if show_update {
+            self.updates_open = true;
         }
         if open_new {
             self.alert = None;

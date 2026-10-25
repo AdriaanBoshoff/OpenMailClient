@@ -6,6 +6,7 @@ no row. No asset is copied, traced or recreated from any Microsoft product.
 
 | File | Author | Source | Licence |
 |---|---|---|---|
+| `apps/openmailclient/assets/openmailclient.ico` | OpenMailClient contributors | The program's icon, a closed envelope on a rounded blue square, drawn in code by `crates/ui-egui/src/app_icon.rs` and written by `cargo xtask icon` | MIT OR Apache-2.0 |
 | `docs/images/openmailclient-reading-pane.png` | OpenMailClient contributors | Screenshot of OpenMailClient showing its own sample mailbox (`crates/engine/src/sample.rs`), made with `cargo run -p openmailclient-ui-egui --example ui_shot`; text is drawn in fonts installed on the machine, none are bundled | MIT OR Apache-2.0 |
 | `docs/images/openmailclient-dark.png` | OpenMailClient contributors | Screenshot of OpenMailClient in its dark theme showing its own sample mailbox (`crates/engine/src/sample.rs`), made with `cargo run -p openmailclient-ui-egui --example ui_shot`; text is drawn in fonts installed on the machine, none are bundled | MIT OR Apache-2.0 |
 | `docs/images/openmailclient-attachment.png` | OpenMailClient contributors | Screenshot of OpenMailClient asking about an attachment of its own sample mailbox (`crates/engine/src/sample.rs`), made with `cargo run -p openmailclient-ui-egui --example ui_shot`; text is drawn in fonts installed on the machine, none are bundled | MIT OR Apache-2.0 |

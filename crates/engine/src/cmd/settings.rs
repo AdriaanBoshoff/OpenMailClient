@@ -75,6 +75,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "autoSaveMinutes": s.autosave_min,
         "sendReceiveMinutes": s.send_receive_min,
         "newMailAsItComes": s.new_mail_as_it_comes,
+        "updates": { "prereleases": s.update.prereleases, "automatic": s.update.automatic, "lastChecked": s.update.last_checked },
         "newMail": s.alerts.to_json(),
         "timeZone": s.zone_chosen,
         "secondTimeZone": s.second_zone.as_ref().map(|z| z.name().to_string()),
@@ -211,6 +212,28 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(minutes.is_some());
         if let Some(m) = minutes {
             s.send_receive_min = m;
+        }
+    }
+    if let Some(updates) = all.get("updates") {
+        for key in ["prereleases", "automatic"] {
+            if let Some(v) = updates.get(key) {
+                took(v.is_boolean());
+                if let Some(on) = v.as_bool() {
+                    if key == "prereleases" {
+                        s.update.prereleases = on;
+                    } else {
+                        s.update.automatic = on;
+                    }
+                }
+            }
+        }
+        if let Some(v) = updates.get("lastChecked") {
+            // Not in the future: a clock put back would otherwise never ask again.
+            let at = v.as_i64().filter(|t| *t >= 0 && *t <= openmailclient_model::time::to_unix(s.now).saturating_add(60));
+            took(at.is_some());
+            if let Some(at) = at {
+                s.update.last_checked = at;
+            }
         }
     }
     if let Some(v) = all.get("newMailAsItComes") {

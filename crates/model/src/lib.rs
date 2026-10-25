@@ -74,6 +74,11 @@ impl Progress {
         self.done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// So many steps are done in all.
+    pub fn reach(&self, done: u64) {
+        self.done.store(done, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// This part of all the steps is done as well: 4 for a quarter of them.
     pub fn part(&self, of: u64) {
         let total = self.total.load(std::sync::atomic::Ordering::Relaxed);

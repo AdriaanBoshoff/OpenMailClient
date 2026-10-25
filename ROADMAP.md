@@ -1,16 +1,17 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 127 · 2026-10-24
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 128 · 2026-10-25
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 84 of 134 (62%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 652, all passing |
+| Tests | 662, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
-| Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
+| Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command, for published account settings and for updates |
+| Releases | 0.1.0-alpha.1 (pre-release): a Windows x64 installer; Check for Updates from GitHub releases |
 
 ## Milestones
 
@@ -297,6 +298,10 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Zones whose rules changed over the years kept with each year's rules, and zones that follow another calendar beyond their current year | with M5.10 |
 | A meeting of ours and a time zone of ours checked in Outlook (opened from a data file, an invitation read) | with M1's checks against Outlook |
 | Signatures, rules and the AutoComplete list brought from Outlook; a POP3 account's own "leave a copy on the server" setting read (kept on until then); Outlook 2010's profile place | with M5.10, after People (the AutoComplete list) and rules |
+| Release signing: the installer signed (Authenticode) so SmartScreen knows it, and `SHA256SUMS.txt` signed with a key of the project's (Ed25519) that the updater checks, so a changed release is refused even from GitHub | R2, before 0.1.0 |
+| A release workflow: the installer built, checked and published by GitHub Actions from a tag, not on a developer's machine | R2 |
+| Packages for macOS (`.dmg`, an app bundle) and Linux (AppImage, `.deb`), and updates for them (the updater sends them to the release page until then) | R3, with M6's web build |
+| The CLI put on `PATH` by the installer when asked, and smaller updates (only what changed) | R2 |
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -2430,3 +2435,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   notes, 100 companies), work within a hundred years, dates within 1601 to 9999, and every
   command is run with junk parameters. Do later: VTODO in calendar files and CalDAV task lists
   (M5.11), the To-Do Bar and reminders (M5.10), Assign Task. 17 tests.
+- **2026-10-25** — R1: the first pre-release, 0.1.0-alpha.1. A Windows installer made with Inno
+  Setup (`installer/openmailclient.iss`, `cargo xtask package`): per-user unless everyone is
+  chosen, no administrator, the Start menu and a desktop icon each asked for, the program's own
+  icon drawn in code (`crates/ui-egui/src/app_icon.rs`) and carried in the program file with its
+  version; uninstalling leaves mail and settings. Check for Updates (`help.checkForUpdates`,
+  `crates/engine/src/update.rs`): GitHub's releases read warily (4 MiB at most, versions by
+  semver precedence, assets only from this repository's release downloads), pre-releases offered
+  when asked and always to a pre-release; the installer brought down on a thread of its own with
+  progress and Stop (`http::download`, streamed, never whole in memory), checked by size and by
+  the SHA-256 the release's `SHA256SUMS.txt` names, kept only when both agree, checked again
+  when asked to install and once more as it is run, and run when the program closes after every
+  change is saved, starting it again after. Once a day on its own, only telling. Improved on
+  the usual: nothing is fetched or run without being asked, and a release's notes are shown as
+  text. Do later: signed installers and sums (R2), a release workflow (R2), macOS and Linux
+  packages (R3). 10 tests.

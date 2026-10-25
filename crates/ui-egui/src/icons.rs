@@ -62,6 +62,8 @@ pub enum Icon {
     Recur,
     /// One occurrence of a series changed on its own: the loop, struck through.
     RecurChanged,
+    /// A new version of the program: a ring with an arrow coming up out of it.
+    Update,
 }
 
 struct Pen<'a> {
@@ -376,6 +378,18 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             ]);
             pen.line(&[(6.5, 13.0), (8.0, 14.0), (9.5, 13.0)]);
             pen.line(&[(8.0, 1.5), (8.0, 3.0)]);
+        }
+        Icon::Update => {
+            // Most of a ring, open at the top, and an arrow rising through the gap.
+            let ring: Vec<(f32, f32)> = (0..=20)
+                .map(|n| {
+                    let a = std::f32::consts::PI * (-0.3 + 1.6 * n as f32 / 20.0);
+                    (8.0 + 6.0 * a.cos(), 8.5 + 6.0 * a.sin())
+                })
+                .collect();
+            pen.line(&ring);
+            pen.line(&[(8.0, 11.5), (8.0, 1.5)]);
+            pen.line(&[(5.0, 4.5), (8.0, 1.5), (11.0, 4.5)]);
         }
         Icon::Recur | Icon::RecurChanged => {
             // Three quarters and more of a circle, going clockwise, open at the top right.
