@@ -315,6 +315,11 @@ impl eframe::App for App {
         if let Some(left) = self.ui.session.send_receive_due(ms) {
             ctx.request_repaint_after(std::time::Duration::from_millis(left.clamp(50, 60_000)));
         }
+        // Reminders are looked for once a minute, soon after something was done, and when the
+        // next one comes due.
+        if let Some(left) = self.ui.session.reminders_due(ms) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(left));
+        }
         if self.ui.take_chimes() > 0 {
             chime::play();
         }

@@ -23,6 +23,7 @@ mod people;
 mod pictures;
 mod preview;
 mod progress;
+mod reminders;
 mod ribbon;
 mod tasks;
 pub mod theme;
@@ -396,6 +397,11 @@ pub struct MailUi {
     chimes: u32,
     /// The Send/Receive Progress window is open (`ui.showProgress`).
     pub(crate) progress_open: bool,
+    /// The last reminder told of (`Reminders::fresh`), the one chosen in the Reminders window
+    /// and what its snooze is set to.
+    reminders_told: u64,
+    reminder_pick: Option<openmailclient_engine::reminders::Key>,
+    snooze_pick: reminders::Choice,
     /// Check for Updates is open.
     pub(crate) updates_open: bool,
     /// The Time Zones window is open.
@@ -639,6 +645,9 @@ impl MailUi {
             alert: None,
             chimes: 0,
             progress_open: false,
+            reminders_told: 0,
+            reminder_pick: None,
+            snooze_pick: reminders::Choice::default(),
             updates_open: false,
             time_zones_open: false,
             go_at_text: String::new(),
@@ -1194,6 +1203,7 @@ impl MailUi {
         // Saves that run on threads of their own are ended here, and shown while they run.
         self.session.poll();
         self.new_mail(&ctx);
+        self.new_reminders(&ctx);
         if self.session.working().is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -1253,6 +1263,7 @@ impl MailUi {
         self.attachment_window(&ctx);
         self.preview_window(&ctx);
         self.progress_window(&ctx);
+        self.reminders_window(&ctx);
         self.updates_window(&ctx);
         self.time_zones_window(&ctx);
         self.alert_window(&ctx);

@@ -13,6 +13,7 @@ pub mod meeting;
 pub mod memstore;
 pub mod props;
 pub mod recur;
+pub mod reminder;
 pub mod rtf;
 pub mod task;
 pub mod time;

@@ -77,6 +77,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "newMailAsItComes": s.new_mail_as_it_comes,
         "updates": { "prereleases": s.update.prereleases, "automatic": s.update.automatic, "lastChecked": s.update.last_checked },
         "newMail": s.alerts.to_json(),
+        "reminders": s.reminders.options_json(),
         "timeZone": s.zone_chosen,
         "secondTimeZone": s.second_zone.as_ref().map(|z| z.name().to_string()),
         "dataFiles": files,
@@ -266,6 +267,16 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(alerts.is_some());
         if let Some(a) = alerts {
             s.alerts = a;
+        }
+    }
+    if let Some(v) = all.get("reminders") {
+        let part = |key: &str| v.get(key).and_then(Value::as_bool);
+        took(v.is_object() && v.as_object().is_some_and(|o| o.values().all(Value::is_boolean)));
+        if let Some(on) = part("show") {
+            s.reminders.show = on;
+        }
+        if let Some(on) = part("sound") {
+            s.reminders.sound = on;
         }
     }
     if let Some(v) = all.get("accounts") {

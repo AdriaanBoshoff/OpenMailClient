@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 120 · 2026-10-25 · ranked: the top of the list is what hurts most.
+**Status:** revision 121 · 2026-10-27 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -56,7 +56,7 @@
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (on screen they are downloaded when asked for, M4.10; on paper their place is named),
    right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, a printer's own settings (trays, two-sided; it prints on any printer the system has, with copies and pages, M1.10),
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
-4. **Tasks** has its views and the To-Do List with flagged mail beside the tasks (M5.9); VTODO in calendar files, the To-Do Bar and Assign Task are do-laters in ROADMAP. People has its five views, contacts and groups and vCard files (M5.8); CardDAV, the Address Book and Mail Merge are do-laters in ROADMAP (M5.11). The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6) and meetings, invitations sent, answered and called off (M5.7); the Scheduling Assistant is a do-later in ROADMAP.
+4. **Tasks** has its views and the To-Do List with flagged mail beside the tasks (M5.9), and reminders come up for appointments, tasks and flagged mail (M5.10); VTODO in calendar files, the To-Do Bar and Assign Task are do-laters in ROADMAP. People has its five views, contacts and groups and vCard files (M5.8); CardDAV, the Address Book and Mail Merge are do-laters in ROADMAP (M5.11). The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6) and meetings, invitations sent, answered and called off (M5.7); the Scheduling Assistant is a do-later in ROADMAP.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
 6. **Web build and web access.** The engine and everything under it compiles for wasm32; there is no web app (M6),
    and the mailbox cannot be reached from a browser on another device (M7: served over HTTPS by
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 121 · 2026-10-27 — M5.10: reminders; item 4.
 - 120 · 2026-10-25 — R1: the first pre-release; item 19 added.
 - 119 · 2026-10-24 — M5.9: Tasks and the To-Do List.
 - 118 · 2026-10-21 — milestones renumbered: web access is M7, third-party sign-in M8.

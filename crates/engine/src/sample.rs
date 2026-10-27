@@ -519,6 +519,12 @@ fn appointments(now: i64) -> Vec<Item> {
         .map(|(i, a)| {
             let mut item = a.item();
             openmailclient_model::calendar::set_global_id(&mut item, &openmailclient_model::calendar::new_global_id(now, i as u64));
+            // Reminders whose time came before the sample was made are dismissed already, as
+            // they would have been: the sample opens on none due, and a series' waits for its next.
+            let utc = openmailclient_model::zone::Zone::utc();
+            if openmailclient_model::reminder::of(&item, now, &utc).is_some_and(|r| r.is_due(now)) {
+                openmailclient_model::reminder::dismiss(&mut item, now, &utc);
+            }
             item
         })
         .collect()

@@ -18,6 +18,7 @@ pub mod people;
 mod picture;
 mod progress;
 pub(crate) mod receive;
+mod reminders;
 mod send;
 pub(crate) mod settings;
 pub mod tasks;
@@ -70,6 +71,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(calendar_file::commands());
         v.extend(meeting::commands());
         v.extend(caldav::commands());
+        v.extend(reminders::commands());
         v
     })
 }

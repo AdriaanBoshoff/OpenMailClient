@@ -831,6 +831,7 @@ fn close_store(s: &mut Session, p: &Value) -> CmdResult {
     }
     s.stores.remove(idx);
     s.arrived.closed(idx);
+    s.reminders.closed();
     s.calendar.chosen = match s.calendar.chosen {
         Some((c, f)) if c < idx => Some((c, f)),
         Some((c, f)) if c > idx => Some((c - 1, f)),

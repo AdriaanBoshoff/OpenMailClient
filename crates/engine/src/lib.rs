@@ -20,6 +20,7 @@ pub mod outlook;
 pub mod pictures;
 pub mod print;
 pub mod printers;
+pub mod reminders;
 pub mod remote;
 pub mod sample;
 pub mod search;
@@ -48,6 +49,8 @@ mod tests_pictures;
 mod tests_print;
 #[cfg(test)]
 mod tests_receive;
+#[cfg(test)]
+mod tests_reminders;
 #[cfg(test)]
 mod tests_remote;
 #[cfg(test)]
@@ -366,6 +369,8 @@ pub struct Session {
     pub waker: Option<watch::Waker>,
     /// Messages that came and were not told of or opened yet.
     pub arrived: arrival::Arrivals,
+    /// Reminders of appointments, tasks and flagged mail, and how they are shown.
+    pub reminders: reminders::Reminders,
     /// How new mail is told of (`mail.newMailAlerts`).
     pub alerts: arrival::Alerts,
     pub compose: Option<Draft>,
@@ -488,6 +493,7 @@ impl Session {
             waker: None,
             timer: arrival::Timer::default(),
             arrived: arrival::Arrivals::default(),
+            reminders: reminders::Reminders::default(),
             alerts: arrival::Alerts::default(),
             compose: None,
             status: String::new(),
