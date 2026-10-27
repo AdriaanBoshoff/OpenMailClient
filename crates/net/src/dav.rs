@@ -42,10 +42,13 @@ const MAX_NAME: usize = 200;
 const MAX_TAG: usize = 1000;
 
 /// What is asked of a calendar to list it.
+/// What is asked of an address book ([RFC 6352] 6).
+const BOOK_PROPS: &str = "<d:resourcetype/><d:displayname/><cs:getctag/><d:sync-token/><d:current-user-privilege-set/>";
 const CALENDAR_PROPS: &str = "<d:resourcetype/><d:displayname/><cs:getctag/><d:sync-token/><c:supported-calendar-component-set/><ic:calendar-color/><d:current-user-privilege-set/>";
 
 const DAV: &str = "DAV:";
 const CALDAV: &str = "urn:ietf:params:xml:ns:caldav";
+const CARDDAV: &str = "urn:ietf:params:xml:ns:carddav";
 const CS: &str = "http://calendarserver.org/ns/";
 const APPLE: &str = "http://apple.com/ns/ical/";
 
@@ -64,7 +67,7 @@ impl Url {
     /// the owner named it.
     pub fn parse(url: &str) -> Result<Self, NetError> {
         let url = url.trim();
-        let refuse = |why: &str| NetError::Unsupported(format!("{} is not a calendar server's address: {why}", said(url)));
+        let refuse = |why: &str| NetError::Unsupported(format!("{} is not a server's address: {why}", said(url)));
         if url.len() > MAX_URL || url.chars().any(|c| c.is_control() || c == ' ') {
             return Err(refuse("it is too long or holds spaces"));
         }
@@ -206,6 +209,49 @@ pub enum Deleted {
     Gone,
 }
 
+/// What the server's collections hold: calendars of events ([RFC 4791]) or address books of
+/// contacts ([RFC 6352]). The same WebDAV sync is spoken to both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Holds {
+    #[default]
+    Events,
+    Cards,
+}
+
+impl Holds {
+    /// What the server is called in what is said of it.
+    pub fn server(self) -> &'static str {
+        match self {
+            Self::Events => "the calendar server",
+            Self::Cards => "the address book server",
+        }
+    }
+
+    /// One of its collections.
+    pub fn collection(self) -> &'static str {
+        match self {
+            Self::Events => "calendar",
+            Self::Cards => "address book",
+        }
+    }
+
+    /// One thing in a collection.
+    fn item(self) -> &'static str {
+        match self {
+            Self::Events => "event",
+            Self::Cards => "contact",
+        }
+    }
+
+    /// Where a server of a domain says its collections are ([RFC 6764] 5).
+    fn well_known(self) -> &'static str {
+        match self {
+            Self::Events => "/.well-known/caldav",
+            Self::Cards => "/.well-known/carddav",
+        }
+    }
+}
+
 /// An answer of the server.
 #[derive(Debug)]
 struct Reply {
@@ -215,9 +261,11 @@ struct Reply {
     body: Vec<u8>,
 }
 
-/// A connection to a CalDAV server, signed in.
+/// A connection to a CalDAV or CardDAV server, signed in.
 pub struct Dav<'a> {
     with: &'a dyn Connector,
+    /// What its collections hold.
+    pub holds: Holds,
     login: &'a Login,
     /// The server, and the path the account names.
     pub at: Url,
@@ -243,7 +291,17 @@ fn kept_path(p: &str) -> Option<String> {
 
 impl<'a> Dav<'a> {
     pub fn new(with: &'a dyn Connector, login: &'a Login, at: Url, trusted: Option<Fingerprint>) -> Self {
-        Self { with, login, at, trusted }
+        Self { with, login, at, trusted, holds: Holds::Events }
+    }
+
+    /// The same server, its address books asked for instead of its calendars.
+    pub fn holding(mut self, holds: Holds) -> Self {
+        self.holds = holds;
+        self
+    }
+
+    fn who(&self) -> &'static str {
+        self.holds.server()
     }
 
     fn endpoint(&self) -> Endpoint {
@@ -264,9 +322,9 @@ impl<'a> Dav<'a> {
     /// is TLS from its first byte.
     fn send(&self, method: &str, path: &str, depth: Option<&str>, headers: &[(&str, &str)], body: Option<(&str, &[u8])>) -> Result<Reply, NetError> {
         use base64::Engine as _;
-        let path = kept_path(path).ok_or_else(|| NetError::Unsupported("an address on the calendar server that is not asked for".into()))?;
+        let path = kept_path(path).ok_or_else(|| NetError::Unsupported(format!("an address on {} that is not asked for", self.who())))?;
         if self.login.user.contains(':') || self.login.user.chars().any(char::is_control) {
-            return Err(NetError::Unsupported("a user name with a colon in it cannot sign in to a calendar server".into()));
+            return Err(NetError::Unsupported(format!("a user name with a colon in it cannot sign in to {}", self.who())));
         }
         let mut conn = Conn::new(self.with.connect(&self.endpoint())?);
         let name = if self.at.host.contains(':') { format!("[{}]", self.at.host) } else { self.at.host.clone() };
@@ -294,7 +352,7 @@ impl<'a> Dav<'a> {
         conn.send(&bytes)?;
         let reply = read_reply(&mut conn, method == "HEAD")?;
         if reply.code == 401 {
-            return Err(NetError::Auth("the calendar server did not take them".into()));
+            return Err(NetError::Auth(format!("{} did not take them", self.who())));
         }
         Ok(reply)
     }
@@ -302,7 +360,7 @@ impl<'a> Dav<'a> {
     /// PROPFIND, following redirects to where the server's calendars are when `follow`.
     fn propfind(&mut self, path: &str, depth: &str, props: &str, follow: bool) -> Result<(String, Reply), NetError> {
         let body = format!(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<d:propfind xmlns:d=\"DAV:\" xmlns:c=\"{CALDAV}\" xmlns:cs=\"{CS}\" xmlns:ic=\"{APPLE}\"><d:prop>{props}</d:prop></d:propfind>"
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<d:propfind xmlns:d=\"DAV:\" xmlns:c=\"{CALDAV}\" xmlns:card=\"{CARDDAV}\" xmlns:cs=\"{CS}\" xmlns:ic=\"{APPLE}\"><d:prop>{props}</d:prop></d:propfind>"
         );
         let mut path = path.to_string();
         for _ in 0..=MAX_REDIRECTS {
@@ -312,7 +370,7 @@ impl<'a> Dav<'a> {
                     let to = to.trim();
                     let next = if to.starts_with('/') { self.at.at(to) } else { Url::parse(to)? };
                     if !may_follow(&self.at, &next) {
-                        return Err(NetError::Refused(format!("the calendar server sent us on to {}, which is not followed", said(&next.host))));
+                        return Err(NetError::Refused(format!("{} sent us on to {}, which is not followed", self.who(), said(&next.host))));
                     }
                     self.at = next.at(&self.at.path);
                     path = next.path;
@@ -320,17 +378,19 @@ impl<'a> Dav<'a> {
                 _ => return Ok((path, reply)),
             }
         }
-        Err(NetError::Refused("the calendar server sent us on too many times".into()))
+        Err(NetError::Refused(format!("{} sent us on too many times", self.who())))
     }
 
     /// The server's calendars, found from the path the account names: the principal it
     /// belongs to ([RFC 5397]), that principal's calendar homes ([RFC 4791] 6.2.1), and the
     /// calendars in each. Where the path gives no principal, `/.well-known/caldav` is asked
     /// ([RFC 6764] 5). A path that is a calendar's own is taken as that calendar's home.
+    /// Holding cards, the same is done for address books: the principal's address book homes
+    /// ([RFC 6352] 7.1.1) and `/.well-known/carddav`.
     pub fn calendars(&mut self) -> Result<Vec<Calendar>, NetError> {
         let start = self.at.path.clone();
         // What the path is: a calendar is the one listed; else whose it is.
-        let props = format!("{CALENDAR_PROPS}<d:current-user-principal/>");
+        let props = format!("{}<d:current-user-principal/>", self.props());
         let (_, reply) = self.propfind(&start, "0", &props, start == "/")?;
         let mut principal = None;
         if reply.code == 207 {
@@ -341,7 +401,7 @@ impl<'a> Dav<'a> {
             principal = all.into_iter().find_map(|r| r.props.principal).and_then(|h| self.path_of(&h));
         }
         if principal.is_none() {
-            principal = self.principal("/.well-known/caldav", true).ok().flatten();
+            principal = self.principal(self.holds.well_known(), true).ok().flatten();
         }
         let mut homes = match &principal {
             Some(p) => self.homes(p)?,
@@ -361,6 +421,14 @@ impl<'a> Dav<'a> {
         Ok(out)
     }
 
+    /// What is asked of a collection.
+    fn props(&self) -> &'static str {
+        match self.holds {
+            Holds::Events => CALENDAR_PROPS,
+            Holds::Cards => BOOK_PROPS,
+        }
+    }
+
     fn principal(&mut self, path: &str, follow: bool) -> Result<Option<String>, NetError> {
         let (_, reply) = self.propfind(path, "0", "<d:current-user-principal/>", follow)?;
         if reply.code != 207 {
@@ -371,19 +439,28 @@ impl<'a> Dav<'a> {
     }
 
     fn homes(&mut self, principal: &str) -> Result<Vec<String>, NetError> {
-        let (_, reply) = self.propfind(principal, "0", "<c:calendar-home-set/>", false)?;
+        let home = match self.holds {
+            Holds::Events => "<c:calendar-home-set/>",
+            Holds::Cards => "<card:addressbook-home-set/>",
+        };
+        let (_, reply) = self.propfind(principal, "0", home, false)?;
         if reply.code != 207 {
-            return Err(NetError::Refused(format!("the calendar server answered {} when asked where the calendars are", reply.code)));
+            return Err(NetError::Refused(format!("{} answered {} when asked where the {}s are", self.who(), reply.code, self.holds.collection())));
         }
         let (all, _) = multistatus(&reply.body)?;
-        Ok(all.into_iter().flat_map(|r| r.props.homes).filter_map(|h| self.path_of(&h)).take(10).collect())
+        Ok(all
+            .into_iter()
+            .flat_map(|r| if self.holds == Holds::Cards { r.props.book_homes } else { r.props.homes })
+            .filter_map(|h| self.path_of(&h))
+            .take(10)
+            .collect())
     }
 
     /// The calendars in one home (Depth 1).
     fn in_home(&mut self, home: &str) -> Result<Vec<Calendar>, NetError> {
-        let (_, reply) = self.propfind(home, "1", CALENDAR_PROPS, false)?;
+        let (_, reply) = self.propfind(home, "1", self.props(), false)?;
         if reply.code != 207 {
-            return Err(NetError::Refused(format!("the calendar server answered {} when its calendars were listed", reply.code)));
+            return Err(NetError::Refused(format!("{} answered {} when its {}s were listed", self.who(), reply.code, self.holds.collection())));
         }
         let (all, _) = multistatus(&reply.body)?;
         Ok(all.iter().filter_map(|r| self.calendar_of(r)).take(MAX_CALENDARS).collect())
@@ -391,14 +468,18 @@ impl<'a> Dav<'a> {
 
     /// A response as a calendar, when it is one of this server.
     fn calendar_of(&self, r: &Response) -> Option<Calendar> {
-        let href = self.path_of(&r.href).filter(|_| r.props.calendar)?;
+        let wanted = match self.holds {
+            Holds::Events => r.props.calendar,
+            Holds::Cards => r.props.book,
+        };
+        let href = self.path_of(&r.href).filter(|_| wanted)?;
         {
             let href = if href.ends_with('/') { href } else { format!("{href}/") };
             let name = r.props.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| {
-                let last = href.trim_end_matches('/').rsplit('/').next().unwrap_or("Calendar");
+                let last = href.trim_end_matches('/').rsplit('/').next().unwrap_or(self.holds.collection());
                 percent_decoded(last)
             });
-            let events = !r.props.comps_given || r.props.comps.iter().any(|c| c.eq_ignore_ascii_case("VEVENT"));
+            let events = self.holds == Holds::Cards || !r.props.comps_given || r.props.comps.iter().any(|c| c.eq_ignore_ascii_case("VEVENT"));
             let writable = !r.props.privileges_given || r.props.privileges.iter().any(|p| matches!(p.as_str(), "all" | "write" | "write-content"));
             Some(Calendar {
                 href,
@@ -426,9 +507,9 @@ impl<'a> Dav<'a> {
             match reply.code {
                 207 => {}
                 403 | 409 if contains(&reply.body, b"valid-sync-token") => return Ok(if token.is_empty() { Sync::NotKept } else { Sync::Lost }),
-                404 => return Err(NetError::Refused("the calendar is not on the server any more".into())),
+                404 => return Err(self.gone()),
                 400 | 403 | 405 | 415 | 422 | 501 => return Ok(if round == 0 { Sync::NotKept } else { Sync::Lost }),
-                code => return Err(NetError::Refused(format!("the calendar server answered {code} when asked what changed"))),
+                code => return Err(NetError::Refused(format!("{} answered {code} when asked what changed", self.who()))),
             }
             let (all, next) = multistatus(&reply.body)?;
             let mut cut = false;
@@ -466,8 +547,8 @@ impl<'a> Dav<'a> {
         let reply = self.send("PROPFIND", calendar, Some("1"), &[], Some(("application/xml; charset=utf-8", body.as_bytes())))?;
         match reply.code {
             207 => {}
-            404 => return Err(NetError::Refused("the calendar is not on the server any more".into())),
-            code => return Err(NetError::Refused(format!("the calendar server answered {code} when its events were listed"))),
+            404 => return Err(self.gone()),
+            code => return Err(NetError::Refused(format!("{} answered {code} when its {}s were listed", self.who(), self.holds.item()))),
         }
         let (all, _) = multistatus(&reply.body)?;
         let mut out: Vec<Entry> = Vec::new();
@@ -492,12 +573,18 @@ impl<'a> Dav<'a> {
         for h in hrefs.iter().take(MULTIGET) {
             asked.push_str(&format!("<d:href>{}</d:href>", escape(h)));
         }
-        let body = format!(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<c:calendar-multiget xmlns:d=\"DAV:\" xmlns:c=\"{CALDAV}\"><d:prop><d:getetag/><c:calendar-data/></d:prop>{asked}</c:calendar-multiget>"
-        );
+        // [RFC 6352] 8.7 asks for cards as [RFC 4791] 7.9 asks for events.
+        let body = match self.holds {
+            Holds::Events => format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<c:calendar-multiget xmlns:d=\"DAV:\" xmlns:c=\"{CALDAV}\"><d:prop><d:getetag/><c:calendar-data/></d:prop>{asked}</c:calendar-multiget>"
+            ),
+            Holds::Cards => format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<card:addressbook-multiget xmlns:d=\"DAV:\" xmlns:card=\"{CARDDAV}\"><d:prop><d:getetag/><card:address-data/></d:prop>{asked}</card:addressbook-multiget>"
+            ),
+        };
         let reply = self.send("REPORT", calendar, Some("1"), &[], Some(("application/xml; charset=utf-8", body.as_bytes())))?;
         if reply.code != 207 {
-            return Err(NetError::Refused(format!("the calendar server answered {} when events were asked for", reply.code)));
+            return Err(NetError::Refused(format!("{} answered {} when {}s were asked for", self.who(), reply.code, self.holds.item())));
         }
         let (all, _) = multistatus(&reply.body)?;
         Ok(all
@@ -516,11 +603,15 @@ impl<'a> Dav<'a> {
             Some(tag) => ("If-Match", tag),
             None => ("If-None-Match", "*"),
         };
-        let reply = self.send("PUT", href, None, &[condition], Some(("text/calendar; charset=utf-8", ics)))?;
+        let kind = match self.holds {
+            Holds::Events => "text/calendar; charset=utf-8",
+            Holds::Cards => "text/vcard; charset=utf-8",
+        };
+        let reply = self.send("PUT", href, None, &[condition], Some((kind, ics)))?;
         match reply.code {
             200 | 201 | 204 => Ok(Put::Done(reply.etag.and_then(|t| kept_tag(&t, MAX_NAME)))),
             412 => Ok(Put::Conflict),
-            code => Err(NetError::Refused(format!("the calendar server answered {code} when an event was put there"))),
+            code => Err(NetError::Refused(format!("{} answered {code} when {} {} was put there", self.who(), self.a(), self.holds.item()))),
         }
     }
 
@@ -532,21 +623,42 @@ impl<'a> Dav<'a> {
             200 | 202 | 204 => Ok(Deleted::Done),
             404 | 410 => Ok(Deleted::Gone),
             412 => Ok(Deleted::Conflict),
-            code => Err(NetError::Refused(format!("the calendar server answered {code} when an event was deleted"))),
+            code => Err(NetError::Refused(format!("{} answered {code} when {} {} was deleted", self.who(), self.a(), self.holds.item()))),
         }
+    }
+
+    fn a(&self) -> &'static str {
+        match self.holds {
+            Holds::Events => "an",
+            Holds::Cards => "a",
+        }
+    }
+
+    fn gone(&self) -> NetError {
+        NetError::Refused(format!("the {} is not on the server any more", self.holds.collection()))
     }
 }
 
 /// Where a calendar server of an address's domain may be ([RFC 6764] 6): what its
 /// `_caldavs._tcp` SRV record names, then the domain itself, each at `/.well-known/caldav`.
 pub fn starts(with: &dyn Connector, email: &str) -> Vec<Url> {
+    starts_for(with, email, Holds::Events)
+}
+
+/// The same for what `holds` names: `_carddavs._tcp` and `/.well-known/carddav` for address
+/// books ([RFC 6352] 11).
+pub fn starts_for(with: &dyn Connector, email: &str, holds: Holds) -> Vec<Url> {
+    let (srv_name, well_known) = match holds {
+        Holds::Events => ("_caldavs._tcp", holds.well_known()),
+        Holds::Cards => ("_carddavs._tcp", holds.well_known()),
+    };
     let Some((_, domain)) = email.trim().rsplit_once('@') else { return Vec::new() };
     let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
     if !crate::find::is_host(&domain) {
         return Vec::new();
     }
     let mut out = Vec::new();
-    if let Ok(records) = with.lookup(&format!("_caldavs._tcp.{domain}"), Kind::Srv) {
+    if let Ok(records) = with.lookup(&format!("{srv_name}.{domain}"), Kind::Srv) {
         let mut srv: Vec<(u16, u16, u16, String)> = records
             .into_iter()
             .filter_map(|r| match r {
@@ -557,9 +669,9 @@ pub fn starts(with: &dyn Connector, email: &str) -> Vec<Url> {
             })
             .collect();
         srv.sort();
-        out.extend(srv.into_iter().take(3).map(|(_, _, port, host)| Url { host, port, path: "/.well-known/caldav".into() }));
+        out.extend(srv.into_iter().take(3).map(|(_, _, port, host)| Url { host, port, path: well_known.into() }));
     }
-    out.push(Url { host: domain, port: 443, path: "/.well-known/caldav".into() });
+    out.push(Url { host: domain, port: 443, path: well_known.into() });
     out
 }
 
@@ -635,7 +747,7 @@ fn read_reply(conn: &mut Conn, head_only: bool) -> Result<Reply, NetError> {
                 break;
             }
             if n >= MAX_HEAD_LINES {
-                return Err(NetError::TooLarge("the head of the calendar server's answer"));
+                return Err(NetError::TooLarge("the head of the server's answer"));
             }
             let line = String::from_utf8_lossy(&line).into_owned();
             let Some((name, value)) = line.split_once(':') else { continue };
@@ -654,10 +766,10 @@ fn read_reply(conn: &mut Conn, head_only: bool) -> Result<Reply, NetError> {
         let body = if head_only || code == 204 || code == 304 {
             Vec::new()
         } else if chunked {
-            http::chunks(conn, MAX_BODY, "the calendar server's answer")?
+            http::chunks(conn, MAX_BODY, "the server's answer")?
         } else if let Some(length) = length {
             if length > MAX_BODY {
-                return Err(NetError::TooLarge("the calendar server's answer"));
+                return Err(NetError::TooLarge("the server's answer"));
             }
             conn.exact(length)?
         } else {
@@ -665,7 +777,7 @@ fn read_reply(conn: &mut Conn, head_only: bool) -> Result<Reply, NetError> {
         };
         return Ok(Reply { code, etag, location, body });
     }
-    Err(NetError::protocol("the calendar server sent only interim answers"))
+    Err(NetError::protocol("the server sent only interim answers"))
 }
 
 /// What a response of a multistatus says of one href.
@@ -686,6 +798,8 @@ struct Props {
     token: Option<String>,
     color: Option<String>,
     calendar: bool,
+    /// An address book ([RFC 6352] 5.2).
+    book: bool,
     collection: bool,
     comps: Vec<String>,
     comps_given: bool,
@@ -693,6 +807,8 @@ struct Props {
     privileges_given: bool,
     principal: Option<String>,
     homes: Vec<String>,
+    /// Address book homes, kept apart: a server that answers both is asked for one.
+    book_homes: Vec<String>,
     data: Option<String>,
 }
 
@@ -708,7 +824,7 @@ fn child<'a, 'i>(n: roxmltree::Node<'a, 'i>, ns: &str, name: &str) -> Option<rox
 
 /// The responses of a multistatus ([RFC 4918] 13), and its sync token when it has one.
 fn multistatus(body: &[u8]) -> Result<(Vec<Response>, Option<String>), NetError> {
-    let bad = |why: &str| NetError::protocol(format!("the calendar server's answer is not one that is read: {why}"));
+    let bad = |why: &str| NetError::protocol(format!("the server's answer is not one that is read: {why}"));
     let text = std::str::from_utf8(body).map_err(|_| bad("it is not UTF-8"))?;
     let text = text.trim_start_matches('\u{feff}');
     if !crate::find::shallow(text.as_bytes(), MAX_DEPTH) {
@@ -743,6 +859,7 @@ fn multistatus(body: &[u8]) -> Result<(Vec<Response>, Option<String>), NetError>
                     (APPLE, "calendar-color") => props.color = Some(text_of(p).chars().take(16).collect()),
                     (DAV, "resourcetype") => {
                         props.calendar = child(p, CALDAV, "calendar").is_some();
+                        props.book = child(p, CARDDAV, "addressbook").is_some();
                         props.collection = child(p, DAV, "collection").is_some();
                     }
                     (CALDAV, "supported-calendar-component-set") => {
@@ -766,7 +883,8 @@ fn multistatus(body: &[u8]) -> Result<(Vec<Response>, Option<String>), NetError>
                     }
                     (DAV, "current-user-principal") => props.principal = hrefs(p).into_iter().next(),
                     (CALDAV, "calendar-home-set") => props.homes = hrefs(p),
-                    (CALDAV, "calendar-data") => props.data = p.text().map(str::to_string),
+                    (CALDAV, "calendar-data") | (CARDDAV, "address-data") => props.data = p.text().map(str::to_string),
+                    (CARDDAV, "addressbook-home-set") => props.book_homes = hrefs(p),
                     _ => {}
                 }
             }

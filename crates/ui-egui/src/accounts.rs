@@ -41,6 +41,8 @@ pub(crate) struct Form {
     pub data_file: String,
     /// The CalDAV server its calendars are kept in step with, or empty.
     pub caldav: String,
+    /// The CardDAV server its contacts are kept in step with, or empty.
+    pub carddav: String,
     /// Each server with a certificate of its own the owner trusted: which, its host and the
     /// certificate's fingerprint.
     pub trusted: Vec<(&'static str, String, String)>,
@@ -71,6 +73,7 @@ impl Form {
             sent_on_server: true,
             data_file: String::new(),
             caldav: String::new(),
+            carddav: String::new(),
             trusted: Vec::new(),
             shown: Vec::new(),
         }
@@ -91,9 +94,14 @@ impl Form {
         let mut trusted = Vec::new();
         let mut shown: Vec<Value> = Vec::new();
         let caldav = a.get("caldav").and_then(|v| v.get("url")).and_then(Value::as_str).map(one_line).unwrap_or_default();
-        for (side, key) in [("incoming", "incoming"), ("outgoing", "outgoing"), ("calendar", "caldav")] {
+        let carddav = a.get("carddav").and_then(|v| v.get("url")).and_then(Value::as_str).map(one_line).unwrap_or_default();
+        for (side, key) in [("incoming", "incoming"), ("outgoing", "outgoing"), ("calendar", "caldav"), ("contacts", "carddav")] {
             if let Some(f) = a.get(key).and_then(|v| v.get("trusted")).and_then(Value::as_str) {
-                let host = if key == "caldav" { url_host(&caldav) } else { host(key) };
+                let host = match key {
+                    "caldav" => url_host(&caldav),
+                    "carddav" => url_host(&carddav),
+                    _ => host(key),
+                };
                 trusted.push((side, host, one_line(f)));
             }
             for c in a.get(key).and_then(|v| v.get("certificates")).and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
@@ -123,6 +131,7 @@ impl Form {
             sent_on_server: a.get("sentOnServer").and_then(Value::as_bool) != Some(false),
             data_file: a.get("dataFile").and_then(Value::as_str).map(one_line).unwrap_or_default(),
             caldav,
+            carddav,
             trusted,
             shown,
         }
@@ -166,6 +175,7 @@ impl Form {
             "sentOnServer": self.sent_on_server,
             // Empty: none.
             "caldav": self.caldav.trim(),
+            "carddav": self.carddav.trim(),
         });
         if let (Some(id), Some(map)) = (&self.id, p.as_object_mut()) {
             map.insert("id".into(), json!(id));
@@ -564,6 +574,11 @@ impl MailUi {
                             field(ui, &mut f.caldav, "caldav", "https://… or none", 2000)
                                 .on_hover_text("A CalDAV server whose calendars are kept in step with this account's, signed in to the same way");
                             ui.end_row();
+                            label(ui, &t, "Contacts (CardDAV)");
+                            field(ui, &mut f.carddav, "carddav", "https://… or none", 2000).on_hover_text(
+                                "A CardDAV server whose address books are kept in step with this account's Contacts, signed in to the same way",
+                            );
+                            ui.end_row();
                         });
 
                         section(ui, &t, "Signing in", "account-sign-in", |ui| {
@@ -667,6 +682,7 @@ impl MailUi {
                         let which = match *side {
                             "incoming" => "Incoming",
                             "outgoing" => "Outgoing",
+                            "contacts" => "Contacts",
                             _ => "Calendar",
                         };
                         ui.label(

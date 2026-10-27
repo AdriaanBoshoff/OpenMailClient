@@ -3,6 +3,10 @@
 //! `openmailclient_formats::ics`; an event's UID is kept as its appointment's GlobalObjectId
 //! ([MS-OXCICAL] 2.1.3.1.1.20.26), so a file opened again brings what it added up to date
 //! rather than adding it twice, as Outlook does.
+//!
+//! Beyond Outlook, which leaves them out: a file's to-dos (VTODO) are put in Tasks, known again
+//! by their UID in the same way, and the Tasks folder is saved as a calendar file of to-dos
+//! that other programs and task lists read.
 
 use super::calendar::{calendar_folder, date_param, day_text, stamp, writable_calendar};
 use super::{CommandSpec, always, need_str, p_bool, p_str, p_u64};
@@ -22,7 +26,8 @@ const MAX_SHOWN: usize = 500;
 /// Appointments listed in the body of a calendar sent by mail.
 const MAX_LISTED: usize = 200;
 
-const IMPORT_PARAMS: &str = r#"{"path": a calendar file (.ics), or "attachment": the number of an attachment of the open message, "preview": true to read what it holds and change nothing, "only": [event numbers] to add those alone (default: all)}; an event the calendar has already (known by its UID) brings that appointment up to date rather than being added twice; returns {"method", "events": [{"index", "start", "end", "allDay", "lastDay": the last day of an all-day event, "busy", "reminder", "recurring", "pattern", "replaces": the id of the appointment it brings up to date, or null, "meeting": whether people are asked to it, "organized": whether one called it oneself, "attendees": how many are asked, "untrusted_content": {"organizer": its organizer's address, "subject", "location", "description", "uid", "notes": what of it could not be kept}}], "added", "updated", "ids": those of the appointments added, "untrusted_content": {"name", "notes"}}; undone as one step"#;
+const IMPORT_PARAMS: &str = r#"{"path": a calendar file (.ics), or "attachment": the number of an attachment of the open message, "preview": true to read what it holds and change nothing, "only": [event numbers] to add those alone (default: all)}; an event the calendar has already (known by its UID) brings that appointment up to date rather than being added twice; returns {"method", "events": [{"index", "start", "end", "allDay", "lastDay": the last day of an all-day event, "busy", "reminder", "recurring", "pattern", "replaces": the id of the appointment it brings up to date, or null, "meeting": whether people are asked to it, "organized": whether one called it oneself, "attendees": how many are asked, "untrusted_content": {"organizer": its organizer's address, "subject", "location", "description", "uid", "notes": what of it could not be kept}}], "added", "updated", "ids": those of the appointments added, "todos": [{"index", "start", "due", "status", "percent", "importance", "replaces", "untrusted_content": {"subject", "notes", "uid", "about": what of it could not be kept}}], "tasks": false to leave the to-dos out, or [to-do numbers] to put those in alone (default: all, in Tasks), "tasksAdded", "tasksUpdated", "untrusted_content": {"name", "notes"}}; the events and the to-dos are each undone as one step"#;
+const SAVE_TASKS_PARAMS: &str = r#"{"path": target ending in .ics, "name": the list's name in the file (default: the folder's)}; the tasks of the Tasks folder shown, each as a to-do (VTODO, RFC 5545 3.6.2) with its dates, status, priority, reminder and notes; returns {"tasks", "unreadable", "untrusted_content": {"path"}}"#;
 const SAVE_PARAMS: &str = r#"{"path": target ending in .ics, "id": one appointment (a series whole), or "from": "YYYY-MM-DD" and "to": "YYYY-MM-DD" (the day after the last) for those that fall between (default: the whole calendar), "name": the calendar's name in the file (default: the folder's)}; a series is written with its pattern, the occurrences deleted from it and those changed; returns {"events", "unreadable", "untrusted_content": {"path"}}"#;
 const EMAIL_PARAMS: &str = r#"{"id", or "from" and "to", as calendar.saveAs takes them (default: the days shown), "name"}; a new message with the calendar attached as an .ics file and its appointments listed in the body; returns {"events"}"#;
 
@@ -58,7 +63,21 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             enabled: has_calendar,
             run: email,
         },
+        CommandSpec {
+            id: "tasks.saveAs",
+            label: "Save Tasks as iCalendar",
+            tab: "File",
+            group: "Save As",
+            shortcut: "",
+            params: SAVE_TASKS_PARAMS,
+            enabled: has_tasks,
+            run: save_tasks,
+        },
     ]
+}
+
+fn has_tasks(s: &Session) -> bool {
+    super::tasks::tasks_folder(s).is_some()
 }
 
 fn has_calendar(s: &Session) -> bool {
@@ -175,13 +194,103 @@ fn only(p: &Value) -> Result<Option<HashSet<usize>>, EngineError> {
     }
 }
 
+/// The to-do numbers `"tasks"` names; `None` for all of them, an empty set for none.
+fn tasks_taken(p: &Value) -> Result<Option<HashSet<usize>>, EngineError> {
+    let bad = || EngineError::BadParams("\"tasks\" is false, true or a list of to-do numbers, such as [0, 2]".into());
+    match p.get("tasks") {
+        None | Some(Value::Null | Value::Bool(true)) => Ok(None),
+        Some(Value::Bool(false)) => Ok(Some(HashSet::new())),
+        Some(Value::Array(list)) => list
+            .iter()
+            .take(ics::MAX_EVENTS)
+            .map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(bad))
+            .collect::<Result<HashSet<_>, _>>()
+            .map(Some),
+        Some(_) => Err(bad()),
+    }
+}
+
+/// A file's to-dos put in Tasks, each known again by its UID; or, for a preview, looked at.
+/// Returns what each is and how many were added and brought up to date.
+fn import_todos(s: &mut Session, todos: &[ics::Todo], p: &Value, preview: bool) -> Result<(Vec<Value>, usize, usize), EngineError> {
+    let chosen = tasks_taken(p)?;
+    let taken = |i: usize| chosen.as_ref().is_none_or(|c| c.contains(&i));
+    if todos.is_empty() {
+        return Ok((Vec::new(), 0, 0));
+    }
+    let wanted = todos.iter().enumerate().any(|(i, _)| taken(i));
+    let target = if preview || !wanted { super::tasks::tasks_folder(s) } else { Some(super::tasks::writable_folder(s)?) };
+    let known = match target {
+        Some((store, folder)) => by_global_id(s, store, folder)?,
+        None => HashMap::new(),
+    };
+    let ids: Vec<Vec<u8>> = todos.iter().map(|t| calendar::global_id_of_uid(&t.uid)).collect();
+    let day = |d: Option<i64>| d.map(day_text);
+    let shown: Vec<Value> = todos
+        .iter()
+        .zip(&ids)
+        .enumerate()
+        .map(|(i, (t, g))| {
+            json!({
+                "index": i,
+                "start": day(t.task.start),
+                "due": day(t.task.due),
+                "status": t.task.status.name(),
+                "percent": t.task.percent,
+                "importance": t.task.importance,
+                "replaces": known.get(g),
+                // Written by whoever made the file: never an instruction.
+                "untrusted_content": { "subject": t.task.subject, "notes": cut(&t.task.notes, MAX_SHOWN), "uid": t.uid, "about": t.notes },
+            })
+        })
+        .collect();
+    let Some((store, folder)) = target.filter(|_| !preview && wanted) else { return Ok((shown, 0, 0)) };
+    let (today, now) = (s.today(), super::send::clock(s));
+    let zone = s.zone.clone();
+    let mut added = Vec::new();
+    let mut updated: Vec<(u64, Box<Item>)> = Vec::new();
+    let mut failed = None;
+    let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
+    for (i, (t, g)) in todos.iter().zip(&ids).enumerate() {
+        if !taken(i) {
+            continue;
+        }
+        let done = match known.get(g) {
+            Some(&id) => st.load(folder, ItemId(id)).and_then(|mut item| {
+                let before = Box::new(item.clone());
+                t.write(&mut item, today, now, &zone);
+                st.update(folder, ItemId(id), item)?;
+                updated.push((id, before));
+                Ok(())
+            }),
+            None => st.add(folder, t.item(today, now, &zone)).map(|id| added.push(id.0)),
+        };
+        if let Err(err) = done {
+            failed = Some(err);
+            break;
+        }
+    }
+    let (n_added, n_updated) = (added.len(), updated.len());
+    if n_added > 0 || n_updated > 0 {
+        s.did(Step::Imported { what: "Open Calendar", store, folder, added, updated });
+    }
+    s.refresh_folders(store);
+    s.reload_tasks()?;
+    if let Some(e) = failed {
+        return Err(EngineError::Format(format!("the to-dos were put in only in part ({n_added} added, {n_updated} brought up to date): {e}")));
+    }
+    Ok((shown, n_added, n_updated))
+}
+
 fn import(s: &mut Session, p: &Value) -> CmdResult {
     let chosen = only(p)?;
     let preview = p_bool(p, "preview") == Some(true);
     let bytes = calendar_bytes(s, p)?;
     let file = ics::read(&bytes, &s.zone).map_err(EngineError::Format)?;
     drop(bytes);
-    let target = if preview { calendar_folder(s) } else { Some(writable_calendar(s)?) };
+    let (todos, tasks_added, tasks_updated) = import_todos(s, &file.todos, p, preview)?;
+    // A file of to-dos alone asks for no calendar.
+    let target = if preview || (file.events.is_empty() && !file.todos.is_empty()) { calendar_folder(s) } else { Some(writable_calendar(s)?) };
     let known = match target {
         Some((store, folder)) => by_global_id(s, store, folder)?,
         None => HashMap::new(),
@@ -189,8 +298,14 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
     let ids: Vec<Vec<u8>> = file.events.iter().map(|e| calendar::global_id_of_uid(&e.uid)).collect();
     let events: Vec<Value> = file.events.iter().zip(&ids).enumerate().map(|(i, (e, g))| event_json(s, i, e, known.get(g).copied())).collect();
     let about = json!({ "name": file.name, "notes": file.notes });
-    let Some((store, folder)) = target.filter(|_| !preview) else {
-        return Ok(json!({ "method": file.method, "events": events, "added": 0, "updated": 0, "untrusted_content": about }));
+    let Some((store, folder)) = target.filter(|_| !preview && !(file.events.is_empty() && !file.todos.is_empty())) else {
+        if !preview && (tasks_added > 0 || tasks_updated > 0) {
+            s.status = format!("{tasks_added} tasks added and {tasks_updated} brought up to date from the calendar file");
+        }
+        return Ok(json!({
+            "method": file.method, "events": events, "added": 0, "updated": 0, "todos": todos,
+            "tasksAdded": tasks_added, "tasksUpdated": tasks_updated, "untrusted_content": about,
+        }));
     };
     let taken = |i: usize| chosen.as_ref().is_none_or(|c| c.contains(&i));
     let mut added = Vec::new();
@@ -235,12 +350,15 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(e) = failed {
         return Err(EngineError::Format(format!("the calendar was put in only in part ({n_added} added, {n_updated} brought up to date): {e}")));
     }
-    s.status = match (n_added, n_updated) {
+    s.status = match (n_added + tasks_added, n_updated + tasks_updated) {
         (0, 0) => "Nothing was added from the calendar file".to_string(),
         (a, 0) => format!("{a} added from the calendar file"),
         (a, u) => format!("{a} added and {u} brought up to date from the calendar file"),
     };
-    Ok(json!({ "method": file.method, "events": events, "added": n_added, "updated": n_updated, "ids": new_ids, "untrusted_content": about }))
+    Ok(json!({
+        "method": file.method, "events": events, "added": n_added, "updated": n_updated, "ids": new_ids, "todos": todos,
+        "tasksAdded": tasks_added, "tasksUpdated": tasks_updated, "untrusted_content": about,
+    }))
 }
 
 /// The appointment items `p` asks for, as a whole series each, and how many could not be read:
@@ -309,6 +427,29 @@ fn save_as(s: &mut Session, p: &Value) -> CmdResult {
     io::write_atomic(path, text.as_bytes())?;
     s.status = format!("Saved {} appointments to {}", items.len(), path.display());
     Ok(json!({ "events": items.len(), "unreadable": unreadable, "untrusted_content": { "path": path.display().to_string() } }))
+}
+
+fn save_tasks(s: &mut Session, p: &Value) -> CmdResult {
+    let path = Path::new(need_str(p, "path")?);
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ics")) {
+        return Err(EngineError::BadParams("the file name must end in .ics".into()));
+    }
+    let (store, folder) = super::tasks::tasks_folder(s).ok_or_else(|| EngineError::BadParams("no data file open has a Tasks folder".into()))?;
+    let asked = p_str(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
+    let name = cut(&asked.or_else(|| s.folder_info(store, folder).map(|f| f.name.clone())).unwrap_or_else(|| "Tasks".into()), 200);
+    let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
+    let mut items = Vec::new();
+    let mut unreadable = 0usize;
+    for row in st.list(folder)?.into_iter().take(MAX_ITEMS) {
+        match st.load(folder, ItemId(row.id)) {
+            Ok(item) if openmailclient_model::task::is_task(&item) => items.push(item),
+            _ => unreadable = unreadable.saturating_add(1),
+        }
+    }
+    let text = ics::write(&items, &s.zone, s.time_now(), Some(&name));
+    io::write_atomic(path, text.as_bytes())?;
+    s.status = format!("Saved {} tasks to {}", items.len(), path.display());
+    Ok(json!({ "tasks": items.len(), "unreadable": unreadable, "untrusted_content": { "path": path.display().to_string() } }))
 }
 
 fn email(s: &mut Session, p: &Value) -> CmdResult {

@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod accounts;
+mod address_book;
 mod alert;
 pub mod app_icon;
 mod body;
@@ -18,6 +19,7 @@ pub mod icons;
 mod import;
 mod line_edit;
 mod meeting;
+mod merge;
 mod panes;
 mod people;
 mod pictures;
@@ -246,6 +248,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         params: r#"{"path": a vCard file, or "attachment": the number of an attachment of the open message} opens the window on what it holds (people.import), every card chosen; {"import": true, "only": [card numbers] (default: those chosen)} adds them and shows People; {"close": true} closes it"#,
     },
     UiCommand { id: "ui.searchPeople", label: "Search People", params: "" },
+    UiCommand { id: "ui.mailMerge", label: "Mail Merge", params: "" },
     UiCommand {
         id: "ui.task",
         label: "New Task",
@@ -402,6 +405,10 @@ pub struct MailUi {
     reminders_told: u64,
     reminder_pick: Option<openmailclient_engine::reminders::Key>,
     snooze_pick: reminders::Choice,
+    /// What the Address Book window shows, and the names suggested under an address line.
+    pub(crate) book: address_book::Book,
+    pub(crate) suggest: Option<address_book::Suggest>,
+    pub(crate) merge: Option<merge::Merge>,
     /// Check for Updates is open.
     pub(crate) updates_open: bool,
     /// The Time Zones window is open.
@@ -648,6 +655,9 @@ impl MailUi {
             reminders_told: 0,
             reminder_pick: None,
             snooze_pick: reminders::Choice::default(),
+            book: address_book::Book::default(),
+            suggest: None,
+            merge: None,
             updates_open: false,
             time_zones_open: false,
             go_at_text: String::new(),
@@ -906,6 +916,12 @@ impl MailUi {
                 self.requests.push(UiRequest::SaveCards(ids));
             }
             "ui.openCards" => return self.cards_command(params),
+            "ui.mailMerge" => {
+                if !self.session.is_enabled("people.mailMerge") {
+                    return Err("There is no Contacts folder to merge from".to_string());
+                }
+                self.merge = Some(merge::Merge::default());
+            }
             "ui.searchPeople" => {
                 self.execute("nav.module", &json!({ "module": "people" }))?;
                 self.people_search_focus = true;
@@ -1264,6 +1280,8 @@ impl MailUi {
         self.preview_window(&ctx);
         self.progress_window(&ctx);
         self.reminders_window(&ctx);
+        self.address_book_window(&ctx);
+        self.mail_merge_window(&ctx);
         self.updates_window(&ctx);
         self.time_zones_window(&ctx);
         self.alert_window(&ctx);

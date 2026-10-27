@@ -73,6 +73,15 @@ fn a_servers_calendars_are_found_from_its_address_or_its_well_known_place() {
         assert!(mine.writable && mine.events && !mine.token.is_empty() && !mine.ctag.is_empty());
         assert_eq!((team.name.as_str(), team.color.as_str(), team.writable), ("Team & Co", "#FF8800", false));
     }
+    // A server that keeps address books too names a home for each: the calendars are asked
+    // for in theirs and the books in theirs, from the same address.
+    fake.state().calendars.push(crate::fake::DavCalendar::book("/dav/addressbooks/pat/friends/", "Friends"));
+    for at in ["https://dav.example.test/", "https://dav.example.test/dav/principals/pat/"] {
+        assert_eq!(calendars(&fake, at).unwrap().len(), 2, "{at}: the calendars alone");
+        let login = login();
+        let books = Dav::new(&fake, &login, url(at), None).holding(crate::dav::Holds::Cards).calendars().unwrap();
+        assert_eq!(books.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Friends"], "{at}");
+    }
     // Named by its own path, a calendar is the one listed.
     let one = calendars(&fake, "https://dav.example.test/dav/calendars/pat/team/").unwrap();
     assert_eq!(one.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Team & Co"]);

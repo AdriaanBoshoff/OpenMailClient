@@ -221,3 +221,79 @@ fn hostile_calendar_files_and_params_are_errors_not_crashes() {
     assert_eq!(s.compose.as_ref().unwrap().attachments[0].name(), "a_b_c__.ics");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// A file of an event and two to-dos. Synthetic, written for this test.
+const WITH_TODOS: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//Test//EN\r\n\
+BEGIN:VEVENT\r\nUID:ev-1@example.test\r\nSUMMARY:Print review\r\nDTSTART:20261009T080000Z\r\nDTEND:20261009T090000Z\r\nEND:VEVENT\r\n\
+BEGIN:VTODO\r\nUID:todo-1@example.test\r\nSUMMARY:Send the proofs\r\nDUE;VALUE=DATE:20261012\r\nPRIORITY:1\r\nSTATUS:IN-PROCESS\r\nPERCENT-COMPLETE:50\r\nEND:VTODO\r\n\
+BEGIN:VTODO\r\nUID:todo-2@example.test\r\nSUMMARY:Book the room\r\nSTATUS:COMPLETED\r\nCOMPLETED:20261006T100000Z\r\nEND:VTODO\r\n\
+END:VCALENDAR\r\n";
+
+/// Subjects of the tasks listed, in order.
+fn task_subjects(s: &mut Session) -> Vec<String> {
+    let listed = run(s, "tasks.items", json!({ "view": "simpleList", "query": "" }));
+    let mut all: Vec<String> = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["kind"] == "task")
+        .map(|i| i["untrusted_content"]["subject"].as_str().unwrap().to_string())
+        .collect();
+    all.sort();
+    all
+}
+
+#[test]
+fn to_dos_of_a_calendar_file_are_put_in_tasks_once_and_tasks_saved_as_one() {
+    let d = dir("todos");
+    let path = d.join("tasks.ics");
+    std::fs::write(&path, WITH_TODOS).unwrap();
+    let mut s = empty_calendar();
+    let looked = run(&mut s, "calendar.import", json!({ "path": path, "preview": true }));
+    assert_eq!(looked["todos"].as_array().unwrap().len(), 2);
+    assert_eq!(looked["todos"][0]["status"], json!("inProgress"), "{looked}");
+    assert_eq!(looked["todos"][0]["due"], json!("2026-10-12"));
+    assert!(task_subjects(&mut s).is_empty(), "a preview makes nothing");
+
+    let got = run(&mut s, "calendar.import", json!({ "path": path }));
+    assert_eq!((got["added"].as_u64(), got["tasksAdded"].as_u64()), (Some(1), Some(2)), "{got}");
+    assert_eq!(task_subjects(&mut s), vec!["Book the room", "Send the proofs"], "a Tasks folder is made for them");
+    // Opened again, they are known by their UID.
+    let again = run(&mut s, "calendar.import", json!({ "path": path }));
+    assert_eq!((again["tasksAdded"].as_u64(), again["tasksUpdated"].as_u64()), (Some(0), Some(2)));
+    assert_eq!(task_subjects(&mut s).len(), 2);
+    // Left out when asked, and undone as a step of their own.
+    let none = run(&mut s, "calendar.import", json!({ "path": path, "tasks": false }));
+    assert_eq!(none["tasksUpdated"], json!(0));
+    assert!(s.run("calendar.import", &json!({ "path": path, "tasks": "some" })).is_err());
+
+    let out = d.join("saved.ics");
+    let saved = run(&mut s, "tasks.saveAs", json!({ "path": out, "name": "My list" }));
+    assert_eq!(saved["tasks"], json!(2));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let read = ics::read(text.as_bytes(), &s.zone).unwrap();
+    assert_eq!(read.name.as_deref(), Some("My list"));
+    let mut uids: Vec<&str> = read.todos.iter().map(|t| t.uid.as_str()).collect();
+    uids.sort();
+    assert_eq!(uids, vec!["todo-1@example.test", "todo-2@example.test"], "each keeps the UID it came with");
+    assert!(read.todos.iter().any(|t| t.task.percent == 50 && t.task.importance == 2));
+    assert!(s.run("tasks.saveAs", &json!({ "path": d.join("saved.txt") })).is_err());
+
+    // A file of to-dos alone, in a data file with no calendar, needs none.
+    let only = d.join("only.ics");
+    std::fs::write(
+        &only,
+        WITH_TODOS.replace(
+            "BEGIN:VEVENT\r\nUID:ev-1@example.test\r\nSUMMARY:Print review\r\nDTSTART:20261009T080000Z\r\nDTEND:20261009T090000Z\r\nEND:VEVENT\r\n",
+            "",
+        ),
+    )
+    .unwrap();
+    let mut bare = Session::new();
+    let mut store = MemStore::new("Bare");
+    store.push_folder(None, "Inbox", "IPF.Note");
+    bare.add_store(Box::new(store));
+    let got = run(&mut bare, "calendar.import", json!({ "path": only }));
+    assert_eq!(got["tasksAdded"], json!(2), "{got}");
+    let _ = std::fs::remove_dir_all(&d);
+}

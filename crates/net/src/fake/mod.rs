@@ -13,7 +13,7 @@ mod pop3;
 mod smtp;
 
 use crate::{About, Connector, End, Endpoint, Fingerprint, NetError, Protocol, Security, Seen, Stream, pipe};
-pub use dav::{DavCalendar, DavObject, HOME as DAV_HOME, PRINCIPAL as DAV_PRINCIPAL};
+pub use dav::{BOOK_HOME as DAV_BOOK_HOME, DavCalendar, DavObject, HOME as DAV_HOME, PRINCIPAL as DAV_PRINCIPAL};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A message held by the fake server.

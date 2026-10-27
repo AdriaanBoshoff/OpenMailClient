@@ -14,6 +14,8 @@ mod import;
 mod link;
 mod mail;
 mod meeting;
+mod merge;
+pub(crate) mod names;
 pub mod people;
 mod picture;
 mod progress;
@@ -66,6 +68,8 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(progress::commands());
         v.extend(calendar::commands());
         v.extend(people::commands());
+        v.extend(names::commands());
+        v.extend(merge::commands());
         v.extend(tasks::commands());
         v.extend(update::commands());
         v.extend(calendar_file::commands());

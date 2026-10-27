@@ -83,6 +83,9 @@ pub struct Shown {
     pub unreadable: usize,
     /// The Contacts folder chosen to be shown (`people.open`).
     pub chosen: Option<(usize, FolderId)>,
+    /// The Address Book window is open, with the line of the message being written a choice
+    /// goes to ("to", "cc" or "bcc"; empty when it was opened from the main window).
+    pub book: Option<String>,
 }
 
 const CONTACT_PARAMS: &str = r#"{"fullName", "prefix", "given", "middle", "surname", "suffix", "fileAs" (default: "Surname, Given"), "nickname", "company", "department", "jobTitle", "office", "profession", "manager", "assistant", "spouse", "emails": up to three, each an address or {"address", "name": what a message to it shows}, "phones": {"business" | "business2" | "businessFax" | "home" | "home2" | "homeFax" | "mobile" | "pager" | "car" | "assistant" | "primary" | "other": a number, or null to take it away}, "addresses": {"business" | "home" | "other": {"street", "city", "state", "postalCode", "country", "poBox"}, or null}, "mailing": the place mail goes to, "webPage", "homePage", "im", "birthday": "YYYY-MM-DD" or null, "anniversary", "notes", "categories": [names], "picture": a picture file (JPEG, PNG, GIF or BMP, at most 4 MB) or null}; text given as "" takes it away"#;
@@ -1190,7 +1193,7 @@ fn ids_param(s: &Session, p: &Value) -> Result<Vec<u64>, EngineError> {
 
 /// The UID a card is written with when it has none of its own: one made from what Outlook
 /// keeps of it for life (PidTagSearchKey), else from its name and address.
-fn fallback_uid(item: &Item, card: &Card) -> String {
+pub(crate) fn fallback_uid(item: &Item, card: &Card) -> String {
     let mut h: u64 = 0xCBF2_9CE4_8422_2325;
     let mut feed = |b: &[u8]| {
         for x in b {

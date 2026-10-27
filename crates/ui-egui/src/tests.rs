@@ -2754,6 +2754,70 @@ fn an_accounts_caldav_server_is_a_field_of_its_form() {
     assert_eq!(crate::accounts::url_host("not one"), "");
 }
 
+/// The Address Book is opened from the ribbon or a To… button, finds as it is searched, and
+/// puts who is chosen in the line it was opened for, or in a new message.
+#[test]
+fn the_address_book_puts_who_is_chosen_in_the_message_being_written() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("people.addressBook", &Value::Null).unwrap();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    ctx.run_ui(egui::RawInput::default(), |u| ui.address_book_window(u.ctx())).textures_delta.clear();
+    assert_eq!(ui.book.total, 5, "everyone, before anything is searched");
+    ui.book.query = "june".into();
+    ctx.run_ui(egui::RawInput::default(), |u| ui.address_book_window(u.ctx())).textures_delta.clear();
+    assert_eq!(ui.book.rows.len(), 1);
+    let june = ui.book.rows[0].clone();
+    assert_eq!(june.as_, "June Okafor <june.okafor@example.org>");
+    // Nothing being written: a new message to them.
+    ui.put_in("to", &june);
+    assert_eq!(ui.session.compose.as_ref().unwrap().to, "June Okafor <june.okafor@example.org>; ");
+    ui.book.query = "launch".into();
+    ctx.run_ui(egui::RawInput::default(), |u| ui.address_book_window(u.ctx())).textures_delta.clear();
+    let team = ui.book.rows[0].clone();
+    assert!(team.group);
+    ui.put_in("cc", &team);
+    assert_eq!(ui.session.compose.as_ref().unwrap().cc, "Priya Raman <priya.raman@example.org>; Tomás Lindqvist <tomas.lindqvist@example.org>; ");
+    ui.session.people.book = None;
+    ctx.run_ui(egui::RawInput::default(), |u| ui.address_book_window(u.ctx())).textures_delta.clear();
+    assert!(ui.book.looked.is_none(), "looked at again when next opened");
+}
+
+/// Names are suggested for what follows the last comma or semicolon, and the one taken
+/// stands in its place.
+#[test]
+fn names_are_suggested_as_an_address_line_is_typed() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.suggest_for("to", "sam.patel@example.org; pri");
+    let s = ui.suggest.clone().unwrap();
+    assert_eq!(s.rows[0].name, "Priya Raman");
+    assert_eq!(crate::address_book::completed(&s.line, &s.rows[0].as_), "sam.patel@example.org; Priya Raman <priya.raman@example.org>; ");
+    assert_eq!(crate::address_book::completed("\"Raman, P\" <p@x.test>, to", "T <t@x.test>"), "\"Raman, P\" <p@x.test>; T <t@x.test>; ");
+    assert_eq!(crate::address_book::added("", "a@x.test"), "a@x.test; ");
+    assert_eq!(crate::address_book::added("b@x.test;  ", "a@x.test"), "b@x.test; a@x.test; ");
+    ui.suggest_for("to", "zzz");
+    assert!(ui.suggest.as_ref().unwrap().rows.is_empty());
+}
+
+/// The CardDAV address is a field of its own beside the CalDAV one, each kept apart.
+#[test]
+fn an_accounts_carddav_server_is_a_field_of_its_form_beside_caldav() {
+    let mut ui = MailUi::new(Session::with_sample());
+    let account = json!({ "email": "pat@example.test", "incoming": { "host": "mail.example.test" },
+                          "caldav": "https://dav.example.test/cal/", "carddav": "https://cards.example.test/" });
+    ui.execute("account.add", &account).unwrap();
+    let listed = ui.execute("account.list", &Value::Null).unwrap();
+    let mut form = crate::accounts::Form::of(&listed["accounts"][0]);
+    assert_eq!(form.carddav, "https://cards.example.test/");
+    assert_eq!(form.caldav, "https://dav.example.test/cal/");
+    form.carddav = String::new();
+    ui.execute("account.edit", &form.params().unwrap()).unwrap();
+    assert!(ui.session.accounts[0].carddav.is_none(), "emptied: none");
+    assert!(ui.session.accounts[0].caldav.is_some(), "the calendar server stays");
+    form.carddav = "ftp://cards.example.test/".into();
+    assert!(ui.execute("account.edit", &form.params().unwrap()).is_err(), "only https: is taken");
+}
+
 #[test]
 fn a_meeting_is_typed_in_the_appointment_window_and_its_attendees_read_back() {
     let mut ui = MailUi::new(Session::with_sample());
@@ -3267,4 +3331,24 @@ fn check_for_updates_draws_in_every_state_and_shows_a_release_s_words_as_text() 
     ui.execute("ui.updates", &json!({ "open": false })).unwrap();
     frame(&mut ui, &ctx, Vec::new(), None);
     assert!(!ui.updates_open);
+}
+
+/// Mail Merge shows the first messages as they will be while the text is written, says a wrong
+/// field at once, and opens only where there are contacts.
+#[test]
+fn mail_merge_previews_the_messages_as_the_text_is_written() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("ui.mailMerge", &Value::Null).unwrap();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    ctx.run_ui(egui::RawInput::default(), |u| ui.mail_merge_window(u.ctx())).textures_delta.clear();
+    let m = ui.merge.as_ref().unwrap();
+    assert_eq!(m.count, 4, "the group's members once each: {}", m.error);
+    assert_eq!(m.previews[0].2, "Dear Priya,\n\n");
+    assert!(m.fields.iter().any(|f| f == "Company"));
+    ui.merge.as_mut().unwrap().subject = "For «Compnay»".into();
+    ctx.run_ui(egui::RawInput::default(), |u| ui.mail_merge_window(u.ctx())).textures_delta.clear();
+    assert!(ui.merge.as_ref().unwrap().error.contains("not a field"));
+    let mut empty = MailUi::new(Session::new());
+    assert!(empty.execute("ui.mailMerge", &Value::Null).is_err());
 }

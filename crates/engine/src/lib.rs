@@ -38,9 +38,13 @@ mod tests_calendar;
 #[cfg(test)]
 mod tests_calendar_file;
 #[cfg(test)]
+mod tests_carddav;
+#[cfg(test)]
 mod tests_import;
 #[cfg(test)]
 mod tests_meeting;
+#[cfg(test)]
+mod tests_names;
 #[cfg(test)]
 mod tests_people;
 #[cfg(test)]

@@ -519,7 +519,7 @@ fn expires(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// Turn the draft into an item. `sent` stamps the submit time and clears the unsent flag.
-fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
+pub(super) fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
     let mut item = Item::new_mail();
     item.set_subject(&draft.subject);
     item.set_body_text(&draft.body);
@@ -586,7 +586,7 @@ fn path_of(s: &Session, store: usize) -> String {
 
 /// The data file a draft is kept in: the one of the account it goes from, as Outlook keeps a
 /// Drafts folder for each account, or the one new mail goes to.
-fn drafts_store(s: &mut Session, draft: &Draft) -> Result<Option<usize>, EngineError> {
+pub(super) fn drafts_store(s: &mut Session, draft: &Draft) -> Result<Option<usize>, EngineError> {
     let at = s.accounts.iter().position(|a| a.id == draft.account).or_else(|| (!s.accounts.is_empty()).then_some(0));
     if let Some(at) = at
         && let Some(store) = super::account::account_store(s, at)?
@@ -704,6 +704,9 @@ fn send(s: &mut Session, p: &Value) -> CmdResult {
     if !has_recipient {
         return Err(EngineError::Format("there must be at least one name or address in the To, Cc or Bcc box".into()));
     }
+    // As Outlook does on Send, a name the address book has once is put in as its address; one
+    // it has several times or not at all is left for the cautions below to speak of.
+    let _ = super::names::resolve_draft(s, &["to", "cc", "bcc"], true);
     // What the writer should know is said before the message goes, not after; it goes as it is
     // when that is asked for.
     let cautions = s.compose.as_ref().map(outgoing::cautions).unwrap_or_default();

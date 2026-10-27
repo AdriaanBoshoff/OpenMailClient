@@ -25,7 +25,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Info",
             shortcut: "",
-            params: r#"{"email", "kind": "imap" (the default) or "pop3", "incoming": {"host", "port", "security": "tls" (the default), "starttls" or "none"}, "outgoing": the same for SMTP (the incoming host over TLS when not given), "name", "displayName": the name mail is sent under, "user": the sign-in name (the address when not given), "signInToSend" (true), "leaveOnServer" (POP3, true), "caldav": the https: address of a CalDAV server whose calendars are kept in step, signed in to with the same name and password ("" for none), "password": kept in the system's credential store, never given back}; returns {"id", "account", "passwordKept"}"#,
+            params: r#"{"email", "kind": "imap" (the default) or "pop3", "incoming": {"host", "port", "security": "tls" (the default), "starttls" or "none"}, "outgoing": the same for SMTP (the incoming host over TLS when not given), "name", "displayName": the name mail is sent under, "user": the sign-in name (the address when not given), "signInToSend" (true), "leaveOnServer" (POP3, true), "caldav": the https: address of a CalDAV server whose calendars are kept in step, signed in to with the same name and password ("" for none), "carddav": the same for a CardDAV server whose address books are kept in step with Contacts folders, "password": kept in the system's credential store, never given back}; returns {"id", "account", "passwordKept"}"#,
             enabled: always,
             run: add,
         },
@@ -75,7 +75,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{"id", "fingerprint": the SHA-256 of a certificate one of the account's servers showed in this run and that was not trusted, as account.list or a test gives it; null forgets the one trusted, "server": "incoming", "outgoing", "calendar" (its CalDAV server) or "both" (the default: each server of the account that showed it)}; the certificate is then taken for that server only, and only while it shows exactly that one; returns {"trusted": [the servers]}"#,
+            params: r#"{"id", "fingerprint": the SHA-256 of a certificate one of the account's servers showed in this run and that was not trusted, as account.list or a test gives it; null forgets the one trusted, "server": "incoming", "outgoing", "calendar" (its CalDAV server), "contacts" (its CardDAV server) or "both" (the default: each server of the account that showed it)}; the certificate is then taken for that server only, and only while it shows exactly that one; returns {"trusted": [the servers]}"#,
             enabled: has_accounts,
             run: trust_certificate,
         },
@@ -171,9 +171,11 @@ fn list(s: &mut Session, _: &Value) -> CmdResult {
                 let shown: Vec<Value> = s.certificates.of(&server.host).iter().map(accounts::shown).collect();
                 v[key]["certificates"] = json!(shown);
             }
-            if let Some(dav) = &a.caldav {
-                let shown: Vec<Value> = s.certificates.of(&dav.host()).iter().map(accounts::shown).collect();
-                v["caldav"]["certificates"] = json!(shown);
+            for (key, dav) in [("caldav", &a.caldav), ("carddav", &a.carddav)] {
+                if let Some(dav) = dav {
+                    let shown: Vec<Value> = s.certificates.of(&dav.host()).iter().map(accounts::shown).collect();
+                    v[key]["certificates"] = json!(shown);
+                }
             }
             v
         })
@@ -316,11 +318,12 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
 fn trust_certificate(s: &mut Session, p: &Value) -> CmdResult {
     let at = find(s, p)?;
     let which = match p.get("server").and_then(Value::as_str) {
-        None | Some("both") => &["incoming", "outgoing", "calendar"][..],
+        None | Some("both") => &["incoming", "outgoing", "calendar", "contacts"][..],
         Some("incoming") => &["incoming"][..],
         Some("outgoing") => &["outgoing"][..],
         Some("calendar") => &["calendar"][..],
-        Some(_) => return Err(EngineError::BadParams("\"server\" is \"incoming\", \"outgoing\", \"calendar\" or \"both\"".into())),
+        Some("contacts") => &["contacts"][..],
+        Some(_) => return Err(EngineError::BadParams("\"server\" is \"incoming\", \"outgoing\", \"calendar\", \"contacts\" or \"both\"".into())),
     };
     let fingerprint = match p.get("fingerprint") {
         Some(Value::Null) => None,
@@ -337,7 +340,7 @@ fn trust_certificate(s: &mut Session, p: &Value) -> CmdResult {
         let (host, trusted) = match *key {
             "incoming" => (account.incoming.host.clone(), account.incoming.trusted),
             "outgoing" => (account.outgoing.host.clone(), account.outgoing.trusted),
-            _ => match &account.caldav {
+            key => match if key == "contacts" { &account.carddav } else { &account.caldav } {
                 Some(dav) => (dav.host(), dav.trusted),
                 None => continue,
             },
@@ -369,8 +372,9 @@ fn trust_certificate(s: &mut Session, p: &Value) -> CmdResult {
             match *key {
                 "incoming" => a.incoming.trusted = fingerprint,
                 "outgoing" => a.outgoing.trusted = fingerprint,
-                _ => {
-                    if let Some(dav) = a.caldav.as_mut() {
+                key => {
+                    let dav = if key == "contacts" { a.carddav.as_mut() } else { a.caldav.as_mut() };
+                    if let Some(dav) = dav {
                         dav.trusted = fingerprint;
                     }
                 }

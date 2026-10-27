@@ -361,19 +361,20 @@ impl Received {
     }
 }
 
-/// Calendars kept in step with a CalDAV server ([RFC 4791]), signed in to with the account's
-/// own name and password.
+/// Calendars kept in step with a CalDAV server ([RFC 4791]), or address books with a CardDAV
+/// one ([RFC 6352]), signed in to with the account's own name and password.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DavSetup {
     /// Where the server is, as the owner named it: `https:` only.
     pub url: String,
     /// A certificate of the server's own the owner trusted, for its host only.
     pub trusted: Option<Fingerprint>,
-    /// The server's calendars as they were when last kept in step.
+    /// The server's calendars (or address books) as they were when last kept in step.
     pub calendars: Vec<DavCal>,
 }
 
-/// A calendar of a CalDAV server, and the folder here it is kept in.
+/// A calendar of a CalDAV server, or an address book of a CardDAV one, and the folder here it
+/// is kept in.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DavCal {
     /// Its path on the server.
@@ -433,11 +434,11 @@ impl DavSetup {
     }
 }
 
-/// The CalDAV server an edit leaves: the one given (`"caldav"`: its address, or
-/// `{"url"}`; `""` or `false` for none), else the one before. Another address starts over;
-/// a certificate trusted stays only for the same host.
-fn caldav(p: &Value, was: Option<&DavSetup>) -> Result<Option<DavSetup>, EngineError> {
-    let url = match p.get("caldav") {
+/// The CalDAV or CardDAV server an edit leaves: the one given (`key`, `"caldav"` or
+/// `"carddav"`: its address, or `{"url"}`; `""` or `false` for none), else the one before.
+/// Another address starts over; a certificate trusted stays only for the same host.
+fn dav_server(p: &Value, key: &str, was: Option<&DavSetup>) -> Result<Option<DavSetup>, EngineError> {
+    let url = match p.get(key) {
         None | Some(Value::Null) => return Ok(was.cloned()),
         Some(Value::Bool(false)) => return Ok(None),
         Some(Value::String(u)) if u.trim().is_empty() => return Ok(None),
@@ -445,7 +446,7 @@ fn caldav(p: &Value, was: Option<&DavSetup>) -> Result<Option<DavSetup>, EngineE
         Some(v) => match v.get("url").and_then(Value::as_str) {
             Some(u) if u.trim().is_empty() => return Ok(None),
             Some(u) => u,
-            None => return Err(bad("\"caldav\" is a calendar server's https: address, or {\"url\"}")),
+            None => return Err(bad(format!("\"{key}\" is a server's https: address, or {{\"url\"}}"))),
         },
     };
     let parsed = openmailclient_net::dav::Url::parse(url).map_err(|e| bad(e.to_string()))?;
@@ -486,6 +487,8 @@ pub struct Account {
     pub data_file: Option<std::path::PathBuf>,
     /// The CalDAV server the account's calendars are kept in step with, when it has one.
     pub caldav: Option<DavSetup>,
+    /// The CardDAV server its contacts are kept in step with, when it has one.
+    pub carddav: Option<DavSetup>,
 }
 
 pub(crate) fn security_name(s: Security) -> &'static str {
@@ -624,7 +627,8 @@ impl Account {
                 .map(|w| w.received.clone())
                 .unwrap_or_default(),
             data_file: was.and_then(|w| w.data_file.clone()),
-            caldav: caldav(p, was.and_then(|w| w.caldav.as_ref()))?,
+            caldav: dav_server(p, "caldav", was.and_then(|w| w.caldav.as_ref()))?,
+            carddav: dav_server(p, "carddav", was.and_then(|w| w.carddav.as_ref()))?,
             email,
             kind,
             incoming,
@@ -649,6 +653,7 @@ impl Account {
             "sentOnServer": self.sent_on_server,
             "dataFile": self.data_file.as_ref().map(|p| p.display().to_string()),
             "caldav": self.caldav.as_ref().map(DavSetup::to_json),
+            "carddav": self.carddav.as_ref().map(DavSetup::to_json),
         })
     }
 
@@ -707,6 +712,7 @@ pub fn from_settings(v: &Value) -> (Vec<Account>, u32) {
                 account.incoming.trusted = trusted("incoming");
                 account.outgoing.trusted = trusted("outgoing");
                 account.caldav = DavSetup::from_settings(a.get("caldav"));
+                account.carddav = DavSetup::from_settings(a.get("carddav"));
                 out.push(account);
             }
             _ => ignored += 1,

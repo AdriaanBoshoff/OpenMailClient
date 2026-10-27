@@ -54,7 +54,7 @@ const HOME: &[Group] = &[
             small(Icon::Flag, "Follow Up", "menu:followup"),
         ],
     ),
-    ("Find", &[small(Icon::Filter, "Filter Unread", "view.filterUnread"), small(Icon::People, "Address Book", "")]),
+    ("Find", &[small(Icon::Filter, "Filter Unread", "view.filterUnread"), small(Icon::People, "Address Book", "people.addressBook")]),
 ];
 
 const CALENDAR_HOME: &[Group] = &[
@@ -126,7 +126,7 @@ Contact",
         ],
     ),
     ("Find", &[small(Icon::Search, "Search People", "ui.searchPeople"), small(Icon::Import, "Open vCard", "ui.openCardsDialog")]),
-    ("Actions", &[small(Icon::Open, "Open", "ui.openContact")]),
+    ("Actions", &[small(Icon::Open, "Open", "ui.openContact"), small(Icon::Mail, "Mail Merge", "ui.mailMerge")]),
 ];
 
 const TASKS_HOME: &[Group] = &[
@@ -285,6 +285,7 @@ impl MailUi {
             "ui.saveCalendarDialog" => self.session.is_enabled("calendar.saveAs"),
             "ui.contact" => self.session.is_enabled("people.new"),
             "ui.contactGroup" => self.session.is_enabled("people.newGroup"),
+            "ui.mailMerge" => self.session.is_enabled("people.mailMerge"),
             "ui.openContact" | "ui.saveCardsDialog" => self.session.people.selected.is_some(),
             "ui.task" => self.session.is_enabled("tasks.new"),
             "ui.openTask" => self.session.tasks.selected.is_some(),

@@ -316,7 +316,7 @@ fn has_writable_store(s: &Session) -> bool {
 
 /// The Tasks folder new tasks go to. A data file that has none is given one the first time a
 /// task is made in it, as Outlook keeps one in every mailbox.
-fn writable_folder(s: &mut Session) -> Result<(usize, FolderId), EngineError> {
+pub(crate) fn writable_folder(s: &mut Session) -> Result<(usize, FolderId), EngineError> {
     if let Some((store, folder)) = tasks_folder(s) {
         if !writable(s, store) {
             return Err(EngineError::BadParams("the data file with the tasks cannot be written".into()));

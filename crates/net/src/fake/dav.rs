@@ -1,4 +1,4 @@
-//! The fake CalDAV server: one request a connection, as `dav` sends them. It keeps calendars of
+//! The fake CalDAV and CardDAV server: one request a connection, as `dav` sends them. It keeps calendars of
 //! events by name, an ETag for each and a counter every change raises, from which its sync
 //! tokens are made ([RFC 6578]); it answers PROPFIND as a principal, a calendar home and a
 //! calendar would, REPORT for a sync and a calendar-multiget, and PUT and DELETE only while
@@ -33,17 +33,33 @@ pub struct DavCalendar {
     pub removed: Vec<(String, u64)>,
     /// Only read may be done in it.
     pub read_only: bool,
+    /// An address book of contacts ([RFC 6352]), listed in its own home.
+    pub book: bool,
 }
 
 impl DavCalendar {
     pub fn new(href: &str, name: &str) -> Self {
-        Self { href: href.into(), name: name.into(), color: "#3366CCFF".into(), objects: Vec::new(), removed: Vec::new(), read_only: false }
+        Self {
+            href: href.into(),
+            name: name.into(),
+            color: "#3366CCFF".into(),
+            objects: Vec::new(),
+            removed: Vec::new(),
+            read_only: false,
+            book: false,
+        }
+    }
+
+    /// An address book, in `BOOK_HOME`.
+    pub fn book(href: &str, name: &str) -> Self {
+        Self { book: true, color: String::new(), ..Self::new(href, name) }
     }
 }
 
 /// Where the fake's principal and calendar home are.
 pub const PRINCIPAL: &str = "/dav/principals/pat/";
 pub const HOME: &str = "/dav/calendars/pat/";
+pub const BOOK_HOME: &str = "/dav/addressbooks/pat/";
 
 impl State {
     /// A calendar of the fake CalDAV server by its path.
@@ -164,7 +180,7 @@ fn answer(code: u16, extra: &str, body: &str) -> Vec<u8> {
 fn multistatus(inner: &str, token: Option<&str>) -> String {
     let token = token.map(|t| format!("<d:sync-token>{}</d:sync-token>", escape(t))).unwrap_or_default();
     format!(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\">{inner}{token}</d:multistatus>"
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<d:multistatus xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:card=\"urn:ietf:params:xml:ns:carddav\" xmlns:cs=\"http://calendarserver.org/ns/\" xmlns:ic=\"http://apple.com/ns/ical/\">{inner}{token}</d:multistatus>"
     )
 }
 
@@ -189,7 +205,7 @@ pub fn serve(end: End, state: &Mutex<State>) -> Result<(), NetError> {
 fn respond(r: &Request, s: &mut State) -> Vec<u8> {
     let path = r.path.as_str();
     match r.method.as_str() {
-        "PROPFIND" if path == "/.well-known/caldav" => {
+        "PROPFIND" if path == "/.well-known/caldav" || path == "/.well-known/carddav" => {
             if s.dav_well_known {
                 answer(301, "Location: /dav/\r\n", "")
             } else {
@@ -198,15 +214,15 @@ fn respond(r: &Request, s: &mut State) -> Vec<u8> {
         }
         "PROPFIND" if path == "/dav/" || path == PRINCIPAL => {
             let props = format!(
-                "<d:current-user-principal><d:href>{PRINCIPAL}</d:href></d:current-user-principal><c:calendar-home-set><d:href>{HOME}</d:href></c:calendar-home-set>"
+                "<d:current-user-principal><d:href>{PRINCIPAL}</d:href></d:current-user-principal><c:calendar-home-set><d:href>{HOME}</d:href></c:calendar-home-set><card:addressbook-home-set><d:href>{BOOK_HOME}</d:href></card:addressbook-home-set>"
             );
             answer(207, "", &multistatus(&ok(path, &props), None))
         }
-        "PROPFIND" if path == HOME => {
-            let mut inner = ok(HOME, "<d:resourcetype><d:collection/></d:resourcetype>");
+        "PROPFIND" if path == HOME || path == BOOK_HOME => {
+            let mut inner = ok(path, "<d:resourcetype><d:collection/></d:resourcetype>");
             if r.depth == "1" {
                 let token = s.token();
-                for c in &s.calendars {
+                for c in s.calendars.iter().filter(|c| c.book == (path == BOOK_HOME)) {
                     inner.push_str(&ok(&c.href, &calendar_props(c, s, &token)));
                 }
             }
@@ -237,6 +253,13 @@ fn calendar_props(c: &DavCalendar, s: &State, token: &str) -> String {
         "<d:privilege><d:read/></d:privilege><d:privilege><d:write/></d:privilege>"
     };
     let sync = if s.dav_sync { format!("<d:sync-token>{token}</d:sync-token>") } else { String::new() };
+    if c.book {
+        return format!(
+            "<d:resourcetype><d:collection/><card:addressbook/></d:resourcetype><d:displayname>{}</d:displayname><cs:getctag>{}</cs:getctag>{sync}<d:current-user-privilege-set>{privileges}</d:current-user-privilege-set>",
+            escape(&c.name),
+            s.dav_changes
+        );
+    }
     format!(
         "<d:resourcetype><d:collection/><c:calendar/></d:resourcetype><d:displayname>{}</d:displayname><cs:getctag>{}</cs:getctag>{sync}<c:supported-calendar-component-set><c:comp name=\"VEVENT\"/></c:supported-calendar-component-set><ic:calendar-color>{}</ic:calendar-color><d:current-user-privilege-set>{privileges}</d:current-user-privilege-set>",
         escape(&c.name),
@@ -288,14 +311,13 @@ fn report(r: &Request, s: &mut State) -> Vec<u8> {
         };
         return answer(207, "", &multistatus(&shown, Some(&token)));
     }
-    if root.has_tag_name(("urn:ietf:params:xml:ns:caldav", "calendar-multiget")) {
+    let cards = root.has_tag_name(("urn:ietf:params:xml:ns:carddav", "addressbook-multiget"));
+    if root.has_tag_name(("urn:ietf:params:xml:ns:caldav", "calendar-multiget")) || cards {
+        let data = if cards { "card:address-data" } else { "c:calendar-data" };
         let mut inner = String::new();
         for href in root.children().filter(|n| n.has_tag_name(("DAV:", "href"))).filter_map(|n| n.text()) {
             match cal.objects.iter().find(|o| format!("{}{}", cal.href, o.name) == href) {
-                Some(o) => inner.push_str(&ok(
-                    href,
-                    &format!("<d:getetag>{}</d:getetag><c:calendar-data>{}</c:calendar-data>", escape(&o.etag), escape(&o.data)),
-                )),
+                Some(o) => inner.push_str(&ok(href, &format!("<d:getetag>{}</d:getetag><{data}>{}</{data}>", escape(&o.etag), escape(&o.data)))),
                 None => inner.push_str(&status(href, "404 Not Found")),
             }
         }

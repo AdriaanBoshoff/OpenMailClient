@@ -1,5 +1,6 @@
 //! iCalendar files (RFC 5545): events read into appointments, and appointments written as
-//! events, as [MS-OXCICAL] maps the one onto the other.
+//! events, as [MS-OXCICAL] maps the one onto the other; to-dos read into tasks and tasks
+//! written as to-dos (`todo`).
 //!
 //! A calendar file comes from anyone: every line, list, component and count is held to a
 //! limit, nesting is bounded, and what cannot be kept (a pattern this program cannot repeat, a
@@ -12,6 +13,9 @@ use openmailclient_model::meeting::{self, Attendee, Meeting, Response, Role};
 use openmailclient_model::recur::{self, End, Freq, Recurrence, Rule};
 use openmailclient_model::zone::{Daylight, Rule as ZoneRule, Zone};
 use openmailclient_model::{Item, time};
+
+mod todo;
+pub use todo::Todo;
 
 /// Largest file read, in bytes.
 pub const MAX_BYTES: usize = 32 << 20;
@@ -754,6 +758,8 @@ pub struct Calendar {
     /// Its METHOD (RFC 5546), when it gives one: PUBLISH, REQUEST, REPLY, CANCEL…
     pub method: Option<String>,
     pub events: Vec<Event>,
+    /// Its to-dos (VTODO), read as tasks.
+    pub todos: Vec<Todo>,
     /// The answers a reply gives (METHOD:REPLY).
     pub answers: Vec<Answer>,
     /// The meetings or occurrences a cancellation calls off (METHOD:CANCEL).
@@ -787,6 +793,7 @@ pub fn read(bytes: &[u8], here: &Zone) -> Result<Calendar, String> {
     }
     let mut zones = Vec::new();
     let mut events: Vec<&Comp> = Vec::new();
+    let mut todos: Vec<&Comp> = Vec::new();
     for cal in &calendars {
         if out.name.is_none() {
             out.name = cal.text("X-WR-CALNAME", MAX_TEXT).filter(|n| !n.trim().is_empty());
@@ -796,16 +803,31 @@ pub fn read(bytes: &[u8], here: &Zone) -> Result<Calendar, String> {
         }
         zones.extend(cal.children.iter().filter(|c| c.name == "VTIMEZONE").filter_map(FileZone::of));
         events.extend(cal.children.iter().filter(|c| c.name == "VEVENT"));
-        let todos = cal.children.iter().filter(|c| c.name == "VTODO" || c.name == "VJOURNAL").count();
-        if todos > 0 {
-            note(&mut out.notes, format!("{todos} tasks or journal entries are not read here; only events are"));
+        todos.extend(cal.children.iter().filter(|c| c.name == "VTODO"));
+        let journal = cal.children.iter().filter(|c| c.name == "VJOURNAL").count();
+        if journal > 0 {
+            note(&mut out.notes, format!("{journal} journal entries are not read here; events and to-dos are"));
         }
     }
     if events.len() > MAX_EVENTS {
         note(&mut out.notes, format!("only the first {MAX_EVENTS} events are read"));
         events.truncate(MAX_EVENTS);
     }
+    if todos.len() > MAX_EVENTS {
+        note(&mut out.notes, format!("only the first {MAX_EVENTS} to-dos are read"));
+        todos.truncate(MAX_EVENTS);
+    }
     let clock = Clock { zones: &zones, here, budget: std::cell::Cell::new(MAX_CHANGES) };
+    let mut seen = std::collections::HashSet::new();
+    for (i, c) in todos.iter().enumerate() {
+        let uid = uid_of(c, i.saturating_add(events.len()));
+        // One time of a to-do that repeats, changed on its own: the to-do is kept as it is.
+        if c.prop("RECURRENCE-ID").is_some() || !seen.insert(uid.clone()) {
+            note(&mut out.notes, "a to-do given twice, or one time of one that repeats, was read once");
+            continue;
+        }
+        out.todos.push(todo::todo_of(c, &clock, &uid));
+    }
     let uids: Vec<String> = events.iter().enumerate().map(|(i, e)| uid_of(e, i)).collect();
     // A reply's answers and a cancellation's meetings, each by its UID and, for one occurrence
     // alone, the time it was planned for.
@@ -1542,6 +1564,9 @@ pub fn write_as(items: &[Item], here: &Zone, now: i64, name: Option<&str>, metho
     if let Some(n) = name {
         line(&mut out, &format!("X-WR-CALNAME:{}", escape(n)));
     }
+    // Tasks, as to-dos; only a published calendar carries them (iTIP for tasks is not sent).
+    let tasks: Vec<&Item> =
+        if matches!(method, Method::Publish) { items.iter().filter(|it| openmailclient_model::task::is_task(it)).collect() } else { Vec::new() };
     let shown: Vec<(&Item, Appointment)> = items.iter().filter_map(|it| Appointment::of(it).map(|a| (it, a))).collect();
     // The zone each event is written in: a series' own; an appointment's that says it was
     // made in one known by name; else UTC.
@@ -1625,6 +1650,9 @@ pub fn write_as(items: &[Item], here: &Zone, now: i64, name: Option<&str>, metho
                 line(&mut out, "END:VEVENT");
             }
         }
+    }
+    for item in tasks {
+        todo::write_todo(&mut out, item, here, now);
     }
     line(&mut out, "END:VCALENDAR");
     out

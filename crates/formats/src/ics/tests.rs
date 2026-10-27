@@ -309,7 +309,9 @@ fn cancelled_events_and_orphaned_occurrences_are_handled_and_said() {
     assert_ne!(cal.events[0].uid, "lonely");
     assert!(cal.notes.iter().any(|n| n.contains("cancelled")));
     assert!(cal.notes.iter().any(|n| n.contains("no start")));
-    assert!(cal.notes.iter().any(|n| n.contains("tasks")));
+    // A to-do is no longer left out with a note: it is read as a task.
+    assert!(!cal.notes.iter().any(|n| n.contains("tasks")));
+    assert_eq!(cal.todos.iter().map(|t| t.task.subject.as_str()).collect::<Vec<_>>(), ["A task"]);
 }
 
 #[test]
@@ -500,4 +502,107 @@ fn attendees_from_a_stranger_are_capped_and_cannot_break_a_line() {
     evil.write(&mut item);
     let out = write_as(std::slice::from_ref(&item), &Zone::utc(), 0, None, &Method::Request);
     assert!(!out.split("\r\n").any(|l| l.starts_with("ATTENDEE:mailto:x@evil") || l.starts_with("X:1")));
+}
+
+/// To-dos as calendar services and other programs write them. Synthetic, written for this test.
+const TODOS: &[u8] = b"BEGIN:VCALENDAR\r
+VERSION:2.0\r
+PRODID:-//Example//Tasks//EN\r
+BEGIN:VTODO\r
+UID:todo-1@example.test\r
+SUMMARY:Send the print proofs\r
+DTSTART;VALUE=DATE:20261102\r
+DUE;VALUE=DATE:20261105\r
+STATUS:IN-PROCESS\r
+PERCENT-COMPLETE:40\r
+PRIORITY:1\r
+CLASS:CONFIDENTIAL\r
+CATEGORIES:Launch,Print\r
+DESCRIPTION:Both sizes\\, as agreed.\r
+BEGIN:VALARM\r
+ACTION:DISPLAY\r
+TRIGGER;RELATED=END:-PT12H\r
+END:VALARM\r
+END:VTODO\r
+BEGIN:VTODO\r
+UID:todo-2@example.test\r
+SUMMARY:Book the room\r
+DUE:20261103T170000Z\r
+COMPLETED:20261101T090000Z\r
+PRIORITY:9\r
+RRULE:FREQ=WEEKLY\r
+END:VTODO\r
+BEGIN:VTODO\r
+UID:todo-2@example.test\r
+SUMMARY:Book the room again\r
+END:VTODO\r
+BEGIN:VTODO\r
+SUMMARY:Called off\r
+STATUS:CANCELLED\r
+DTSTART;VALUE=DATE:20261102\r
+DURATION:P3D\r
+END:VTODO\r
+BEGIN:VJOURNAL\r
+SUMMARY:A note\r
+END:VJOURNAL\r
+END:VCALENDAR\r
+";
+
+#[test]
+fn to_dos_are_read_as_tasks_and_tasks_written_as_to_dos() {
+    use openmailclient_model::task::Status;
+    let cal = read(TODOS, &Zone::utc()).unwrap();
+    assert!(cal.events.is_empty());
+    assert_eq!(cal.todos.len(), 3, "{:?}", cal.notes);
+    assert!(cal.notes.iter().any(|n| n.contains("journal")), "{:?}", cal.notes);
+    assert!(cal.notes.iter().any(|n| n.contains("given twice")), "{:?}", cal.notes);
+    let proofs = &cal.todos[0];
+    assert_eq!(proofs.uid, "todo-1@example.test");
+    let t = &proofs.task;
+    assert_eq!(t.subject, "Send the print proofs");
+    assert_eq!((t.start, t.due), (Some(day("2026-11-02 00:00")), Some(day("2026-11-05 00:00"))));
+    assert_eq!((t.status, t.percent, t.importance, t.private), (Status::InProgress, 40, 2, true));
+    assert_eq!(t.categories, vec!["Launch", "Print"]);
+    assert_eq!(t.notes, "Both sizes, as agreed.");
+    assert_eq!(t.reminder, Some(at("2026-11-04 12:00", 0)), "twelve hours before the day it is due");
+    let room = &cal.todos[1];
+    assert_eq!((room.task.status, room.task.percent, room.task.importance), (Status::Complete, 100, 0), "done, as COMPLETED says");
+    assert_eq!(room.task.completed, Some(day("2026-11-01 00:00")));
+    assert!(room.notes.iter().any(|n| n.contains("repeats")));
+    let off = &cal.todos[2];
+    assert_eq!(off.task.status, Status::Deferred);
+    assert_eq!(off.task.due, Some(day("2026-11-05 00:00")), "its start and how long it lasts");
+    assert!(!off.uid.is_empty());
+
+    // Written and read again, each comes back as it was; a status RFC 5545 lacks too.
+    let now = at("2026-10-27 10:00", 0);
+    let mut waiting = cal.todos[0].clone();
+    waiting.uid = "todo-3@example.test".into();
+    waiting.task.status = Status::Waiting;
+    waiting.task.total_work = 90;
+    let items: Vec<Item> = [&cal.todos[0], &cal.todos[1], &waiting].iter().map(|t| t.item(day("2026-10-27 00:00"), now, &Zone::utc())).collect();
+    let text = write(&items, &Zone::utc(), now, Some("Tasks"));
+    assert!(text.contains("BEGIN:VTODO") && !text.contains("BEGIN:VEVENT"), "{text}");
+    let again = read(text.as_bytes(), &Zone::utc()).unwrap();
+    assert_eq!(again.todos.len(), 3);
+    for (a, b) in again.todos.iter().zip([&cal.todos[0], &cal.todos[1], &waiting]) {
+        assert_eq!(a.uid, b.uid);
+        assert_eq!(a.task, b.task);
+    }
+    // A meeting's invitation carries no tasks.
+    assert!(!write_as(&items, &Zone::utc(), now, None, &Method::Request).contains("VTODO"));
+}
+
+#[test]
+fn hostile_to_dos_are_bounded() {
+    let mut text = String::from("BEGIN:VCALENDAR\r\n");
+    for i in 0..3 {
+        text.push_str(&format!("BEGIN:VTODO\r\nUID:x{i}\r\nDUE:99999999T999999Z\r\nDTSTART;VALUE=DATE:00000000\r\nPERCENT-COMPLETE:9999\r\nPRIORITY:-4\r\nDURATION:P99999999999D\r\nX-OPENMAILCLIENT-TOTAL-WORK:-77\r\nBEGIN:VALARM\r\nTRIGGER:-P99999999999W\r\nEND:VALARM\r\nEND:VTODO\r\n"));
+    }
+    text.push_str("END:VCALENDAR\r\n");
+    let cal = read(text.as_bytes(), &Zone::utc()).unwrap();
+    assert_eq!(cal.todos.len(), 3);
+    for t in &cal.todos {
+        assert!(t.task.percent <= 100 && t.task.total_work >= 0);
+    }
 }

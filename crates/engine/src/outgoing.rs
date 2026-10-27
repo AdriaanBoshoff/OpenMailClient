@@ -49,6 +49,10 @@ impl Caution {
         match self {
             Self::NoSubject => "The message has no subject.".to_string(),
             Self::NothingAttached => "The text speaks of an attachment, but nothing is attached.".to_string(),
+            // A name alone may be one the address book has: Check Names (or Send) puts it in.
+            Self::NotAnAddress(text) if !text.contains('@') => format!(
+                "\u{201c}{text}\u{201d} is not an address mail can be sent to; Check Names finds it in the Address Book when it is there once."
+            ),
             Self::NotAnAddress(text) => format!("\u{201c}{text}\u{201d} is not an address mail can be sent to."),
             Self::Twice(address) => format!("{address} is named more than once."),
             Self::Heavy(bytes) => {

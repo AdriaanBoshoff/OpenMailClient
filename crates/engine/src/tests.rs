@@ -221,7 +221,9 @@ fn send_files_in_the_outbox_and_never_leaves_the_machine() {
     run(&mut s, "mail.select", json!({"index": 0}));
     let it = s.open.clone().unwrap();
     assert_eq!(it.subject(), "Rota looks good");
-    assert_eq!(it.display_recipients(RECIP_TO), "June Okafor; tomas.lindqvist@example.org");
+    // Names are checked as the message goes: an address of a contact is shown by their name, as
+    // Outlook's Check Names shows it; one of no contact stays as it was written.
+    assert_eq!(it.display_recipients(RECIP_TO), "June Okafor; Tomás Lindqvist");
     assert_eq!(it.display_recipients(RECIP_CC), "helena.brandt@example.org");
     assert_eq!((it.sender_email().as_str(), it.is_unsent(), it.body_text().as_str()), ("alex.morgan@example.org", false, "Thanks, June.\nAlex"));
 

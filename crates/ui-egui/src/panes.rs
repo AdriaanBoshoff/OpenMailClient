@@ -832,6 +832,10 @@ impl MailUi {
         // What the writer should know is on show while the message can still be changed.
         let cautions: Vec<String> = openmailclient_engine::outgoing::cautions(draft).iter().map(|c| c.words()).collect();
         let mut acts: Vec<(&str, Value)> = Vec::new();
+        let suggest = self.suggest.clone();
+        // A line typed in, whose names are looked for; a suggestion taken.
+        let mut typed: Option<(&str, String)> = None;
+        let mut took = false;
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(vec2(14.0, 10.0))), |ui| {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
             ui.horizontal(|ui| {
@@ -852,6 +856,7 @@ impl MailUi {
                 }
                 for (label, cmd, params) in [
                     ("Attach File…", "ui.attachDialog", Value::Null),
+                    ("Check Names", "compose.checkNames", Value::Null),
                     (if show_bcc { "Hide Bcc" } else { "Bcc" }, "compose.showBcc", Value::Null),
                     ("Save Draft", "compose.saveDraft", Value::Null),
                     ("Discard", "compose.discard", Value::Null),
@@ -890,13 +895,75 @@ impl MailUi {
                 if !*shown {
                     continue;
                 }
+                let id = egui::Id::new(("compose", *key));
+                let address_line = *key != "subject";
+                // Suggestions under this line, while it is being typed in.
+                let offered = suggest
+                    .as_ref()
+                    .filter(|s| address_line && s.field == *key && s.line == *value && !s.rows.is_empty() && ui.memory(|m| m.has_focus(id)));
+                let mut pick = offered.map_or(0, |s| s.pick.min(s.rows.len().saturating_sub(1)));
+                let mut take = false;
+                if let Some(s) = offered {
+                    ui.input_mut(|i| {
+                        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                            pick = (pick + 1).min(s.rows.len().saturating_sub(1));
+                        }
+                        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                            pick = pick.saturating_sub(1);
+                        }
+                        if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
+                            take = true;
+                        }
+                    });
+                }
                 ui.horizontal(|ui| {
-                    ui.add_sized(vec2(58.0, 24.0), egui::Label::new(egui::RichText::new(*label).font(font(12.5)).color(t.text_dim)));
-                    let edit = crate::line_edit::LineEdit::new(value, egui::Id::new(("compose", *key))).font(font(13.0));
+                    if address_line {
+                        // As Outlook's To… button: the Address Book, choosing for this line.
+                        let button = egui::Button::new(egui::RichText::new(format!("{label}…")).font(font(12.5))).min_size(vec2(58.0, 24.0));
+                        if ui.add(button).on_hover_text("Choose from the Address Book").clicked() {
+                            acts.push(("people.addressBook", json!({ "for": key })));
+                        }
+                    } else {
+                        ui.add_sized(vec2(58.0, 24.0), egui::Label::new(egui::RichText::new(*label).font(font(12.5)).color(t.text_dim)));
+                    }
+                    let edit = crate::line_edit::LineEdit::new(value, id).font(font(13.0));
                     if ui.add(edit).changed() {
                         acts.push(("compose.setField", json!({ "field": key, "value": value })));
+                        if address_line {
+                            typed = Some((*key, value.clone()));
+                        }
                     }
                 });
+                if let Some(s) = offered {
+                    ui.horizontal(|ui| {
+                        ui.add_space(66.0);
+                        egui::Frame::new().fill(t.surface).stroke(egui::Stroke::new(1.0, t.line)).corner_radius(4.0).inner_margin(4.0).show(
+                            ui,
+                            |ui| {
+                                ui.vertical(|ui| {
+                                    for (i, row) in s.rows.iter().enumerate() {
+                                        let words =
+                                            if row.group { format!("{} (group)", row.name) } else { format!("{}  {}", row.name, row.address) };
+                                        let chosen = i == pick;
+                                        let r = ui.add(egui::Button::selectable(chosen, crate::seen_line(&words, font(12.5), t.text)));
+                                        if r.clicked() {
+                                            pick = i;
+                                            take = true;
+                                        }
+                                    }
+                                });
+                            },
+                        );
+                    });
+                    if take && let Some(row) = s.rows.get(pick) {
+                        let now = crate::address_book::completed(value, &row.as_);
+                        acts.push(("compose.setField", json!({ "field": key, "value": now })));
+                        took = true;
+                    } else if pick != s.pick {
+                        typed = None;
+                        acts.push(("ui.suggestPick", json!({ "pick": pick })));
+                    }
+                }
             }
             if !attachments.is_empty() {
                 ui.horizontal_wrapped(|ui| {
@@ -924,7 +991,18 @@ impl MailUi {
         self.go_at_text = go_text;
         self.expire_at_text = expire_text;
         for (id, params) in acts {
+            if id == "ui.suggestPick" {
+                if let (Some(s), Some(n)) = (self.suggest.as_mut(), params["pick"].as_u64().and_then(|n| usize::try_from(n).ok())) {
+                    s.pick = n;
+                }
+                continue;
+            }
             self.act(id, params);
+        }
+        if took {
+            self.suggest = None;
+        } else if let Some((key, line)) = typed {
+            self.suggest_for(key, &line);
         }
     }
 }
