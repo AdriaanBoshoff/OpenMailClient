@@ -371,6 +371,8 @@ pub struct DavSetup {
     pub trusted: Option<Fingerprint>,
     /// The server's calendars (or address books) as they were when last kept in step.
     pub calendars: Vec<DavCal>,
+    /// Its task lists (calendars of to-dos, [RFC 4791] 5.2.3), each kept in a Tasks folder.
+    pub tasks: Vec<DavCal>,
 }
 
 /// A calendar of a CalDAV server, or an address book of a CardDAV one, and the folder here it
@@ -395,43 +397,48 @@ pub const MAX_DAV_CALENDARS: usize = 100;
 
 impl DavSetup {
     pub fn to_json(&self) -> Value {
-        let calendars: Vec<Value> = self
-            .calendars
-            .iter()
-            .map(|c| json!({ "href": c.href, "name": c.name, "color": c.color, "token": c.token, "here": c.here, "readOnly": c.read_only }))
-            .collect();
-        json!({ "url": self.url, "trusted": self.trusted.map(|f| f.to_string()), "calendars": calendars })
+        let list = |all: &[DavCal]| -> Vec<Value> {
+            all.iter()
+                .map(|c| json!({ "href": c.href, "name": c.name, "color": c.color, "token": c.token, "here": c.here, "readOnly": c.read_only }))
+                .collect()
+        };
+        json!({ "url": self.url, "trusted": self.trusted.map(|f| f.to_string()), "calendars": list(&self.calendars), "tasks": list(&self.tasks) })
     }
 
     /// As the settings file keeps it; what makes no sense is left out.
     fn from_settings(v: Option<&Value>) -> Option<Self> {
         let v = v?;
         let url = openmailclient_net::dav::Url::parse(v.get("url").and_then(Value::as_str)?).ok()?.text();
-        let mut calendars: Vec<DavCal> = Vec::new();
-        for c in v.get("calendars").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().take(MAX_DAV_CALENDARS) {
-            let Some(href) = c.get("href").and_then(Value::as_str) else { continue };
-            let plain = href.starts_with('/') && href.len() <= 2048 && href.bytes().all(|b| (0x21..0x7F).contains(&b));
-            if !plain || calendars.iter().any(|x| x.href == href) {
-                continue;
-            }
-            let short = |key: &str, max: usize| c.get(key).and_then(|t| kept_text(t, max)).unwrap_or_default().to_string();
-            calendars.push(DavCal {
-                href: href.to_string(),
-                name: short("name", 200),
-                color: short("color", 16),
-                token: short("token", 1000),
-                here: c.get("here").and_then(Value::as_u64).unwrap_or(0),
-                read_only: c.get("readOnly").and_then(Value::as_bool).unwrap_or(false),
-            });
-        }
         let trusted = v.get("trusted").and_then(Value::as_str).and_then(Fingerprint::parse);
-        Some(Self { url, trusted, calendars })
+        Some(Self { url, trusted, calendars: dav_cals(v.get("calendars")), tasks: dav_cals(v.get("tasks")) })
     }
 
     /// The server's host.
     pub fn host(&self) -> String {
         openmailclient_net::dav::Url::parse(&self.url).map(|u| u.host).unwrap_or_default()
     }
+}
+
+/// Calendars of a server as the settings file keeps them; what makes no sense is left out.
+fn dav_cals(v: Option<&Value>) -> Vec<DavCal> {
+    let mut calendars: Vec<DavCal> = Vec::new();
+    for c in v.and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().take(MAX_DAV_CALENDARS) {
+        let Some(href) = c.get("href").and_then(Value::as_str) else { continue };
+        let plain = href.starts_with('/') && href.len() <= 2048 && href.bytes().all(|b| (0x21..0x7F).contains(&b));
+        if !plain || calendars.iter().any(|x| x.href == href) {
+            continue;
+        }
+        let short = |key: &str, max: usize| c.get(key).and_then(|t| kept_text(t, max)).unwrap_or_default().to_string();
+        calendars.push(DavCal {
+            href: href.to_string(),
+            name: short("name", 200),
+            color: short("color", 16),
+            token: short("token", 1000),
+            here: c.get("here").and_then(Value::as_u64).unwrap_or(0),
+            read_only: c.get("readOnly").and_then(Value::as_bool).unwrap_or(false),
+        });
+    }
+    calendars
 }
 
 /// The CalDAV or CardDAV server an edit leaves: the one given (`key`, `"caldav"` or
@@ -453,7 +460,7 @@ fn dav_server(p: &Value, key: &str, was: Option<&DavSetup>) -> Result<Option<Dav
     let url = parsed.text();
     Ok(Some(match was {
         Some(w) if w.url == url => w.clone(),
-        Some(w) if w.host() == parsed.host => DavSetup { url, trusted: w.trusted, calendars: Vec::new() },
+        Some(w) if w.host() == parsed.host => DavSetup { url, trusted: w.trusted, ..DavSetup::default() },
         _ => DavSetup { url, ..DavSetup::default() },
     }))
 }

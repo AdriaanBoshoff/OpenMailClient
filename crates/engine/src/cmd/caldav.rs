@@ -15,6 +15,11 @@
 //! Contacts are kept in step with a CardDAV server ([RFC 6352]) the same way, by `people.sync`:
 //! each address book a Contacts folder, each contact and group a vCard ([RFC 6350]) known by
 //! its UID. `Of` is where the two differ.
+//!
+//! Tasks are kept in step with the CalDAV server's task lists, by `tasks.sync`: each calendar
+//! whose component set names VTODO ([RFC 4791] 5.2.3) a Tasks folder, each task a to-do
+//! ([RFC 5545] 3.6.2). A calendar that holds both is kept by both, each taking only its own
+//! kind of object and leaving the other's alone; each keeps its own sync token.
 
 use super::account::{Reach, account_store};
 use super::imap_sync::PS_OPENMAILCLIENT;
@@ -26,6 +31,7 @@ use openmailclient_formats::ics;
 use openmailclient_formats::vcf::{self, Card};
 use openmailclient_model::calendar;
 use openmailclient_model::contact::{self, Contact, Group};
+use openmailclient_model::task;
 use openmailclient_model::zone::Zone;
 use openmailclient_model::{FolderId, FolderKind, Item, ItemId, NameId, NamedKey, Progress, PropValue};
 use openmailclient_net::NetError;
@@ -47,18 +53,22 @@ const MAX_PUT: usize = 500;
 pub(crate) const SYNCING: &str = "Keeping calendars in step";
 /// The same for contacts.
 pub(crate) const SYNCING_CONTACTS: &str = "Keeping contacts in step";
+/// The same for tasks.
+pub(crate) const SYNCING_TASKS: &str = "Keeping tasks in step";
 
-/// What is kept in step: calendars of a CalDAV server, or address books of a CardDAV one.
+/// What is kept in step: calendars or task lists of a CalDAV server, or address books of a
+/// CardDAV one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Of {
     Calendars,
     Contacts,
+    Tasks,
 }
 
 impl Of {
     fn holds(self) -> dav::Holds {
         match self {
-            Self::Calendars => dav::Holds::Events,
+            Self::Calendars | Self::Tasks => dav::Holds::Events,
             Self::Contacts => dav::Holds::Cards,
         }
     }
@@ -68,20 +78,44 @@ impl Of {
         match self {
             Self::Calendars => FolderKind::Calendar,
             Self::Contacts => FolderKind::Contacts,
+            Self::Tasks => FolderKind::Tasks,
         }
     }
 
     pub(crate) fn setup(self, a: &Account) -> Option<&DavSetup> {
         match self {
-            Self::Calendars => a.caldav.as_ref(),
+            Self::Calendars | Self::Tasks => a.caldav.as_ref(),
             Self::Contacts => a.carddav.as_ref(),
         }
     }
 
     fn setup_mut(self, a: &mut Account) -> Option<&mut DavSetup> {
         match self {
-            Self::Calendars => a.caldav.as_mut(),
+            Self::Calendars | Self::Tasks => a.caldav.as_mut(),
             Self::Contacts => a.carddav.as_mut(),
+        }
+    }
+
+    /// The server's collections of this kind as they were when last kept in step.
+    fn lists(self, setup: &DavSetup) -> &[DavCal] {
+        match self {
+            Self::Tasks => &setup.tasks,
+            Self::Calendars | Self::Contacts => &setup.calendars,
+        }
+    }
+
+    fn lists_mut(self, setup: &mut DavSetup) -> &mut Vec<DavCal> {
+        match self {
+            Self::Tasks => &mut setup.tasks,
+            Self::Calendars | Self::Contacts => &mut setup.calendars,
+        }
+    }
+
+    /// A collection the server listed is one of this kind.
+    fn takes(self, c: &dav::Calendar) -> bool {
+        match self {
+            Self::Calendars | Self::Contacts => c.events,
+            Self::Tasks => c.todos,
         }
     }
 
@@ -89,21 +123,23 @@ impl Of {
         match self {
             Self::Calendars => SYNCING,
             Self::Contacts => SYNCING_CONTACTS,
+            Self::Tasks => SYNCING_TASKS,
         }
     }
 
-    /// What is kept, as said: "calendars", "contacts".
+    /// What is kept, as said: "calendars", "contacts", "tasks".
     fn what(self) -> &'static str {
         match self {
             Self::Calendars => "calendars",
             Self::Contacts => "contacts",
+            Self::Tasks => "tasks",
         }
     }
 
     /// The UID an item is known by on the server.
     fn uid(self, item: &Item) -> String {
         match self {
-            Self::Calendars => ics::uid(item),
+            Self::Calendars | Self::Tasks => ics::uid(item),
             Self::Contacts => contact::uid_of(item).unwrap_or_default(),
         }
     }
@@ -111,7 +147,7 @@ impl Of {
     /// What an item is known by when it has no place: its global id, or its vCard UID.
     fn key_of(self, item: &Item) -> Option<Vec<u8>> {
         match self {
-            Self::Calendars => calendar::global_id(item),
+            Self::Calendars | Self::Tasks => calendar::global_id(item),
             Self::Contacts => contact::uid_of(item).map(String::into_bytes),
         }
     }
@@ -119,7 +155,7 @@ impl Of {
     /// A UID of its own given to an item that has none, or to a copy of one.
     fn give_uid(self, item: &mut Item, now: i64, seed: u64) {
         match self {
-            Self::Calendars => calendar::set_global_id(item, &calendar::new_global_id(now, seed)),
+            Self::Calendars | Self::Tasks => calendar::set_global_id(item, &calendar::new_global_id(now, seed)),
             Self::Contacts => {
                 let mut h: u64 = 0xcbf2_9ce4_8422_2325;
                 for b in now.to_le_bytes().iter().chain(seed.to_le_bytes().iter()) {
@@ -130,11 +166,12 @@ impl Of {
         }
     }
 
-    /// The item as the server keeps it: an event's calendar file, a contact's or group's
-    /// vCard. `None` for what a collection of this kind does not hold.
+    /// The item as the server keeps it: an event's or task's calendar file, a contact's or
+    /// group's vCard. `None` for what a collection of this kind does not hold.
     fn data(self, item: &Item, here: &Zone, now: i64) -> Option<Vec<u8>> {
         match self {
             Self::Calendars => Some(ics::write(std::slice::from_ref(item), here, now, None).into_bytes()),
+            Self::Tasks => task::is_task(item).then(|| ics::write(std::slice::from_ref(item), here, now, None).into_bytes()),
             Self::Contacts => {
                 let card = if contact::is_group(item) {
                     Card::Group(Group::of(item))
@@ -152,7 +189,7 @@ impl Of {
     /// The end of the name a new one is put at.
     fn ext(self) -> &'static str {
         match self {
-            Self::Calendars => "ics",
+            Self::Calendars | Self::Tasks => "ics",
             Self::Contacts => "vcf",
         }
     }
@@ -162,13 +199,25 @@ impl Of {
 enum Got {
     Event(Box<ics::Event>),
     Card(Card),
+    Todo(Box<ics::Todo>),
+}
+
+/// What reading an item needs to know: who one is (for meetings), and when and where it is.
+struct Ctx<'a> {
+    me: &'a [&'a str],
+    here: &'a Zone,
+    today: i64,
+    now: i64,
 }
 
 impl Got {
+    /// `None` for an object of another kind than is kept (an event in a task list that also
+    /// holds events): it is the other sync's to keep.
     fn read(of: Of, data: &[u8], here: &Zone) -> Option<Self> {
         match of {
             Of::Calendars => ics::read(data, here).ok()?.events.into_iter().next().map(|e| Self::Event(Box::new(e))),
             Of::Contacts => vcf::read(data).ok()?.cards.into_iter().next().map(Self::Card),
+            Of::Tasks => ics::read(data, here).ok()?.todos.into_iter().next().map(|t| Self::Todo(Box::new(t))),
         }
     }
 
@@ -177,25 +226,28 @@ impl Got {
         match self {
             Self::Event(e) => Some(calendar::global_id_of_uid(&e.uid)),
             Self::Card(c) => (!c.uid().is_empty()).then(|| c.uid().as_bytes().to_vec()),
+            Self::Todo(t) => (!t.uid.is_empty()).then(|| calendar::global_id_of_uid(&t.uid)),
         }
     }
 
     /// Written onto the item it is here: what it does not speak of is kept.
-    fn write_onto(&self, item: &mut Item, me: &[&str], here: &Zone) {
+    fn write_onto(&self, item: &mut Item, cx: &Ctx<'_>) {
         match self {
-            Self::Event(e) => e.write_as(item, me),
-            Self::Card(Card::Contact(c)) if contact::is_contact(item) => c.write(item, here),
+            Self::Event(e) => e.write_as(item, cx.me),
+            Self::Card(Card::Contact(c)) if contact::is_contact(item) => c.write(item, cx.here),
             Self::Card(Card::Group(g)) if contact::is_group(item) => g.write(item),
             // A contact that became a group there, or the other way: made again.
-            Self::Card(_) => *item = self.item(me, here),
+            Self::Card(_) => *item = self.item(cx),
+            Self::Todo(t) => t.write(item, cx.today, cx.now, cx.here),
         }
     }
 
-    fn item(&self, me: &[&str], here: &Zone) -> Item {
+    fn item(&self, cx: &Ctx<'_>) -> Item {
         match self {
-            Self::Event(e) => e.item_as(me),
-            Self::Card(Card::Contact(c)) => c.item(here),
+            Self::Event(e) => e.item_as(cx.me),
+            Self::Card(Card::Contact(c)) => c.item(cx.here),
             Self::Card(Card::Group(g)) => g.item(),
+            Self::Todo(t) => t.item(cx.today, cx.now, cx.here),
         }
     }
 }
@@ -210,6 +262,16 @@ fn has_carddav(s: &Session) -> bool {
 
 pub(super) fn commands() -> Vec<CommandSpec> {
     vec![
+        CommandSpec {
+            id: "tasks.sync",
+            label: "Update Task Lists",
+            tab: "Send / Receive",
+            group: "Send & Receive",
+            shortcut: "",
+            params: r#"{"id": one account (default: every account with a CalDAV server), "wait": false to do it on a thread of its own}; the server's task lists (calendars that hold to-dos) are taken down into Tasks folders of the account's data file, the first its Tasks, and the tasks changed here are put there; returns {"accounts": [{"id", "taskLists": [{"name", "folder", "readOnly", "fetched", "put", "deleted", "removed", "copies": tasks changed on both sides, ours kept beside the server's, "notPut"}], "said"}]}"#,
+            enabled: has_caldav,
+            run: sync_tasks,
+        },
         CommandSpec {
             id: "people.sync",
             label: "Update Address Books",
@@ -241,6 +303,10 @@ fn sync_people(s: &mut Session, p: &Value) -> CmdResult {
     sync_of(Of::Contacts, s, p)
 }
 
+fn sync_tasks(s: &mut Session, p: &Value) -> CmdResult {
+    sync_of(Of::Tasks, s, p)
+}
+
 fn sync_of(of: Of, s: &mut Session, p: &Value) -> CmdResult {
     let one = match p.get("id") {
         None | Some(Value::Null) => None,
@@ -254,7 +320,7 @@ fn sync_of(of: Of, s: &mut Session, p: &Value) -> CmdResult {
     };
     if one.is_some_and(|at| s.accounts.get(at).is_some_and(|a| of.setup(a).is_none())) {
         return Err(EngineError::BadParams(match of {
-            Of::Calendars => "that account has no CalDAV server; give it one with account.edit {\"caldav\"}".into(),
+            Of::Calendars | Of::Tasks => "that account has no CalDAV server; give it one with account.edit {\"caldav\"}".into(),
             Of::Contacts => "that account has no CardDAV server; give it one with account.edit {\"carddav\"}".into(),
         }));
     }
@@ -436,7 +502,7 @@ pub(crate) fn sync_from_of(of: Of, s: &mut Session, one: Option<usize>, wait: bo
     }
     if taking.is_empty() {
         let none = match of {
-            Of::Calendars => "no account has a CalDAV server",
+            Of::Calendars | Of::Tasks => "no account has a CalDAV server",
             Of::Contacts => "no account has a CardDAV server",
         };
         return Err(EngineError::Format(skipped.first().cloned().unwrap_or_else(|| none.into())));
@@ -469,7 +535,8 @@ fn gather(of: Of, s: &mut Session, store: usize, setup: &DavSetup) -> (Vec<Here>
     let Some(st) = s.stores.get_mut(store) else { return (Vec::new(), Vec::new()) };
     let mut out = Vec::new();
     let mut gone = Vec::new();
-    for cal in &setup.calendars {
+    let lists = of.lists(setup);
+    for cal in lists {
         let folder = FolderId(cal.here);
         if !folders.contains(&folder) {
             continue;
@@ -497,7 +564,7 @@ fn gather(of: Of, s: &mut Session, store: usize, setup: &DavSetup) -> (Vec<Here>
                 }
                 // Moved here from another calendar: deleted there, and new here.
                 Some(place) => {
-                    if setup.calendars.iter().any(|c| place.href.starts_with(&c.href) && c.href != cal.href) {
+                    if lists.iter().any(|c| place.href.starts_with(&c.href) && c.href != cal.href) {
                         gone.push(Gone { id: u64::MAX, place });
                     }
                     here.new.push((row.id, new_href(&cal.href, &of.uid(&item), of.ext()), data(), hash));
@@ -511,7 +578,8 @@ fn gather(of: Of, s: &mut Session, store: usize, setup: &DavSetup) -> (Vec<Here>
         for row in st.list(deleted).unwrap_or_default().into_iter().take(MAX_ITEMS) {
             if let Ok(item) = st.load(deleted, ItemId(row.id))
                 && let Some(place) = DavPlace::of(&item)
-                && setup.calendars.iter().any(|c| place.href.starts_with(&c.href))
+                && lists.iter().any(|c| place.href.starts_with(&c.href))
+                && of.data(&item, &here_tz, now).is_some()
             {
                 gone.push(Gone { id: row.id, place });
             }
@@ -535,7 +603,7 @@ fn talk(t: &Taking, took: &mut Took, progress: &Progress) -> Result<(), NetError
     let login = t.reach.login()?;
     let at = dav::Url::parse(&t.setup.url)?;
     let mut server = Dav::new(&*t.reach.connector, &login, at, t.setup.trusted).holding(t.of.holds());
-    let calendars: Vec<dav::Calendar> = server.calendars()?.into_iter().filter(|c| c.events).take(MAX_CALENDARS).collect();
+    let calendars: Vec<dav::Calendar> = server.calendars()?.into_iter().filter(|c| t.of.takes(c)).take(MAX_CALENDARS).collect();
     let mut budget = MAX_FETCH;
     let mut puts = MAX_PUT;
     // Deleted here: deleted there, unless it changed there since or cannot be.
@@ -736,7 +804,7 @@ fn ended(of: Of, s: &mut Session, took: Vec<Took>, skipped: Vec<String>) -> (Str
         put = put.saturating_add(count("put"));
         // Calendars the server listed are those kept; when it could not be asked, those there were.
         if let Some(dav) = s.accounts.get_mut(at).and_then(|a| of.setup_mut(a)) {
-            dav.calendars = kept;
+            *of.lists_mut(dav) = kept;
         }
         s.refresh_folders(t.store);
         let status = std::mem::take(&mut s.status);
@@ -747,6 +815,7 @@ fn ended(of: Of, s: &mut Session, took: Vec<Took>, skipped: Vec<String>) -> (Str
         let key = match of {
             Of::Calendars => "calendars",
             Of::Contacts => "addressBooks",
+            Of::Tasks => "taskLists",
         };
         out.push(json!({ "id": t.id, key: calendars, "said": t.error.as_ref().map(ToString::to_string) }));
     }
@@ -758,6 +827,10 @@ fn ended(of: Of, s: &mut Session, took: Vec<Took>, skipped: Vec<String>) -> (Str
         Of::Contacts => {
             let _ = s.reload_people();
             ("Address books are up to date", "contacts")
+        }
+        Of::Tasks => {
+            let _ = s.reload_tasks();
+            ("Task lists are up to date", "tasks")
         }
     };
     let mut status = match (fetched, put) {
@@ -774,13 +847,14 @@ fn ended(of: Of, s: &mut Session, took: Vec<Took>, skipped: Vec<String>) -> (Str
 
 /// One account's calendars put in its data file; what each came to, and the calendars to keep.
 fn apply(of: Of, s: &mut Session, store: usize, t: &Took) -> (Vec<Value>, Vec<DavCal>) {
-    let was: Vec<DavCal> = s.accounts.iter().find(|a| a.id == t.id).and_then(|a| of.setup(a)).map(|d| d.calendars.clone()).unwrap_or_default();
+    let was: Vec<DavCal> = s.accounts.iter().find(|a| a.id == t.id).and_then(|a| of.setup(a)).map(|d| of.lists(d).to_vec()).unwrap_or_default();
     let main = s.find_folder(store, of.kind());
     let deleted = s.find_folder(store, FolderKind::Deleted);
-    let (here_tz, now) = (s.zone.clone(), s.time_now());
+    let (here_tz, now, today) = (s.zone.clone(), s.time_now(), s.today());
     // A meeting one called, or was asked to, is kept as such.
     let mine = super::meeting::mine(s);
     let me: Vec<&str> = mine.iter().map(String::as_str).collect();
+    let cx = Ctx { me: &me, here: &here_tz, today, now };
     let mut folders: Vec<(FolderId, String)> = s.folders.get(store).map(|f| f.iter().map(|x| (x.id, x.name.clone())).collect()).unwrap_or_default();
     let mut kept = Vec::new();
     let mut shown = Vec::new();
@@ -810,6 +884,7 @@ fn apply(of: Of, s: &mut Session, store: usize, t: &Took) -> (Vec<Value>, Vec<Da
                     (false, _) => c.name.clone(),
                     (true, Of::Calendars) => "Calendar".to_string(),
                     (true, Of::Contacts) => "Contacts".to_string(),
+                    (true, Of::Tasks) => "Tasks".to_string(),
                 };
                 st.create_folder(m, &name).ok().inspect(|f| folders.push((*f, name)))
             }
@@ -819,6 +894,7 @@ fn apply(of: Of, s: &mut Session, store: usize, t: &Took) -> (Vec<Value>, Vec<Da
             let said = match of {
                 Of::Calendars => "the account's data file has no Calendar folder to keep it in",
                 Of::Contacts => "the account's data file has no Contacts folder to keep it in",
+                Of::Tasks => "the account's data file has no Tasks folder to keep it in",
             };
             shown.push(json!({ "name": c.name, "folder": null, "said": said }));
             kept.extend(was.iter().find(|w| w.href == c.href).cloned());
@@ -878,10 +954,10 @@ fn apply(of: Of, s: &mut Session, store: usize, t: &Took) -> (Vec<Value>, Vec<Da
             }
             let item = match mine.map(|id| (id, st.load(folder, ItemId(id)))) {
                 Some((id, Ok(mut item))) => {
-                    got.write_onto(&mut item, &me, &here_tz);
+                    got.write_onto(&mut item, &cx);
                     Some((Some(id), item))
                 }
-                _ => Some((None, got.item(&me, &here_tz))),
+                _ => Some((None, got.item(&cx))),
             };
             let Some((id, mut item)) = item else { continue };
             DavPlace { href: href.clone(), etag: etag.clone(), hash: hash_of(of, &item) }.put(&mut item);

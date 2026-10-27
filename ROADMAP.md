@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 131 · 2026-10-27
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 132 · 2026-10-27
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 89 of 134 (66%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 698, all passing |
+| Tests | 702, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command, for published account settings and for updates |
@@ -165,7 +165,8 @@
 110. Done: Tasks: a Tasks folder's tasks in Outlook's views (Simple List, Detailed, Prioritized, Active, Completed, Today, Next 7 Days, Overdue) and the To-Do List, where mail flagged for follow-up stands beside the tasks under headings by when each is due; tasks made, changed, ticked off and deleted, every change undone; a task added by typing its subject above the list; Follow Up on mail by Today, Tomorrow, This Week, Next Week or No Date, as Outlook flags it ([MS-OXOTASK], [MS-OXOFLAG]) (M5.9, `crates/model/src/task.rs`, `crates/engine/src/cmd/tasks.rs`, `crates/ui-egui/src/tasks.rs`).
 111. Done: Reminders: the Reminders window comes up when an appointment, a task or a message flagged for follow-up comes due, from every data file open, with a sound of our own and the taskbar button; Dismiss, Dismiss All, Snooze and Open Item, written into the item as Outlook writes them ([MS-OXORMDR] 3.1.4.6), a series moving on to its next occurrence; a data file that cannot be written keeps them put away for the run (M5.10, `crates/model/src/reminder.rs`, `crates/engine/src/reminders.rs`, `cmd/reminders.rs`, `crates/ui-egui/src/reminders.rs`).
 112. Done: Contacts kept in step with a CardDAV server, the Address Book and Check Names, names suggested as they are typed, Mail Merge, and to-dos in calendar files read into Tasks and Tasks saved as one (M5.11).
-113. Next: M5.12: M5's do-later batch, beginning with CalDAV task lists and the To-Do Bar.
+113. Done: Tasks kept in step with a CalDAV server's task lists, each in a Tasks folder, on each Send/Receive and by `tasks.sync` (M5.12, first part).
+114. Next: the rest of M5.12, beginning with the To-Do Bar.
 
 ## M5 plan
 
@@ -182,7 +183,7 @@
 | ~~M5.9~~ | done: Tasks: tasks and flagged mail on the To-Do List, in Outlook's views; due dates, status, work and reminders kept as Outlook keeps them ([MS-OXOTASK], [MS-OXOFLAG]); a task added by typing it |
 | ~~M5.10~~ | done: reminders for appointments, tasks and flagged mail in a window of their own, dismissed and snoozed as Outlook writes them ([MS-OXORMDR]) |
 | ~~M5.11~~ | done: CardDAV (RFC 6352), the Address Book and Check Names, Mail Merge; to-dos in calendar files (RFC 5545 3.6.2); CalDAV task lists moved to M5.12 |
-| M5.12 | M5's do-later batch: CalDAV task lists, the To-Do Bar, what the contact and invitation windows still lack, themes in files, zone history, what more is brought from Outlook, and what reminders left |
+| M5.12 | M5's do-later batch: CalDAV task lists (done), the To-Do Bar, what the contact and invitation windows still lack, themes in files, zone history, what more is brought from Outlook, and what reminders left |
 
 ## Do later (from M2)
 
@@ -296,7 +297,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Mail Merge printed as letters and saved as one document, and fields chosen by a filter of the contacts (a merge writes messages today) | M5.12 |
 | A contact's picture chosen in the contact window (`people.change` takes one already), and the other fields Outlook's Details page holds (office, profession, nickname, spouse) | M5.12 (M5.9 and M5.10 kept to their own) |
 | ~~Tasks in calendar files (VTODO, RFC 5545 3.6.2)~~ | done: M5.11 |
-| Tasks kept in step with a CalDAV server's task lists (calendars whose component set is VTODO, RFC 4791 5.2.3) in Tasks folders, as calendars are | M5.12 (M5.11 kept to CardDAV, names and files) |
+| ~~Tasks kept in step with a CalDAV server's task lists (calendars whose component set is VTODO, RFC 4791 5.2.3) in Tasks folders, as calendars are~~ | done: M5.12 |
 | The To-Do Bar: the next appointments and the To-Do List at the side of Mail; tasks dragged to the Calendar | M5.12 |
 | Reminders standing above every other window in one of their own when the main window is hidden, and the sound chosen from a file of the owner's | M5.12 |
 | A reminder of its own on one occurrence changed alone ([MS-OXOCAL] 2.2.1.44.2, an exception's ReminderSet and ReminderDelta) and the Reminders search folder Outlook keeps in a data file; reminders checked against Outlook's on a file of ours | M5.12, the last with M1's checks against Outlook |
@@ -2508,3 +2509,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   to 1 MB at a character's edge, to-dos as many as events, days from 1601 to 9999; names, previews
   and to-do text come back under `untrusted_content`. Do later (M5.12): CalDAV task lists, a merge
   printed as letters. 21 tests.
+- **2026-10-27** - M5.12 (first part): CalDAV task lists.
+  The calendars of an account's CalDAV server that say they hold to-dos (their component set
+  names VTODO, RFC 4791 5.2.3) are kept in step with Tasks folders of the account's data file,
+  the first its Tasks and the others under it, on each Send/Receive and by `tasks.sync`
+  (Update Task Lists): tasks made, changed and deleted here go there as to-dos, and what
+  changes there comes here, by sync token or ETag, a change on both sides keeping both, as
+  calendars are. A calendar that holds events and to-dos both is kept by the calendar sync and
+  the task sync each taking only its own kind and leaving the other's alone, each with a
+  token of its own (`DavSetup::tasks` beside `calendars`). A calendar that says nothing of what
+  it holds is taken for one of events, so nothing is kept twice. Better than Outlook, which
+  keeps no CalDAV server's tasks at all. 4 tests.

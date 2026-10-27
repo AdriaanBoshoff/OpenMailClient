@@ -71,6 +71,7 @@ fn a_servers_calendars_are_found_from_its_address_or_its_well_known_place() {
         let (mine, team) = (&found[0], &found[1]);
         assert_eq!((mine.href.as_str(), mine.name.as_str(), mine.color.as_str()), (PERSONAL, "Personal", "#3366CC"));
         assert!(mine.writable && mine.events && !mine.token.is_empty() && !mine.ctag.is_empty());
+        assert!(!mine.todos, "a calendar of events alone holds no to-dos");
         assert_eq!((team.name.as_str(), team.color.as_str(), team.writable), ("Team & Co", "#FF8800", false));
     }
     // A server that keeps address books too names a home for each: the calendars are asked
@@ -82,6 +83,18 @@ fn a_servers_calendars_are_found_from_its_address_or_its_well_known_place() {
         let books = Dav::new(&fake, &login, url(at), None).holding(crate::dav::Holds::Cards).calendars().unwrap();
         assert_eq!(books.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Friends"], "{at}");
     }
+    // A task list says it holds to-dos (RFC 4791 5.2.3), and holds no events; one that holds
+    // both says both.
+    {
+        let mut st = fake.state();
+        st.calendars.push(crate::fake::DavCalendar::tasks("/dav/calendars/pat/chores/", "Chores"));
+        let mut both = crate::fake::DavCalendar::new("/dav/calendars/pat/home/", "Home");
+        both.comps = vec!["VEVENT".into(), "vtodo".into()];
+        st.calendars.push(both);
+    }
+    let found = calendars(&fake, "https://dav.example.test/").unwrap();
+    let kinds: Vec<(&str, bool, bool)> = found.iter().map(|c| (c.name.as_str(), c.events, c.todos)).collect();
+    assert_eq!(kinds, [("Personal", true, false), ("Team & Co", true, false), ("Chores", false, true), ("Home", true, true)]);
     // Named by its own path, a calendar is the one listed.
     let one = calendars(&fake, "https://dav.example.test/dav/calendars/pat/team/").unwrap();
     assert_eq!(one.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Team & Co"]);

@@ -150,6 +150,9 @@ pub struct Calendar {
     pub token: String,
     /// It holds events: it says so, or says nothing of what it holds.
     pub events: bool,
+    /// It holds to-dos: it says so ([RFC 4791] 5.2.3). One that says nothing of what it holds
+    /// is taken as a calendar of events alone, so that no calendar is kept twice.
+    pub todos: bool,
     /// What is changed here may be put there.
     pub writable: bool,
 }
@@ -480,6 +483,7 @@ impl<'a> Dav<'a> {
                 percent_decoded(last)
             });
             let events = self.holds == Holds::Cards || !r.props.comps_given || r.props.comps.iter().any(|c| c.eq_ignore_ascii_case("VEVENT"));
+            let todos = self.holds == Holds::Events && r.props.comps.iter().any(|c| c.eq_ignore_ascii_case("VTODO"));
             let writable = !r.props.privileges_given || r.props.privileges.iter().any(|p| matches!(p.as_str(), "all" | "write" | "write-content"));
             Some(Calendar {
                 href,
@@ -488,6 +492,7 @@ impl<'a> Dav<'a> {
                 ctag: r.props.ctag.clone().unwrap_or_default(),
                 token: r.props.token.clone().unwrap_or_default(),
                 events,
+                todos,
                 writable,
             })
         }

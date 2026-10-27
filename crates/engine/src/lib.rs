@@ -34,6 +34,8 @@ mod tests_arrival;
 #[cfg(test)]
 mod tests_caldav;
 #[cfg(test)]
+mod tests_caldav_tasks;
+#[cfg(test)]
 mod tests_calendar;
 #[cfg(test)]
 mod tests_calendar_file;

@@ -35,6 +35,8 @@ pub struct DavCalendar {
     pub read_only: bool,
     /// An address book of contacts ([RFC 6352]), listed in its own home.
     pub book: bool,
+    /// What it says it holds (supported-calendar-component-set): VEVENT unless set.
+    pub comps: Vec<String>,
 }
 
 impl DavCalendar {
@@ -47,7 +49,13 @@ impl DavCalendar {
             removed: Vec::new(),
             read_only: false,
             book: false,
+            comps: vec!["VEVENT".into()],
         }
+    }
+
+    /// A task list: a calendar that holds to-dos alone.
+    pub fn tasks(href: &str, name: &str) -> Self {
+        Self { comps: vec!["VTODO".into()], ..Self::new(href, name) }
     }
 
     /// An address book, in `BOOK_HOME`.
@@ -260,8 +268,9 @@ fn calendar_props(c: &DavCalendar, s: &State, token: &str) -> String {
             s.dav_changes
         );
     }
+    let comps: String = c.comps.iter().map(|n| format!("<c:comp name=\"{}\"/>", escape(n))).collect();
     format!(
-        "<d:resourcetype><d:collection/><c:calendar/></d:resourcetype><d:displayname>{}</d:displayname><cs:getctag>{}</cs:getctag>{sync}<c:supported-calendar-component-set><c:comp name=\"VEVENT\"/></c:supported-calendar-component-set><ic:calendar-color>{}</ic:calendar-color><d:current-user-privilege-set>{privileges}</d:current-user-privilege-set>",
+        "<d:resourcetype><d:collection/><c:calendar/></d:resourcetype><d:displayname>{}</d:displayname><cs:getctag>{}</cs:getctag>{sync}<c:supported-calendar-component-set>{comps}</c:supported-calendar-component-set><ic:calendar-color>{}</ic:calendar-color><d:current-user-privilege-set>{privileges}</d:current-user-privilege-set>",
         escape(&c.name),
         s.dav_changes,
         escape(&c.color)
