@@ -90,6 +90,8 @@ fn describe(item: &Item) -> Value {
             "from": item.sender_name(),
             "to": item.display_recipients(RECIP_TO),
             "body_chars": item.body_text().chars().count(),
+            // As Outlook counts its Body: UTF-16 units, each line ending CR LF.
+            "body_length": item.body_text().replace('\n', "\r\n").encode_utf16().count(),
             "has_html": item.body_html().is_some(),
         },
     })

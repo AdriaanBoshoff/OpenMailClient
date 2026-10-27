@@ -196,3 +196,21 @@ fn a_meeting_sent_as_its_calendar_alone_says_what_it_says_in_its_body() {
     let long = format!("DESCRIPTION:{}\r\n", "é".repeat(50_000));
     assert_eq!(crate::write::calendar_text(long.as_bytes(), "DESCRIPTION").unwrap().chars().count(), 20_000);
 }
+
+#[test]
+fn a_subject_keeps_its_white_space_through_a_message_file() {
+    for subject in ["Subject with trailing space ", " leading", "two  spaces", "a\ttab", "plain words stay plain", "  "] {
+        let mut it = Item::new_mail();
+        it.set_subject(subject);
+        it.set_sender("Alex Morgan", "alex.morgan@example.org");
+        let written = write::write(&it);
+        let text = String::from_utf8_lossy(&written);
+        let field = text.lines().find(|l| l.starts_with("Subject:")).unwrap();
+        // Only what folding would change is encoded.
+        assert_eq!(field.contains("=?UTF-8?"), subject != "plain words stay plain", "{field}");
+        assert_eq!(parse(&written).unwrap().subject(), subject);
+    }
+    // A field folded by someone else keeps the white space after the break.
+    let folded = "Subject: one\r\n  two\r\n\tthree\r\n\r\nbody";
+    assert_eq!(parse(folded.as_bytes()).unwrap().subject(), "one  two\tthree");
+}

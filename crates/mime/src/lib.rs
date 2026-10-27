@@ -59,7 +59,8 @@ pub fn parse(data: &[u8]) -> Result<Item, MimeError> {
 
 fn message_headers(h: &Headers, item: &mut Item) {
     let subject = h.text("subject").unwrap_or_default();
-    item.set_subject(subject.trim());
+    // The field's own ends are trimmed already; what an encoded word holds is kept as written.
+    item.set_subject(&subject);
     let from = h.text("from").map(|v| parse_addresses(&v)).unwrap_or_default();
     if let Some((name, email)) = from.first() {
         item.set_sender(if name.is_empty() { email } else { name }, email);

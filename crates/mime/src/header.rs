@@ -17,9 +17,9 @@ impl Headers {
                 continue;
             }
             if line.first().is_some_and(|b| *b == b' ' || *b == b'\t') {
+                // Unfolding takes away the line break alone; the white space after it stays.
                 if let Some((_, v)) = out.last_mut() {
-                    v.push(b' ');
-                    v.extend_from_slice(line.trim_ascii_start());
+                    v.extend_from_slice(line);
                 }
                 continue;
             }

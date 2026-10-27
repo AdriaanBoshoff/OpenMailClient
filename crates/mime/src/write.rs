@@ -102,9 +102,13 @@ fn header(out: &mut String, name: &str, value: &str) {
     out.push_str("\r\n");
 }
 
-/// An unstructured value: as is when plain ASCII, else UTF-8 base64 encoded words ([RFC 2047]).
+/// An unstructured value: as is when plain ASCII that folding keeps as it is, else UTF-8 base64
+/// encoded words ([RFC 2047]). White space at either end, runs of it, tabs and line breaks are
+/// lost or changed by folding and unfolding ([RFC 5322] 2.2.3), so a value with any of them is
+/// encoded: a subject ending in a space keeps it.
 fn encode_text(s: &str) -> String {
-    if s.is_ascii() && !s.contains("=?") {
+    let folds_the_same = !s.starts_with(' ') && !s.ends_with(' ') && !s.contains("  ") && !s.contains(['\t', '\r', '\n']);
+    if s.is_ascii() && !s.contains("=?") && folds_the_same {
         return s.to_string();
     }
     // 39 bytes of text make 52 characters of base64: a word fits a 78-column line after a header name.
