@@ -31,6 +31,8 @@ mod ribbon;
 mod tasks;
 pub mod theme;
 mod themes;
+/// The ending of a theme file's name (`ui.saveTheme`, `ui.openTheme`).
+pub use themes::FILE_EXT as THEME_FILE_EXT;
 mod todo_bar;
 mod updates;
 
@@ -97,6 +99,12 @@ pub enum UiRequest {
     /// Pick where contacts are saved as a vCard file (`people.saveAs`): the ones named, or
     /// every one in the folder shown when there are none.
     SaveCards(Vec<u64>),
+    /// Pick a picture for the contact open in its window (`ui.contactPicture`).
+    ContactPicture,
+    /// Pick a theme file to open (`ui.openTheme`).
+    OpenTheme,
+    /// Pick where the theme of this name is saved as a theme file (`ui.saveTheme`).
+    SaveTheme(String),
     /// Hand a web address to the system's browser. Queued only when the person presses Open in
     /// the link dialog, with an address the engine has checked.
     OpenLink(String),
@@ -234,6 +242,18 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         label: "Delete Theme",
         params: r#"{"name": one of your themes (default: the one in use)}; the built-in Blue is used after"#,
     },
+    UiCommand {
+        id: "ui.saveTheme",
+        label: "Save Theme to a File",
+        params: r#"{"path": where the theme file goes (.omtheme), "name": a theme, built in or yours (default: the one in use)}"#,
+    },
+    UiCommand {
+        id: "ui.openTheme",
+        label: "Open Theme File",
+        params: r#"{"path": a theme file}; the theme is added as one of yours and chosen, under a free name when its own is taken; returns the themes, "added" and "leftOut" (colours it named that a theme does not have)"#,
+    },
+    UiCommand { id: "ui.saveThemeDialog", label: "Save Theme…", params: r#"{"name": a theme (default: the one in use)}"# },
+    UiCommand { id: "ui.openThemeDialog", label: "Open Theme…", params: "" },
     UiCommand { id: "ui.bodyFormat", label: "Read as Plain Text", params: r#"{"format": "formatted" | "plain"}; none switches"# },
     UiCommand { id: "ui.about", label: "About OpenMailClient", params: "" },
     UiCommand {
@@ -247,6 +267,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         params: r#"{"id": an appointment's id to open it; none for a new one, "occurrence": "YYYY-MM-DD" to open one occurrence of a series (default: the one chosen)}"#,
     },
     UiCommand { id: "ui.contact", label: "New Contact", params: r#"{"id": a contact's or group's id to open it; none for a new contact}"# },
+    UiCommand {
+        id: "ui.contactPicture",
+        label: "Contact Picture",
+        params: r#"{"path": a JPEG, PNG, GIF or BMP file of at most 4 MB} | {"remove": true} | {"keep": true}; for the contact open in its window, shown at once and kept when it is saved"#,
+    },
+    UiCommand { id: "ui.contactPictureDialog", label: "Add Picture…", params: "" },
     UiCommand { id: "ui.contactGroup", label: "New Contact Group", params: "" },
     UiCommand { id: "ui.openCardsDialog", label: "Open vCard File…", params: "" },
     UiCommand {
@@ -445,6 +471,8 @@ pub struct MailUi {
     pub(crate) people_search_focus: bool,
     pub(crate) people_scroll: bool,
     pub(crate) people_face: people::Face,
+    /// The face in the contact window, apart from the card's so the two do not undo each other.
+    pub(crate) contact_face: people::Face,
     /// The task window, what is typed in the Tasks search box and on the line that adds a
     /// task, the box to be focused, and the list to scroll to the one chosen.
     pub(crate) task: Option<tasks::TaskForm>,
@@ -691,6 +719,7 @@ impl MailUi {
             people_search_focus: false,
             people_scroll: false,
             people_face: people::Face::default(),
+            contact_face: people::Face::default(),
             task: None,
             tasks_query: String::new(),
             tasks_add: String::new(),
@@ -925,6 +954,13 @@ impl MailUi {
             "ui.saveCalendarDialog" => self.requests.push(UiRequest::SaveCalendar),
             "ui.openCalendar" => return self.calendar_file_command(params),
             "ui.contact" => return self.contact_command(params),
+            "ui.contactPicture" => self.contact_picture(params)?,
+            "ui.contactPictureDialog" => {
+                if self.contact.is_none() {
+                    return Err("No contact is open".to_string());
+                }
+                self.requests.push(UiRequest::ContactPicture);
+            }
             "ui.contactGroup" => return self.group_command(),
             "ui.openCardsDialog" => self.requests.push(UiRequest::OpenCards),
             "ui.saveCardsDialog" => {
@@ -1147,7 +1183,8 @@ impl MailUi {
                 self.set_dark(dark);
             }
             "ui.importOutlook" => return self.import_command(params),
-            "ui.themes" | "ui.useTheme" | "ui.themeColor" | "ui.newTheme" | "ui.renameTheme" | "ui.deleteTheme" => {
+            "ui.themes" | "ui.useTheme" | "ui.themeColor" | "ui.newTheme" | "ui.renameTheme" | "ui.deleteTheme" | "ui.saveTheme" | "ui.openTheme"
+            | "ui.saveThemeDialog" | "ui.openThemeDialog" => {
                 return self.theme_command(id, params);
             }
             "ui.bodyFormat" => {

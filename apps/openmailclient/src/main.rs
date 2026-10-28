@@ -206,6 +206,39 @@ impl App {
                         self.run("people.saveAs", params);
                     }
                 }
+                UiRequest::ContactPicture => {
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Add contact picture")
+                        .add_filter("Picture", &["jpg", "jpeg", "png", "gif", "bmp"])
+                        .add_filter("All files", &["*"])
+                        .pick_file();
+                    if let Some(path) = picked {
+                        self.run("ui.contactPicture", json!({ "path": path }));
+                    }
+                }
+                UiRequest::OpenTheme => {
+                    let ext = openmailclient_ui_egui::THEME_FILE_EXT;
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Open theme file")
+                        .add_filter("Theme file", &[ext])
+                        .add_filter("All files", &["*"])
+                        .pick_file();
+                    if let Some(path) = picked {
+                        self.run("ui.openTheme", json!({ "path": path }));
+                    }
+                }
+                UiRequest::SaveTheme(name) => {
+                    let ext = openmailclient_ui_egui::THEME_FILE_EXT;
+                    let stem: String = name.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).take(80).collect();
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Save theme")
+                        .set_file_name(format!("{}.{ext}", stem.trim()))
+                        .add_filter("Theme file", &[ext])
+                        .save_file();
+                    if let Some(path) = picked {
+                        self.run("ui.saveTheme", json!({ "path": path, "name": name }));
+                    }
+                }
                 UiRequest::OpenLink(address) => {
                     self.ui.session.status = match open_in_browser(&address) {
                         Ok(()) => "Opened in the browser".to_string(),

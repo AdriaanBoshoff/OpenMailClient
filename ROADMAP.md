@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); every setting in one Options window and the File tab in pages (M1.9); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 136 · 2026-10-28
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); every setting in one Options window and the File tab in pages (M1.9); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 138 · 2026-10-28
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 90 of 134 (67%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 715, all passing |
+| Tests | 718, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command, for published account settings and for updates |
@@ -211,7 +211,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | The columns of the list kept between runs (the list has no columns yet: they come with the single-line view) | M5, with views |
 | The window's place on a second screen kept (the size is; egui does not say where the other screens are) | M5 |
 | Each folder's own view (sort, grouping, reading pane) kept, in the data file where Outlook keeps it | M5, with views |
-| A settings page in the app (the file is written and read; nothing shows or edits it but the commands that change each setting) | M5 |
+| ~~A settings page in the app (the file is written and read; nothing shows or edits it but the commands that change each setting)~~ | done: M1.9, Options |
 | ~~A `.pst` from our writer opened in Outlook Classic; with it, where a message attached to a message is kept~~ | done: M3c.1 |
 | The bucket of a named property, written from the specification alone, seen by Outlook (no message of ours has a named property yet) | M5, with categories and custom fields |
 | Node 0xC01, which Outlook makes when it first opens a file of ours (its layout is in no specification; Outlook makes it itself) | when its layout can be learned black-box from files Outlook writes |
@@ -292,11 +292,11 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Sending pages to a printer | done: M1.10 |
 | A printer's own settings (trays, two-sided, colour) from its driver's dialog; print styles other than Memo and Table | M5, with the calendar's print styles (after M5.10) |
 | Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
-| Themes saved to a file of their own and read from one, to share them | M5.12 (moved from M5.8, then M5.10, each kept to its own) |
+| ~~Themes saved to a file of their own and read from one, to share them~~ | done: M5.12 |
 | ~~Contacts kept in step with a CardDAV server (RFC 6352), as calendars are with CalDAV~~ | done: M5.11 |
 | ~~The Address Book window, names checked against Contacts as they are typed in To, and Mail Merge~~ | done: M5.11 |
 | Mail Merge printed as letters and saved as one document, and fields chosen by a filter of the contacts (a merge writes messages today) | M5.12 |
-| A contact's picture chosen in the contact window (`people.change` takes one already), and the other fields Outlook's Details page holds (office, profession, nickname, spouse) | M5.12 (M5.9 and M5.10 kept to their own) |
+| ~~A contact's picture chosen in the contact window (`people.change` takes one already), and the other fields Outlook's Details page holds (office, profession, nickname, spouse)~~ | done: M5.12 |
 | ~~Tasks in calendar files (VTODO, RFC 5545 3.6.2)~~ | done: M5.11 |
 | ~~Tasks kept in step with a CalDAV server's task lists (calendars whose component set is VTODO, RFC 4791 5.2.3) in Tasks folders, as calendars are~~ | done: M5.12 |
 | Tasks dragged from the To-Do Bar to the Calendar, and a favourite's presence and recent mail | M5.12 |
@@ -2575,3 +2575,24 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   each offer what they do as a tile with a line saying what it does, shown dimmed when it
   cannot be done now; then Print, Options and Exit. The window keeps one size from page to
   page, and the accounts form scrolls inside it with Save and Test always in sight. 3 tests.
+- **2026-10-28** - M5.12: themes saved to a file of their own and opened from one.
+  Options > Themes has Open Theme File and Save to a File (`ui.openTheme`, `ui.saveTheme` and
+  their `…Dialog` forms). A theme file (`.omtheme`) is JSON that says what it is, with the
+  theme's name and what it changes in the light and the dark set; it is written beside its
+  place and put there whole. Outlook has no theme files at all. Better than a plain copy: a
+  file opened twice chooses the theme it added instead of adding it again, one named as a
+  theme already there comes in under a free name, a built-in theme can be saved to start
+  another machine's own from, and colours a file names that a theme does not have are left
+  out and counted, so a file from a later version still opens. Hostile input: at most 64 KB
+  read, a file that is not JSON or does not say it is a theme refused, names cut to one short
+  line. 2 tests.
+- **2026-10-28** - M5.12: a contact's picture and its details in the contact window.
+  The window's head shows the contact's face as its card does, with Add Picture, Change
+  Picture, Remove Picture and Undo (`ui.contactPicture`, `ui.contactPictureDialog`); a
+  Details part beside the addresses holds Office, Profession, Manager's Name, Assistant's
+  Name, Nickname and Spouse/Partner, which `people.change` already kept. Better than
+  Outlook: the picture chosen is read and shown at once, before it is saved, and Undo takes
+  the window back to the one it had; the details sit with the rest instead of on a page of
+  their own. Hostile input: the file is checked when it is chosen as the engine checks it
+  (a folder, more than 4 MB, or what is not a JPEG, PNG, GIF or BMP refused), and a refused
+  file leaves the picture as it was. 1 test.

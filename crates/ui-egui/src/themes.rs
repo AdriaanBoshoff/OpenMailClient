@@ -204,9 +204,55 @@ impl MailUi {
                 }
                 self.set_dark(dark);
             }
+            "ui.saveThemeDialog" => {
+                let name = text("name").map_or_else(|| self.theme_name.clone(), str::to_string);
+                let found = self.find_theme(&name).ok_or_else(|| format!("There is no theme called {}", one_line(&name)))?;
+                self.requests.push(crate::UiRequest::SaveTheme(found.name));
+            }
+            "ui.openThemeDialog" => self.requests.push(crate::UiRequest::OpenTheme),
+            "ui.saveTheme" => {
+                let path = text("path").ok_or("\"path\" is missing")?;
+                let name = text("name").map_or_else(|| self.theme_name.clone(), str::to_string);
+                let found = self.find_theme(&name).ok_or_else(|| format!("There is no theme called {}", one_line(&name)))?;
+                write_theme_file(std::path::Path::new(path), &found)?;
+                self.session.status = format!("Saved the theme {} to a file", found.name);
+            }
+            "ui.openTheme" => {
+                let path = text("path").ok_or("\"path\" is missing")?;
+                let read = read_theme_file(std::path::Path::new(path))?;
+                let name = self.take_theme(read.theme)?;
+                self.set_dark(dark);
+                let mut said = format!("Added the theme {name} and chose it");
+                if read.left_out > 0 {
+                    said.push_str(&format!("; {} colours it names are not ones a theme has and were left out", read.left_out));
+                }
+                self.session.status = said;
+                let mut list = self.themes_list();
+                list["added"] = json!(name);
+                list["leftOut"] = json!(read.left_out);
+                return Ok(list);
+            }
             _ => return Err(format!("unknown command {}", one_line(id))),
         }
         Ok(self.themes_list())
+    }
+
+    /// A theme read from a file made one's own and chosen; returns its name. The same theme
+    /// opened twice is chosen, not added again; one named as another theme takes a free name.
+    fn take_theme(&mut self, mut read: Theme) -> Result<String, String> {
+        if let Some(same) = self.themes.iter().find(|t| t.name.eq_ignore_ascii_case(&read.name) && t.light == read.light && t.dark == read.dark) {
+            self.theme_name = same.name.clone();
+            return Ok(same.name.clone());
+        }
+        if self.themes.len() >= MAX_THEMES {
+            return Err(format!("At most {MAX_THEMES} themes are kept; delete one first"));
+        }
+        read.name = self.free_name(&read.name);
+        read.built_in = false;
+        let name = read.name.clone();
+        self.themes.push(read);
+        self.theme_name = name.clone();
+        Ok(name)
     }
 
     /// The person's themes and the chosen one, as a settings file has them.
@@ -405,9 +451,16 @@ impl MailUi {
                     }
                 });
             });
-            // A built-in theme has nothing to delete, so no row for it.
-            if !current.built_in {
-                crate::options::bar(ui, &t, |ui| {
+            // Themes kept in files, to share them or bring them from another machine; only one's
+            // own can be deleted.
+            crate::options::bar(ui, &t, |ui| {
+                if ui.add(dialog::plain("Open Theme File…")).on_hover_text("Add a theme from a theme file and use it").clicked() {
+                    run.push(("ui.openThemeDialog", Value::Null));
+                }
+                if ui.add(dialog::plain("Save to a File…")).on_hover_text("This theme as a file of its own, to keep or share").clicked() {
+                    run.push(("ui.saveThemeDialog", Value::Null));
+                }
+                if !current.built_in {
                     let label = if window.deleting { "Delete it" } else { "Delete theme…" };
                     let button = if window.deleting { dialog::danger(&t, label) } else { dialog::plain(label) };
                     if ui.add(button).clicked() {
@@ -416,8 +469,8 @@ impl MailUi {
                         }
                         window.deleting = !window.deleting;
                     }
-                });
-            }
+                }
+            });
         }
         self.themes_window = Some(window);
         for (id, params) in run {
@@ -505,4 +558,62 @@ fn preview(ui: &mut Ui, k: &Tokens, name: &str) {
     p.rect_filled(other, 4.0, k.hover);
     p.text(other.center(), egui::Align2::CENTER_CENTER, "Cancel", font(10.5), k.text);
     p.rect_stroke(rect, 6.0, egui::Stroke::new(1.0, k.line), egui::StrokeKind::Inside);
+}
+
+/// What a theme file says it is, so that another JSON file is not taken for one.
+const FILE_KIND: &str = "openmailclient-theme";
+/// The ending of a theme file's name.
+pub const FILE_EXT: &str = "omtheme";
+/// The largest theme file read: one that changes every colour of both sets is under 3 KB.
+const MAX_FILE: u64 = 64 * 1024;
+
+/// A theme read from a file, and how many of the colours it named were not ones a theme has.
+pub(crate) struct ThemeFile {
+    pub theme: Theme,
+    pub left_out: usize,
+}
+
+/// A theme written to a file of its own, to keep or share: its name and what it changes in
+/// each set, as the settings keep it, with what the file is. Written beside the file first and
+/// put in its place whole, so a file there before is never left half written.
+pub(crate) fn write_theme_file(path: &std::path::Path, theme: &Theme) -> Result<(), String> {
+    let mut v = theme.to_json();
+    v["kind"] = json!(FILE_KIND);
+    v["version"] = json!(1);
+    let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    let name = path.file_name().ok_or("The file needs a name")?;
+    let mut temp = name.to_os_string();
+    temp.push(".writing");
+    let temp = path.with_file_name(temp);
+    std::fs::write(&temp, text).map_err(|e| format!("The theme could not be written: {e}"))?;
+    std::fs::rename(&temp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        format!("The theme could not be put in its place: {e}")
+    })
+}
+
+/// A theme file read: at most `MAX_FILE` bytes, JSON that says it is a theme, with a name.
+/// Colours of names a theme does not have, and those that are not `#RRGGBB`, are left out
+/// and counted.
+pub(crate) fn read_theme_file(path: &std::path::Path) -> Result<ThemeFile, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| format!("The theme file could not be opened: {e}"))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE + 1).read_to_end(&mut bytes).map_err(|e| format!("The theme file could not be read: {e}"))?;
+    if bytes.len() as u64 > MAX_FILE {
+        return Err(format!("This is larger than a theme file can be ({} KB at most)", MAX_FILE / 1024));
+    }
+    theme_of_bytes(&bytes)
+}
+
+/// The theme a file's bytes hold; apart from the reading, for the tests.
+pub(crate) fn theme_of_bytes(bytes: &[u8]) -> Result<ThemeFile, String> {
+    let v: Value = serde_json::from_slice(bytes).map_err(|_| "This is not a theme file".to_string())?;
+    if v.get("kind").and_then(Value::as_str) != Some(FILE_KIND) {
+        return Err("This is not a theme file".to_string());
+    }
+    let theme = Theme::from_json(&v).ok_or("The theme in this file has no name")?;
+    let named = |key: &str| v.get(key).and_then(Value::as_object).map_or(0, |m| m.len());
+    let left_out = (named("light") + named("dark")).saturating_sub(theme.light.len() + theme.dark.len());
+    Ok(ThemeFile { theme, left_out })
 }

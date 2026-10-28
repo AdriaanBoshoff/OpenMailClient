@@ -3573,3 +3573,156 @@ fn the_file_tab_shows_its_pages_and_opens_options() {
     h.run_steps(3);
     assert_eq!(h.state().options, Some(crate::options::Page::Accounts));
 }
+
+#[test]
+fn a_theme_saved_to_a_file_opens_again_elsewhere_as_it_was() {
+    let dir = std::env::temp_dir().join(format!("omc-ui-theme-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("Harbour.omtheme");
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("ui.newTheme", &json!({ "name": "Harbour" })).unwrap();
+    ui.execute("ui.themeColor", &json!({ "mode": "light", "color": "accent", "value": "#0B7A75", "follow": true })).unwrap();
+    ui.execute("ui.themeColor", &json!({ "mode": "dark", "color": "window", "value": "#101418" })).unwrap();
+    let made = ui.current_theme();
+    ui.execute("ui.saveTheme", &json!({ "path": file })).unwrap();
+    assert!(!dir.join("Harbour.omtheme.writing").exists(), "nothing is left beside the file");
+
+    // On another machine: it comes in as it was, and is chosen.
+    let mut other = MailUi::new(Session::with_sample());
+    let list = other.execute("ui.openTheme", &json!({ "path": file })).unwrap();
+    assert_eq!(list["added"], "Harbour");
+    assert_eq!(list["leftOut"], 0);
+    let opened = other.current_theme();
+    assert_eq!((opened.name.as_str(), &opened.light, &opened.dark, opened.built_in), ("Harbour", &made.light, &made.dark, false));
+    // The same file again chooses it and adds nothing.
+    other.execute("ui.useTheme", &json!({ "name": "Blue" })).unwrap();
+    other.execute("ui.openTheme", &json!({ "path": file })).unwrap();
+    assert_eq!(other.themes.len(), 1);
+    assert_eq!(other.theme_name, "Harbour");
+    // Another theme by that name is kept apart under a free name.
+    other.execute("ui.themeColor", &json!({ "mode": "light", "color": "text", "value": "#000000" })).unwrap();
+    let list = other.execute("ui.openTheme", &json!({ "path": file })).unwrap();
+    assert_eq!(list["added"], "Harbour 2");
+    assert_eq!(other.themes.len(), 2);
+
+    // A built-in theme can be saved, and comes back as one's own beside it.
+    let blue = dir.join("Blue.omtheme");
+    ui.execute("ui.saveTheme", &json!({ "path": blue, "name": "Blue" })).unwrap();
+    let list = ui.execute("ui.openTheme", &json!({ "path": blue })).unwrap();
+    assert_eq!(list["added"], "Blue 2");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn theme_files_are_asked_for_by_the_window_and_hostile_ones_are_refused() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("ui.openThemeDialog", &Value::Null).unwrap();
+    ui.execute("ui.saveThemeDialog", &Value::Null).unwrap();
+    assert_eq!(ui.requests, vec![UiRequest::OpenTheme, UiRequest::SaveTheme("Blue".to_string())]);
+    assert!(ui.execute("ui.saveThemeDialog", &json!({ "name": "No such" })).is_err());
+    assert!(ui.execute("ui.saveTheme", &Value::Null).is_err());
+    assert!(ui.execute("ui.openTheme", &json!({ "path": "Z:/no/such/file.omtheme" })).is_err());
+
+    // Not JSON, JSON that is no theme, a theme without a name: refused.
+    for bad in [&b"\xff\xfe garbage"[..], br#"{"name":"X","light":{}}"#, br#"{"kind":"openmailclient-theme","name":"  "}"#, b"[]", b""] {
+        assert!(crate::themes::theme_of_bytes(bad).is_err());
+    }
+    // Colours a theme does not have, or that are not colours, are left out and counted; a
+    // long name with a line break is one short line.
+    let odd = json!({
+        "kind": "openmailclient-theme", "version": 99,
+        "name": format!("Odd\n{}", "n".repeat(500)),
+        "light": { "accent": "#112233", "nonsense": "#000000", "text": "red" },
+        "dark": { "window": "#000000" },
+    });
+    let read = crate::themes::theme_of_bytes(odd.to_string().as_bytes()).unwrap();
+    assert_eq!(read.left_out, 2);
+    assert_eq!((read.theme.light.len(), read.theme.dark.len()), (1, 1));
+    assert!(read.theme.name.chars().count() <= crate::theme::MAX_NAME && !read.theme.name.contains('\n'));
+
+    // A file larger than any theme is not read whole.
+    let dir = std::env::temp_dir().join(format!("omc-ui-theme-big-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let big = dir.join("big.omtheme");
+    std::fs::write(&big, vec![b' '; 70 * 1024]).unwrap();
+    assert!(ui.execute("ui.openTheme", &json!({ "path": big })).unwrap_err().contains("larger"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bitmap of one red pixel, written by hand: a 14-byte file header, a 40-byte information
+/// header and one row of four bytes.
+fn one_pixel_bmp() -> Vec<u8> {
+    let mut b = b"BM".to_vec();
+    b.extend_from_slice(&58u32.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&54u32.to_le_bytes());
+    b.extend_from_slice(&40u32.to_le_bytes());
+    b.extend_from_slice(&1i32.to_le_bytes());
+    b.extend_from_slice(&1i32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&24u16.to_le_bytes());
+    b.extend_from_slice(&[0; 24]);
+    b.extend_from_slice(&[0, 0, 255, 0]);
+    b
+}
+
+#[test]
+fn a_contacts_picture_and_details_are_chosen_in_its_window_and_kept() {
+    use openmailclient_formats::vcf::Card;
+    let dir = std::env::temp_dir().join(format!("omc-ui-face-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let face = dir.join("face.bmp");
+    std::fs::write(&face, one_pixel_bmp()).unwrap();
+    let mut ui = MailUi::new(Session::with_sample());
+    assert!(ui.execute("ui.contactPictureDialog", &Value::Null).is_err(), "no contact is open");
+    ui.execute("ui.contact", &Value::Null).unwrap();
+    ui.execute("ui.contactPictureDialog", &Value::Null).unwrap();
+    assert_eq!(ui.requests.last(), Some(&UiRequest::ContactPicture));
+    ui.execute("ui.contactPicture", &json!({ "path": face })).unwrap();
+    {
+        let form = ui.contact.as_mut().unwrap();
+        assert!(matches!(&form.picture, crate::people::PictureEdit::New { bytes, .. } if *bytes == one_pixel_bmp()));
+        form.full_name = "Noor Haddad".to_string();
+        form.office = "Building 4".to_string();
+        form.profession = "Surveyor".to_string();
+        form.manager = "Ines Duarte".to_string();
+        form.assistant = "Theo Lam".to_string();
+        form.nickname = "Nono".to_string();
+        form.spouse = "Sam".to_string();
+    }
+    let params = ui.contact.as_ref().unwrap().params();
+    let id = ui.execute("people.new", &params).unwrap()["id"].as_u64().unwrap();
+    let Ok(Card::Contact(c)) = ui.session.person(id) else { panic!("a contact") };
+    assert_eq!(c.picture.as_deref(), Some(one_pixel_bmp().as_slice()));
+    assert_eq!(
+        [c.office.as_str(), &c.profession, &c.manager, &c.assistant, &c.nickname, &c.spouse],
+        ["Building 4", "Surveyor", "Ines Duarte", "Theo Lam", "Nono", "Sam"]
+    );
+
+    // Opened again it shows them; saved untouched it keeps the picture; Remove takes it away.
+    ui.execute("ui.contact", &json!({ "id": id })).unwrap();
+    let form = ui.contact.clone().unwrap();
+    assert_eq!((form.nickname.as_str(), &form.picture), ("Nono", &crate::people::PictureEdit::Keep));
+    ui.execute("people.change", &form.params()).unwrap();
+    let Ok(Card::Contact(c)) = ui.session.person(id) else { panic!("a contact") };
+    assert!(c.picture.is_some());
+    ui.execute("ui.contactPicture", &json!({ "remove": true })).unwrap();
+    ui.execute("people.change", &ui.contact.as_ref().unwrap().params()).unwrap();
+    let Ok(Card::Contact(c)) = ui.session.person(id) else { panic!("a contact") };
+    assert!(c.picture.is_none() && c.office == "Building 4");
+
+    // What is not a picture, a folder, and a file too large are refused when chosen.
+    let text = dir.join("note.txt");
+    std::fs::write(&text, "not a picture").unwrap();
+    let big = dir.join("big.bmp");
+    let mut huge = one_pixel_bmp();
+    huge.resize(openmailclient_model::contact::MAX_PICTURE + 10, 0);
+    std::fs::write(&big, huge).unwrap();
+    for bad in [json!({ "path": text }), json!({ "path": dir }), json!({ "path": big }), json!({}), json!({ "path": 3 })] {
+        assert!(ui.execute("ui.contactPicture", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(ui.contact.as_ref().unwrap().picture, crate::people::PictureEdit::Remove, "a refused file changes nothing");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -14,7 +14,7 @@ use crate::{MailUi, bold, clip_text, font, one_line};
 use egui::{Align2, Color32, Painter, Rect, Sense, TextureHandle, Ui, pos2, vec2};
 use openmailclient_engine::cmd::people::View;
 use openmailclient_formats::vcf::Card;
-use openmailclient_model::contact::{Address, Contact, Group, Phone, Place};
+use openmailclient_model::contact::{Address, Contact, Group, MAX_PICTURE, Phone, Place};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -157,6 +157,20 @@ impl AddressForm {
     }
 }
 
+/// What the contact window does with the picture when it is saved.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum PictureEdit {
+    /// Leave it as it is.
+    #[default]
+    Keep,
+    /// The picture file chosen, read when it was chosen, to show it before it is saved.
+    New {
+        path: String,
+        bytes: Vec<u8>,
+    },
+    Remove,
+}
+
 /// The contact window: a contact being made or changed.
 #[derive(Clone, Default)]
 pub(crate) struct ContactForm {
@@ -167,6 +181,16 @@ pub(crate) struct ContactForm {
     pub company: String,
     pub job_title: String,
     pub department: String,
+    // What Outlook keeps on a contact's Details page.
+    pub office: String,
+    pub profession: String,
+    pub manager: String,
+    pub assistant: String,
+    pub nickname: String,
+    pub spouse: String,
+    pub picture: PictureEdit,
+    /// The picture the contact has, to show while it is kept.
+    picture_was: Option<Vec<u8>>,
     pub emails: [String; 3],
     /// What a message to each address shows, kept while the address is not changed.
     email_names: [(String, String); 3],
@@ -197,6 +221,14 @@ impl ContactForm {
             company: c.company.clone(),
             job_title: c.job_title.clone(),
             department: c.department.clone(),
+            office: c.office.clone(),
+            profession: c.profession.clone(),
+            manager: c.manager.clone(),
+            assistant: c.assistant.clone(),
+            nickname: c.nickname.clone(),
+            spouse: c.spouse.clone(),
+            picture: PictureEdit::Keep,
+            picture_was: c.picture.clone(),
             emails: std::array::from_fn(|i| c.emails.get(i).map(|e| e.address.clone()).unwrap_or_default()),
             email_names: std::array::from_fn(|i| c.emails.get(i).map(|e| (e.address.clone(), e.name.clone())).unwrap_or_default()),
             phones: PHONES.map(|k| c.phone(k).unwrap_or_default().to_string()),
@@ -219,6 +251,12 @@ impl ContactForm {
             "company": self.company,
             "jobTitle": self.job_title,
             "department": self.department,
+            "office": self.office,
+            "profession": self.profession,
+            "manager": self.manager,
+            "assistant": self.assistant,
+            "nickname": self.nickname,
+            "spouse": self.spouse,
             "emails": self.emails.iter().map(|e| e.trim()).filter(|e| !e.is_empty()).map(|e| {
                 let name = self.email_names.iter().find(|(a, _)| a.eq_ignore_ascii_case(e)).map(|(_, n)| n.as_str()).unwrap_or("");
                 json!({ "address": e, "name": name })
@@ -236,6 +274,11 @@ impl ContactForm {
         let mailing =
             self.mailing.filter(|at| PLACES.iter().position(|p| p == at).and_then(|i| self.addresses.get(i)).is_some_and(|a| !a.param().is_null()));
         p["mailing"] = mailing.map_or(Value::Null, |m| json!(m.name()));
+        match &self.picture {
+            PictureEdit::Keep => {}
+            PictureEdit::New { path, .. } => p["picture"] = json!(path),
+            PictureEdit::Remove => p["picture"] = Value::Null,
+        }
         let name = self.full_name.trim();
         if self.id.is_none() || name != self.full_name_was.trim() {
             // "Surname, Given" or "Given Middle Surname", as a name is written.
@@ -803,6 +846,24 @@ impl MailUi {
         }
     }
 
+    /// `ui.contactPicture`: a picture file chosen for the open contact, read now so it is seen
+    /// before it is saved; or `{"remove": true}`, or `{"keep": true}` for the one it has.
+    pub(crate) fn contact_picture(&mut self, params: &Value) -> Result<(), String> {
+        let form = self.contact.as_mut().ok_or("No contact is open")?;
+        if params.get("remove").and_then(Value::as_bool) == Some(true) {
+            form.picture = PictureEdit::Remove;
+            return Ok(());
+        }
+        if params.get("keep").and_then(Value::as_bool) == Some(true) {
+            form.picture = PictureEdit::Keep;
+            return Ok(());
+        }
+        let path = params.get("path").and_then(Value::as_str).ok_or("\"path\", \"remove\" or \"keep\" is required")?;
+        let bytes = read_picture(std::path::Path::new(path))?;
+        form.picture = PictureEdit::New { path: path.to_string(), bytes };
+        Ok(())
+    }
+
     /// The contact window, while it is open.
     pub(crate) fn contact_window(&mut self, ctx: &egui::Context) {
         let Some(mut form) = self.contact.take() else { return };
@@ -814,8 +875,41 @@ impl MailUi {
         } else {
             "Untitled - Contact".to_string()
         };
-        let room = (ctx.content_rect().height() - 300.0).clamp(160.0, 600.0);
+        let room = (ctx.content_rect().height() - 460.0).clamp(120.0, 520.0);
+        let shown_picture = match &form.picture {
+            PictureEdit::Keep => form.picture_was.as_deref(),
+            PictureEdit::New { bytes, .. } => Some(bytes.as_slice()),
+            PictureEdit::Remove => None,
+        };
+        let face = self.contact_face.of(ctx, form.id.unwrap_or(u64::MAX), shown_picture);
+        let has_picture = shown_picture.is_some();
+        let mut picture_ask: Option<(&'static str, Value)> = None;
         let shown = Dialog::new("contact", &title, Icon::People).width(720.0).show(ctx, &t, |ui| {
+            // The face at the head, as the card shows it, with the picture chosen or taken away
+            // here and seen before it is saved.
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::hover());
+                paint_face(ui.painter(), r.center(), 30.0, &form.full_name, face, &t);
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    ui.add_space(8.0);
+                    let name = if form.full_name.trim().is_empty() { "A new contact".to_string() } else { one_line(&form.full_name) };
+                    ui.label(egui::RichText::new(name).font(bold(16.0)).color(t.text));
+                    ui.horizontal(|ui| {
+                        let label = if has_picture { "Change Picture…" } else { "Add Picture…" };
+                        if ui.add(dialog::plain(label)).on_hover_text("A JPEG, PNG, GIF or BMP file of at most 4 MB").clicked() {
+                            picture_ask = Some(("ui.contactPictureDialog", Value::Null));
+                        }
+                        if has_picture && ui.add(dialog::plain("Remove Picture")).clicked() {
+                            picture_ask = Some(("ui.contactPicture", json!({ "remove": true })));
+                        }
+                        if form.picture != PictureEdit::Keep && ui.add(dialog::plain("Undo")).on_hover_text("Keep the picture it had").clicked() {
+                            picture_ask = Some(("ui.contactPicture", json!({ "keep": true })));
+                        }
+                    });
+                });
+            });
+            ui.add_space(6.0);
             egui::ScrollArea::vertical().id_salt("contact-form").max_height(room).show(ui, |ui| {
                 ui.columns(2, |cols| {
                     let [left, right] = cols else { return };
@@ -871,6 +965,23 @@ impl MailUi {
                         });
                         right.add_space(8.0);
                     }
+                    // What Outlook keeps on the Details page, here beside the rest.
+                    right.label(egui::RichText::new("Details").font(bold(12.5)).color(t.text));
+                    egui::Grid::new("contact-details").num_columns(2).spacing(vec2(10.0, 6.0)).show(right, |ui| {
+                        for (label, value, key) in [
+                            ("Office", &mut form.office, "office"),
+                            ("Profession", &mut form.profession, "profession"),
+                            ("Manager's Name", &mut form.manager, "manager"),
+                            ("Assistant's Name", &mut form.assistant, "assistant"),
+                            ("Nickname", &mut form.nickname, "nickname"),
+                            ("Spouse/Partner", &mut form.spouse, "spouse"),
+                        ] {
+                            ui.label(egui::RichText::new(label).color(t.text_dim));
+                            ui.add(LineEdit::new(value, egui::Id::new(("contact-details", key))).desired_width(200.0).char_limit(500));
+                            ui.end_row();
+                        }
+                    });
+                    right.add_space(8.0);
                     right.label(egui::RichText::new("Notes").font(bold(12.5)).color(t.text));
                     right.add(egui::TextEdit::multiline(&mut form.notes).desired_rows(6).desired_width(f32::INFINITY).char_limit(200_000));
                 });
@@ -899,6 +1010,12 @@ impl MailUi {
         let result = match ask {
             None => {
                 self.contact = Some(form);
+                if let Some((id, params)) = picture_ask
+                    && let Err(e) = self.execute(id, &params)
+                    && let Some(form) = self.contact.as_mut()
+                {
+                    form.said = Some(e);
+                }
                 return;
             }
             Some(Ask::Close) => return,
@@ -1195,4 +1312,28 @@ fn plain_card(p: &Painter, r: Rect, card: &Card, t: &Tokens) {
         clip_text(p, pos2(r.left() + 88.0, y), r.width() - 96.0, &one_line(&value), font(12.0), t.text);
         y += 19.0;
     }
+}
+
+/// A picture file for a contact: at most `MAX_PICTURE` bytes of a JPEG, PNG, GIF or BMP, as
+/// `people.change` takes it.
+fn read_picture(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|e| format!("The picture could not be opened: {e}"))?;
+    if file.metadata().is_ok_and(|m| m.is_dir()) {
+        return Err("That is a folder, not a picture".to_string());
+    }
+    let mut bytes = Vec::new();
+    let most = u64::try_from(MAX_PICTURE).unwrap_or(u64::MAX);
+    file.take(most.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| format!("The picture could not be read: {e}"))?;
+    if bytes.len() > MAX_PICTURE {
+        return Err(format!("The picture is larger than {} MB", MAX_PICTURE / (1024 * 1024)));
+    }
+    let known = bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || bytes.starts_with(&[0x89, b'P', b'N', b'G'])
+        || bytes.starts_with(b"GIF8")
+        || bytes.starts_with(b"BM");
+    if !known {
+        return Err("The picture is not a JPEG, PNG, GIF or BMP file".to_string());
+    }
+    Ok(bytes)
 }
