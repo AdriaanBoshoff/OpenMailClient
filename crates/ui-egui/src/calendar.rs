@@ -475,76 +475,22 @@ impl MailUi {
         let today = s.today();
         let chosen = if s.calendar.day == 0 { today } else { s.calendar.day };
         let shown = s.calendar_days();
-        let (year, month) = self.cal_nav.unwrap_or_else(|| {
-            let c = date_of(chosen);
-            (c.year, c.month)
-        });
-        let first = calendar::day_of(time::from_civil(year, month, 1, 0, 0, 0, 0), 0);
-        let grid = View::Month.days(first, s.region.week_start);
-
-        let top = rect.top() + 12.0;
-        let title = format!("{} {}", date_of(first).month_name(), year);
-        p.text(pos2(rect.center().x, top + 10.0), Align2::CENTER_CENTER, &title, bold(13.0), t.text);
-        for (n, x) in [(-1i32, rect.left() + 22.0), (1, rect.right() - 22.0)] {
-            let r = Rect::from_center_size(pos2(x, top + 10.0), vec2(22.0, 22.0));
-            let resp = ui.interact(r, egui::Id::new(("cal-nav-month", n)), Sense::click());
-            if resp.hovered() {
-                p.rect_filled(r, 3.0, t.hover);
-            }
-            chevron(&p, r.center(), n < 0, t.text_dim);
-            if resp.clicked() {
-                let (mut y, mut m) = (year, i64::from(month) + i64::from(n));
-                if m < 1 {
-                    (y, m) = (y - 1, 12);
-                } else if m > 12 {
-                    (y, m) = (y + 1, 1);
-                }
-                self.cal_nav = Some((y.clamp(1601, 9999), u32::try_from(m).unwrap_or(1)));
-            }
-        }
-        let cell = ((rect.width() - 20.0) / 7.0).min(30.0);
-        let x0 = rect.center().x - cell * 3.5;
-        let y0 = top + 30.0;
-        let week_start = usize::try_from(s.region.week_start % 7).unwrap_or(0);
-        for i in 0..7 {
-            let name = WEEKDAYS.get((week_start + i) % 7).copied().unwrap_or("");
-            let letter: String = name.chars().take(2).collect();
-            p.text(pos2(x0 + cell * (i as f32 + 0.5), y0 + 8.0), Align2::CENTER_CENTER, letter, font(11.0), t.text_faint);
-        }
-        let mut go: Option<i64> = None;
-        for (i, day) in grid.iter().enumerate() {
-            let (row, col) = (i / 7, i % 7);
-            let r = Rect::from_min_size(pos2(x0 + cell * col as f32, y0 + 18.0 + cell * row as f32), vec2(cell, cell));
-            let c = date_of(*day);
-            let in_month = c.month == month;
-            if shown.contains(day) {
-                p.rect_filled(r.shrink(1.0), 2.0, t.selected);
-            }
-            let resp = ui.interact(r, egui::Id::new(("cal-nav-day", *day)), Sense::click());
-            if resp.hovered() {
-                p.rect_filled(r.shrink(1.0), 2.0, t.hover);
-            }
-            let color = if *day == today {
-                p.circle_filled(r.center(), cell * 0.42, t.accent);
-                t.on_accent
-            } else if in_month {
-                t.text
-            } else {
-                t.text_faint
-            };
-            p.text(r.center(), Align2::CENTER_CENTER, c.day.to_string(), if *day == today { bold(11.5) } else { font(11.5) }, color);
-            if resp.clicked() {
-                go = Some(*day);
-            }
-        }
-        if let Some(day) = go {
+        let week_start = s.region.week_start;
+        let picked = month_picker(
+            ui,
+            &t,
+            &mut self.cal_nav,
+            Picker { rect, top: rect.top() + 12.0, today, chosen, shown: &shown, week_start, salt: "cal-nav" },
+        );
+        let y0 = picked.bottom;
+        if let Some(day) = picked.day {
             self.cal_nav = None;
             self.go_to_day(day);
         }
 
         // Every calendar of the data files open, those kept in step with a server in its
         // colour; a click shows that one.
-        let y = y0 + 18.0 + cell * 6.0 + 22.0;
+        let y = y0 + 22.0;
         p.text(pos2(rect.left() + 14.0, y), Align2::LEFT_CENTER, "My Calendars", bold(12.5), t.text);
         let calendars = openmailclient_engine::cmd::calendar::calendars(&self.session);
         let mut y = y + 14.0;
@@ -613,7 +559,7 @@ Kept in step with a calendar server at each Send/Receive"
         }
     }
 
-    fn go_to_day(&mut self, day: i64) {
+    pub(crate) fn go_to_day(&mut self, day: i64) {
         let c = date_of(day);
         self.act("calendar.goTo", json!({ "date": ymd(&c) }));
         self.cal_scroll = true;
@@ -666,7 +612,7 @@ Kept in step with a calendar server at each Send/Receive"
     }
 
     /// A time as the gutter names it: "8 AM" or "8:30 AM", or "08:30" on 24 hours.
-    fn clock_name(&self, hour: u32, minute: u32) -> String {
+    pub(crate) fn clock_name(&self, hour: u32, minute: u32) -> String {
         let r = &self.session.region;
         let (hour, minute) = (hour % 24, minute % 60);
         if r.short_time.contains('h') {
@@ -1103,13 +1049,10 @@ Kept in step with a calendar server at each Send/Receive"
     /// can switch to the whole series, or the whole appointment.
     pub(crate) fn open_appointment(&mut self, id: u64, occurrence: Option<i64>) {
         let off = &self.session.zone.clone();
-        let shown = self
-            .session
-            .calendar
-            .items
-            .iter()
-            .find(|(i, a)| *i == id && (occurrence.is_none() || a.occurrence == occurrence))
-            .map(|(_, a)| a.clone());
+        let is = |(i, a): &&(u64, Appointment)| *i == id && (occurrence.is_none() || a.occurrence == occurrence);
+        // Shown in the Calendar, or on the To-Do Bar beside any module.
+        let listed = self.session.calendar.items.iter().any(|item| is(&item));
+        let shown = self.session.calendar.items.iter().chain(&self.session.todo.appointments).find(is).map(|(_, a)| a.clone());
         let Some(a) = shown else { return };
         let m = if a.meeting { self.session.meeting(id).ok().flatten() } else { None };
         let mut form = AppointmentForm::of(Some(id), &a, off).with_meeting(m.clone());
@@ -1120,7 +1063,9 @@ Kept in step with a calendar server at each Send/Receive"
             }
         }
         self.appointment = Some(form);
-        self.act("calendar.select", select_params(id, a.occurrence));
+        if listed {
+            self.act("calendar.select", select_params(id, a.occurrence));
+        }
     }
 
     /// A new appointment at the next half hour of the day chosen.
@@ -1752,6 +1697,96 @@ fn repeat_rows(ui: &mut Ui, t: &crate::theme::Tokens, f: &mut RepeatForm, week_s
 }
 
 /// A chevron pointing left (`back`) or right, centred on `c`.
+/// Where a month to choose a day from is drawn, and what it shows.
+pub(crate) struct Picker<'a> {
+    pub rect: Rect,
+    pub top: f32,
+    pub today: i64,
+    /// The day whose month it opens on.
+    pub chosen: i64,
+    /// The days marked as shown.
+    pub shown: &'a [i64],
+    pub week_start: u32,
+    /// Its widgets' ids are made from it, so two can stand in one window.
+    pub salt: &'static str,
+}
+
+/// What a month drawn came to: where it ends, and the day clicked.
+pub(crate) struct Picked {
+    pub bottom: f32,
+    pub day: Option<i64>,
+}
+
+/// A month to choose a day from, with chevrons to go to the month before and after, which
+/// `nav` keeps while it is not the chosen day's (the Calendar's date navigator, and the To-Do
+/// Bar's).
+pub(crate) fn month_picker(ui: &mut Ui, t: &crate::theme::Tokens, nav: &mut Option<(i64, u32)>, k: Picker<'_>) -> Picked {
+    let rect = k.rect;
+    let p = ui.painter_at(rect);
+    let (year, month) = nav.unwrap_or_else(|| {
+        let c = date_of(k.chosen);
+        (c.year, c.month)
+    });
+    let first = calendar::day_of(time::from_civil(year, month, 1, 0, 0, 0, 0), 0);
+    let grid = View::Month.days(first, k.week_start);
+    let top = k.top;
+    let title = format!("{} {}", date_of(first).month_name(), year);
+    p.text(pos2(rect.center().x, top + 10.0), Align2::CENTER_CENTER, &title, bold(13.0), t.text);
+    for (n, x) in [(-1i32, rect.left() + 22.0), (1, rect.right() - 22.0)] {
+        let r = Rect::from_center_size(pos2(x, top + 10.0), vec2(22.0, 22.0));
+        let resp = ui.interact(r, egui::Id::new((k.salt, "month", n)), Sense::click());
+        if resp.hovered() {
+            p.rect_filled(r, 3.0, t.hover);
+        }
+        chevron(&p, r.center(), n < 0, t.text_dim);
+        if resp.clicked() {
+            let (mut y, mut m) = (year, i64::from(month) + i64::from(n));
+            if m < 1 {
+                (y, m) = (y - 1, 12);
+            } else if m > 12 {
+                (y, m) = (y + 1, 1);
+            }
+            *nav = Some((y.clamp(1601, 9999), u32::try_from(m).unwrap_or(1)));
+        }
+    }
+    let cell = ((rect.width() - 20.0) / 7.0).min(30.0);
+    let x0 = rect.center().x - cell * 3.5;
+    let y0 = top + 30.0;
+    let week_start = usize::try_from(k.week_start % 7).unwrap_or(0);
+    for i in 0..7 {
+        let name = WEEKDAYS.get((week_start + i) % 7).copied().unwrap_or("");
+        let letter: String = name.chars().take(2).collect();
+        p.text(pos2(x0 + cell * (i as f32 + 0.5), y0 + 8.0), Align2::CENTER_CENTER, letter, font(11.0), t.text_faint);
+    }
+    let mut go: Option<i64> = None;
+    for (i, day) in grid.iter().enumerate() {
+        let (row, col) = (i / 7, i % 7);
+        let r = Rect::from_min_size(pos2(x0 + cell * col as f32, y0 + 18.0 + cell * row as f32), vec2(cell, cell));
+        let c = date_of(*day);
+        let in_month = c.month == month;
+        if k.shown.contains(day) {
+            p.rect_filled(r.shrink(1.0), 2.0, t.selected);
+        }
+        let resp = ui.interact(r, egui::Id::new((k.salt, "day", *day)), Sense::click());
+        if resp.hovered() {
+            p.rect_filled(r.shrink(1.0), 2.0, t.hover);
+        }
+        let color = if *day == k.today {
+            p.circle_filled(r.center(), cell * 0.42, t.accent);
+            t.on_accent
+        } else if in_month {
+            t.text
+        } else {
+            t.text_faint
+        };
+        p.text(r.center(), Align2::CENTER_CENTER, c.day.to_string(), if *day == k.today { bold(11.5) } else { font(11.5) }, color);
+        if resp.clicked() {
+            go = Some(*day);
+        }
+    }
+    Picked { bottom: y0 + 18.0 + cell * 6.0, day: go }
+}
+
 fn chevron(p: &Painter, c: egui::Pos2, back: bool, color: Color32) {
     let d = if back { -1.0 } else { 1.0 };
     let s = Stroke::new(1.6, color);

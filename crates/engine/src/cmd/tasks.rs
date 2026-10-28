@@ -307,7 +307,7 @@ fn writable(s: &Session, store: usize) -> bool {
 }
 
 fn has_rows(s: &Session) -> bool {
-    !s.tasks.rows.is_empty() || tasks_folder(s).is_some()
+    !s.tasks.rows.is_empty() || !s.todo.tasks.is_empty() || tasks_folder(s).is_some()
 }
 
 fn has_writable_store(s: &Session) -> bool {
@@ -397,7 +397,7 @@ impl Session {
 
     /// The rows `view` shows that `query` finds; how many tasks the folder has, how many of its
     /// items are not tasks, and how many flagged messages were left out.
-    fn task_rows(&mut self, view: View, query: &str) -> Result<(Vec<Row>, usize, usize, usize), EngineError> {
+    pub(crate) fn task_rows(&mut self, view: View, query: &str) -> Result<(Vec<Row>, usize, usize, usize), EngineError> {
         let zone = self.zone.clone();
         let today = self.today();
         let mut rows = Vec::new();

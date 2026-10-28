@@ -24,6 +24,7 @@ mod reminders;
 mod send;
 pub(crate) mod settings;
 pub mod tasks;
+pub mod todo_bar;
 mod update;
 mod view;
 
@@ -76,6 +77,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(meeting::commands());
         v.extend(caldav::commands());
         v.extend(reminders::commands());
+        v.extend(todo_bar::commands());
         v
     })
 }

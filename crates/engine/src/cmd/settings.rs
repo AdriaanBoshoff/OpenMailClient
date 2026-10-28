@@ -69,6 +69,8 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
             ReadingPane::Off => "off",
         },
         "folderPane": s.folder_pane,
+        "toDoBar": crate::cmd::todo_bar::MODULES.iter().zip(&s.todo_bar).map(|(m, p)| (m.name().to_ascii_lowercase(), p.to_json())).collect::<serde_json::Map<_, _>>(),
+        "favorites": s.favorites,
         "animations": s.animate,
         "keepOriginal": s.keep_original,
         "saveInPlace": s.save_in_place,
@@ -181,6 +183,39 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(v.is_boolean());
         if let Some(show) = v.as_bool() {
             s.folder_pane = show;
+        }
+    }
+    if let Some(v) = all.get("toDoBar") {
+        // Each module by itself: one that makes no sense does not cost the others.
+        let o = v.as_object();
+        took(o.is_some());
+        for (name, parts) in o.into_iter().flatten() {
+            let module = crate::Module::parse(name);
+            let read = crate::cmd::todo_bar::Parts::of_json(parts);
+            took(module.is_some() && read.is_some());
+            if let (Some(m), Some(p)) = (module, read)
+                && let Some(slot) = s.todo_bar.get_mut(crate::cmd::todo_bar::index(m))
+            {
+                *slot = p;
+            }
+        }
+    }
+    if let Some(v) = all.get("favorites") {
+        let list = v.as_array();
+        took(list.is_some());
+        let mut kept = Vec::new();
+        for a in list.into_iter().flatten() {
+            let read = a.as_str().and_then(crate::cmd::todo_bar::favorite_address);
+            took(read.is_some());
+            if let Some(a) = read
+                && !kept.contains(&a)
+                && kept.len() < crate::cmd::todo_bar::MAX_FAVORITES
+            {
+                kept.push(a);
+            }
+        }
+        if list.is_some() {
+            s.favorites = kept;
         }
     }
     if let Some(v) = all.get("animations") {

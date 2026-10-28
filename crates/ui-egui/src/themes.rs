@@ -17,10 +17,10 @@ use egui::{Color32, Rect, Sense, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-/// The Themes window: which set is being changed, and the colour codes being typed.
+/// The Themes window: the colour codes being typed. The set it changes is always the one the
+/// window shows, so what is changed is seen at once.
 #[derive(Default)]
 pub(crate) struct ThemesWindow {
-    pub dark: bool,
     /// The name being typed for the theme, while its field has the keyboard.
     pub name: String,
     pub hex: HashMap<String, String>,
@@ -111,7 +111,7 @@ impl MailUi {
         match id {
             "ui.themes" => {
                 let open = params.get("open").and_then(Value::as_bool).unwrap_or(self.themes_window.is_none());
-                self.themes_window = open.then(|| ThemesWindow { dark, ..ThemesWindow::default() });
+                self.themes_window = open.then(ThemesWindow::default);
             }
             "ui.useTheme" => {
                 let name = text("name").ok_or("\"name\" is missing")?;
@@ -243,7 +243,8 @@ impl MailUi {
         let t = self.tokens.clone();
         let all = self.all_themes();
         let current = self.current_theme();
-        let editing = current.tokens(window.dark);
+        let editing_dark = t.dark;
+        let editing = current.tokens(editing_dark);
         let mut run: Vec<(&'static str, Value)> = Vec::new();
         let mut close = false;
         let shown = Dialog::new("themes", "Themes", Icon::Palette).width(760.0).show(ctx, &t, |ui| {
@@ -321,22 +322,23 @@ impl MailUi {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Changing").color(t.text_dim));
+                        // Changing a set shows it, as Show does: a change is never made out of sight.
                         for (label, dark) in [("Light set", false), ("Dark set", true)] {
-                            if ui.selectable_label(window.dark == dark, label).clicked() {
-                                window.dark = dark;
+                            if ui.selectable_label(editing_dark == dark, label).clicked() && editing_dark != dark {
+                                run.push(("ui.theme", json!({ "theme": if dark { "dark" } else { "light" } })));
                             }
                         }
                     });
                     ui.add_space(6.0);
                     preview(ui, &editing, &current.name);
                     ui.add_space(8.0);
-                    let mode = if window.dark { "dark" } else { "light" };
+                    let mode = if editing_dark { "dark" } else { "light" };
                     ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("Accent").color(t.text_dim)).on_hover_text("The colours that go with it follow");
                         for (r, g, b) in ACCENTS {
                             let base = Color32::from_rgb(r, g, b);
                             // The dark set takes a lighter one of each, to stand out on it.
-                            let c = if window.dark { theme::mix(base, Color32::WHITE, 0.45) } else { base };
+                            let c = if editing_dark { theme::mix(base, Color32::WHITE, 0.45) } else { base };
                             let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                             let on = editing.accent == c;
                             ui.painter().circle_filled(rect.center(), 10.0, c);
@@ -381,7 +383,7 @@ impl MailUi {
                                 {
                                     run.push(("ui.themeColor", json!({ "mode": mode, "color": key, "value": theme::hex(c) })));
                                 }
-                                let changed = current.changes(window.dark).contains_key(key) && !current.built_in;
+                                let changed = current.changes(editing_dark).contains_key(key) && !current.built_in;
                                 if ui
                                     .add_enabled(changed, egui::Button::new("Undo").small())
                                     .on_hover_text("Back to the colour the theme started from")

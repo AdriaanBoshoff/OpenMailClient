@@ -62,7 +62,14 @@ fn human_size(bytes: usize) -> String {
 impl MailUi {
     pub(crate) fn body(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
-        let rest = rect;
+        // The To-Do Bar stands at the right of whichever module is shown, when it shows a part.
+        let rest = if self.session.todo_bar_parts().any() && rect.width() > 2.0 * crate::todo_bar::WIDTH {
+            let w = crate::todo_bar::WIDTH;
+            self.todo_bar(ui, Rect::from_min_max(pos2(rect.right() - w, rect.top()), rect.max));
+            Rect::from_min_max(rect.min, pos2(rect.right() - w, rect.bottom()))
+        } else {
+            rect
+        };
         if self.session.module == Module::Calendar {
             self.calendar_body(ui, rest);
             return;

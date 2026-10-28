@@ -106,18 +106,8 @@ pub(crate) fn quick_task(text: &str, today: i64) -> Value {
 }
 
 /// The heading a task stands under on the To-Do List, by when it is due.
-pub(crate) fn heading(t: &Task, today: i64) -> &'static str {
-    let weekday = today.saturating_add(3).rem_euclid(7);
-    let sunday = today.saturating_add(6 - weekday);
-    match t.due {
-        None => "No Date",
-        Some(d) if d < today => "Overdue",
-        Some(d) if d == today => "Today",
-        Some(d) if d == today.saturating_add(1) => "Tomorrow",
-        Some(d) if d <= sunday => "This Week",
-        Some(d) if d <= sunday.saturating_add(7) => "Next Week",
-        Some(_) => "Later",
-    }
+pub(crate) fn heading(t: &Task, today: i64, week_start: u32) -> &'static str {
+    openmailclient_engine::cmd::todo_bar::heading(t.due, today, week_start)
 }
 
 /// How long there is left, or how late it is, said as Outlook's info bar says it.
@@ -280,10 +270,22 @@ impl MailUi {
         };
         match wanted {
             Some(key) => {
-                let row = self.session.tasks.rows.iter().find(|r| r.key() == key).cloned().ok_or("That task is not shown")?;
+                // Shown in the Tasks module, or on the To-Do Bar beside any module.
+                let listed = self.session.tasks.rows.iter().any(|r| r.key() == key);
+                let row = self
+                    .session
+                    .tasks
+                    .rows
+                    .iter()
+                    .chain(&self.session.todo.tasks)
+                    .find(|r| r.key() == key)
+                    .cloned()
+                    .ok_or("That task is not shown")?;
                 let reminder = row.task.reminder.map(|r| self.local_stamp(r)).unwrap_or_default();
                 self.task = Some(TaskForm::of(key, &row.task, reminder, today));
-                self.act("tasks.select", key_json(key));
+                if listed {
+                    self.act("tasks.select", key_json(key));
+                }
             }
             None if self.session.is_enabled("tasks.new") => self.task = Some(TaskForm::new(today)),
             None => return Err("No data file open can be written".to_string()),
@@ -527,8 +529,9 @@ impl MailUi {
         if view == View::ToDoList {
             let mut at = 0;
             while at < rows.len() {
-                let name = rows.get(at).map_or("", |r| heading(&r.task, today));
-                let count = rows.get(at..).unwrap_or(&[]).iter().take_while(|r| heading(&r.task, today) == name).count();
+                let week_start = self.session.region.week_start;
+                let name = rows.get(at).map_or("", |r| heading(&r.task, today, week_start));
+                let count = rows.get(at..).unwrap_or(&[]).iter().take_while(|r| heading(&r.task, today, week_start) == name).count();
                 lines.push(Line::Head(name, count));
                 lines.extend((at..at + count).map(Line::Row));
                 at += count.max(1);

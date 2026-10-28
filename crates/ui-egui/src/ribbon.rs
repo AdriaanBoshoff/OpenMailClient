@@ -230,7 +230,14 @@ const FOLDER: &[Group] = &[
 
 const VIEW: &[Group] = &[
     ("Arrangement", &[small(Icon::Sort, "Arrange By", "menu:arrange"), small(Icon::Swap, "Reverse Sort", "view.reverseSort")]),
-    ("Layout", &[small(Icon::Sidebar, "Folder Pane", "view.folderPane"), small(Icon::Panes, "Reading Pane", "menu:reading")]),
+    (
+        "Layout",
+        &[
+            small(Icon::Sidebar, "Folder Pane", "view.folderPane"),
+            small(Icon::Panes, "Reading Pane", "menu:reading"),
+            small(Icon::Tasks, "To-Do Bar", "menu:todobar"),
+        ],
+    ),
     ("Message", &[small(Icon::Info, "Properties", "mail.properties"), small(Icon::MailOpen, "Plain Text", "ui.bodyFormat")]),
     (
         "Window",
@@ -556,6 +563,16 @@ impl MailUi {
                     ..item(label, "view.readingPane", json!({ "position": position }))
                 })
                 .collect(),
+            Menu::TodoBar => {
+                let shown = s.todo_bar_parts();
+                let mut items: Vec<MenuItem> =
+                    [("Calendar", "calendar", shown.calendar), ("People", "people", shown.people), ("Tasks", "tasks", shown.tasks)]
+                        .into_iter()
+                        .map(|(label, part, on)| MenuItem { checked: on, ..item(label, "view.todoBar", json!({ "part": part, "show": !on })) })
+                        .collect();
+                items.push(MenuItem { checked: !shown.any(), ..item("Off", "view.todoBar", json!({ "part": "off" })) });
+                items
+            }
         }
     }
 

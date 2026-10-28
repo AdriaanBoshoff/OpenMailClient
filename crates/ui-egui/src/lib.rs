@@ -30,6 +30,7 @@ mod ribbon;
 mod tasks;
 pub mod theme;
 mod themes;
+mod todo_bar;
 mod updates;
 
 use egui::text::{LayoutJob, TextWrapping};
@@ -183,7 +184,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand {
         id: "ui.menu",
         label: "Open Menu",
-        params: r#"{"menu": "categorize" | "followup" | "move" | "arrange" | "reading", "x": px, "y": px}"#,
+        params: r#"{"menu": "categorize" | "followup" | "move" | "arrange" | "reading" | "groups" | "todobar", "x": px, "y": px}"#,
     },
     UiCommand { id: "ui.ribbonMode", label: "Simplified Ribbon", params: r#"{"mode": "classic" | "simplified"}; none switches"# },
     UiCommand {
@@ -306,6 +307,7 @@ pub(crate) enum Menu {
     Arrange,
     Reading,
     Groups,
+    TodoBar,
 }
 
 /// A link the person is being asked about.
@@ -437,6 +439,10 @@ pub struct MailUi {
     pub(crate) task: Option<tasks::TaskForm>,
     pub(crate) tasks_query: String,
     pub(crate) tasks_add: String,
+    /// The To-Do Bar's month, while another than today's is shown, and what is typed in it.
+    pub(crate) todo_nav: Option<(i64, u32)>,
+    pub(crate) todo_add: String,
+    pub(crate) todo_person: String,
     pub(crate) tasks_search_focus: bool,
     pub(crate) tasks_scroll: bool,
     /// The bar above the open meeting message, by the message it was worked out for.
@@ -675,6 +681,9 @@ impl MailUi {
             task: None,
             tasks_query: String::new(),
             tasks_add: String::new(),
+            todo_nav: None,
+            todo_add: String::new(),
+            todo_person: String::new(),
             tasks_search_focus: false,
             tasks_scroll: false,
             invitation: None,
@@ -1014,7 +1023,14 @@ impl MailUi {
                         None if self.session.calendar.selected == Some(id) => self.session.calendar.occurrence,
                         None => None,
                     };
-                    if !self.session.calendar.items.iter().any(|(i, a)| *i == id && (occurrence.is_none() || a.occurrence == occurrence)) {
+                    if !self
+                        .session
+                        .calendar
+                        .items
+                        .iter()
+                        .chain(&self.session.todo.appointments)
+                        .any(|(i, a)| *i == id && (occurrence.is_none() || a.occurrence == occurrence))
+                    {
                         return Err("That appointment is not among those shown".to_string());
                     }
                     self.open_appointment(id, occurrence);
@@ -1088,6 +1104,7 @@ impl MailUi {
                     Some("arrange") => Menu::Arrange,
                     Some("reading") => Menu::Reading,
                     Some("groups") => Menu::Groups,
+                    Some("todobar") => Menu::TodoBar,
                     _ => return Err("unknown menu".to_string()),
                 };
                 let coord = |key: &str| params.get(key).and_then(Value::as_f64).map_or(100.0, |v| v.clamp(0.0, 20_000.0) as f32);

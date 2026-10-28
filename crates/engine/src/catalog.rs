@@ -79,7 +79,7 @@ pub const FEATURES: &[Feature] = &[
     f("Mail", "View", "Arrangement", "Message Preview", ""),
     f("Mail", "View", "Layout", "Folder Pane", "view.folderPane"),
     f("Mail", "View", "Layout", "Reading Pane", "view.readingPane"),
-    f("Mail", "View", "Layout", "To-Do Bar", ""),
+    f("Mail", "View", "Layout", "To-Do Bar", "view.todoBar"),
     f("Mail", "View", "Window", "Reminders Window", "view.reminders"),
     f("Mail", "View", "Window", "Open in New Window", ""),
     // Mail: search and navigation

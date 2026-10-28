@@ -3352,3 +3352,59 @@ fn mail_merge_previews_the_messages_as_the_text_is_written() {
     let mut empty = MailUi::new(Session::new());
     assert!(empty.execute("ui.mailMerge", &Value::Null).is_err());
 }
+
+#[test]
+fn the_set_changed_in_the_themes_window_is_the_one_the_window_shows() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::builder()
+        .with_size((1280.0, 800.0))
+        .build_ui_state(|ui, app: &mut MailUi| app.ui(ui), MailUi::new(Session::with_sample()));
+    h.run_steps(3);
+    h.state_mut().execute("ui.themes", &json!({ "open": true })).unwrap();
+    h.run_steps(8);
+    assert!(!h.state().tokens.dark);
+    // Changing the dark set shows it, so a change is seen as it is made.
+    h.get_by_label("Dark set").click();
+    h.run_steps(2);
+    assert!(h.state().tokens.dark, "the window is drawn with the set being changed");
+    let editing = h.state().tokens.clone();
+    h.state_mut().execute("ui.newTheme", &json!({ "name": "Mine" })).unwrap();
+    h.state_mut().execute("ui.themeColor", &json!({ "color": "accent", "value": "#AA2200" })).unwrap();
+    assert_eq!(h.state().tokens.accent, egui::Color32::from_rgb(0xAA, 0x22, 0x00), "the dark set was changed, and shows");
+    assert_ne!(h.state().tokens.accent, editing.accent);
+    // And Show, Light changes the light set again.
+    h.run_steps(2);
+    h.get_by_label("Light").click();
+    h.run_steps(2);
+    assert!(!h.state().tokens.dark);
+    h.get_by_label("Light set").click();
+    h.run_steps(2);
+    assert!(!h.state().tokens.dark, "choosing the set already shown changes nothing");
+}
+
+#[test]
+fn what_the_to_do_bar_shows_is_opened_from_it_in_any_module() {
+    let mut h = egui_kittest::Harness::builder()
+        .with_size((1400.0, 860.0))
+        .build_ui_state(|ui, app: &mut MailUi| app.ui(ui), MailUi::new(Session::with_sample()));
+    h.run_steps(2);
+    assert!(h.state().session.todo.tasks.is_empty(), "nothing is read while the bar is not shown");
+    h.state_mut().execute("view.todoBar", &json!({ "part": "calendar" })).unwrap();
+    h.state_mut().execute("view.todoBar", &json!({ "part": "tasks" })).unwrap();
+    h.state_mut().execute("ui.menu", &json!({ "menu": "todobar" })).unwrap();
+    h.run_steps(3);
+    let s = &h.state().session;
+    assert_eq!(s.module, openmailclient_engine::Module::Mail);
+    // A recurring one's occurrence, opened alone, in Mail with the Calendar never shown.
+    let (id, a) = s.todo.appointments.iter().find(|(_, a)| a.occurrence.is_some()).cloned().expect("an occurrence is coming up");
+    let day = a.occurrence.unwrap();
+    let c = openmailclient_model::time::civil(openmailclient_model::time::from_unix(day * 86_400), 0);
+    let on = format!("{:04}-{:02}-{:02}", c.year, c.month, c.day);
+    let key = s.todo.tasks.first().map(|r| r.key()).unwrap();
+    h.state_mut().execute("ui.appointment", &json!({ "id": id, "occurrence": on })).unwrap();
+    assert_eq!(h.state().appointment.as_ref().map(|f| f.subject.clone()), Some(a.subject.clone()));
+    h.state_mut().appointment = None;
+    h.state_mut().execute("ui.task", &json!({ "id": key.2, "store": key.0, "folder": key.1.0 })).unwrap();
+    assert!(h.state().task.is_some(), "a task on the bar opens though the Tasks module was never shown");
+    h.run_steps(2);
+}

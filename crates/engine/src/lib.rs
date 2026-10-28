@@ -66,6 +66,8 @@ mod tests_sync;
 #[cfg(test)]
 mod tests_tasks;
 #[cfg(test)]
+mod tests_todo_bar;
+#[cfg(test)]
 mod tests_update;
 pub mod undo;
 pub mod update;
@@ -430,6 +432,12 @@ pub struct Session {
     pub people: cmd::people::Shown,
     /// What the Tasks module shows.
     pub tasks: cmd::tasks::Shown,
+    /// The parts of the To-Do Bar each module shows, in `cmd::todo_bar::MODULES` order.
+    pub todo_bar: [cmd::todo_bar::Parts; 4],
+    /// What the To-Do Bar shows (`Session::todo_bar_due`).
+    pub todo: cmd::todo_bar::Shown,
+    /// The addresses marked as favourites, in lower case, in the order they were marked.
+    pub favorites: Vec<String>,
     /// Where updates of the program stand (`help.checkForUpdates`).
     pub update: update::Updates,
     /// A folder of the program's own where updates are brought down. Set by the host; `None`
@@ -525,6 +533,9 @@ impl Session {
             calendar: cmd::calendar::Shown::default(),
             people: cmd::people::Shown::default(),
             tasks: cmd::tasks::Shown::default(),
+            todo_bar: [cmd::todo_bar::Parts::default(); 4],
+            todo: cmd::todo_bar::Shown::default(),
+            favorites: Vec::new(),
             update: update::Updates::new(),
             update_dir: None,
             certificates: accounts::Shown::default(),

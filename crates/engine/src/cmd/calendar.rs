@@ -406,7 +406,7 @@ pub(super) fn day_text(day: i64) -> String {
     format!("{:04}-{:02}-{:02}", c.year, c.month, c.day)
 }
 
-fn appointment_json(s: &Session, id: u64, a: &Appointment) -> Value {
+pub(super) fn appointment_json(s: &Session, id: u64, a: &Appointment) -> Value {
     let changed = a.occurrence.is_some_and(|d| a.recurrence.as_ref().is_some_and(|r| r.exception_on(d).is_some()));
     json!({
         "id": id,
