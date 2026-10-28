@@ -80,6 +80,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -f "$bin/openmailclient" "$bin/openmailclient-cli" "$data/applications/openmailclient.desktop" "$data/icons/hicolor/256x256/apps/openmailclient.png"
     rm -rf "$lib"
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$data/applications" || true
+    [ -f "$data/icons/hicolor/icon-theme.cache" ] && command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$data/icons/hicolor" || true
     echo "OpenMailClient is uninstalled; your mail and settings are where they were."
     exit 0
 fi
