@@ -65,6 +65,37 @@ fn verb(r: &str) -> &'static str {
     }
 }
 
+/// The longest comment the window takes; the command cuts it to its own limit too.
+const MAX_COMMENT: usize = 10_000;
+
+/// An answer to the open invitation being written: which, with what words, and whether it is
+/// sent. Beyond Outlook, the answer can still be changed here, and whether it goes is chosen
+/// in the same window instead of in a menu before it.
+#[derive(Clone, Debug)]
+pub(crate) struct Answer {
+    /// "accept", "tentative" or "decline".
+    pub response: &'static str,
+    pub comment: String,
+    pub send: bool,
+    /// The invitation it answers, known by `answer_key`, so that one opened meanwhile is not
+    /// answered in its place.
+    pub of: String,
+    pub subject: String,
+    pub error: String,
+}
+
+impl MailUi {
+    /// What names the open invitation, to know it again: the message's Message-ID, subject and
+    /// date, and the meeting's UID and sequence, any of which a stranger may give two alike.
+    fn answer_key(&mut self) -> Option<String> {
+        let item = self.session.open.as_ref()?;
+        let head = format!("{}|{}|{}", item.props.str(pid::INTERNET_MESSAGE_ID).unwrap_or_default(), item.subject(), item.time());
+        let v = self.session.run("calendar.invitation", &Value::Null).ok()?;
+        let said = &v["untrusted_content"];
+        Some(format!("{head}|{}|{}", said["uid"].as_str().unwrap_or_default(), said["sequence"]))
+    }
+}
+
 /// The bar above a meeting's message, worked out once for each message shown.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Bar {
@@ -202,6 +233,88 @@ impl MailUi {
         }
     }
 
+    /// `ui.answerInvitation`: the window that answers the open invitation with a comment.
+    pub(crate) fn answer_invitation(&mut self, params: &Value) -> Result<(), String> {
+        let response = match params.get("response").and_then(Value::as_str) {
+            Some("accept") => "accept",
+            Some("tentative") => "tentative",
+            Some("decline") => "decline",
+            _ => return Err(r#""response" is "accept", "tentative" or "decline""#.to_string()),
+        };
+        if !self.meeting_bar().is_some_and(|b| b.answers) {
+            return Err("The message open is not an invitation that can be answered".to_string());
+        }
+        let of = self.answer_key().ok_or("No invitation is open")?;
+        let subject = self.session.open.as_ref().map(|i| crate::one_line(&i.subject()).chars().take(200).collect()).unwrap_or_default();
+        self.answer = Some(Answer { response, comment: String::new(), send: true, of, subject, error: String::new() });
+        Ok(())
+    }
+
+    pub(crate) fn answer_window(&mut self, ctx: &egui::Context) {
+        let Some(mut a) = self.answer.clone() else { return };
+        let t = self.tokens.clone();
+        let mut go = false;
+        let mut close = false;
+        let title = match a.response {
+            "accept" => "Accept",
+            "tentative" => "Tentative",
+            _ => "Decline",
+        };
+        let shown = crate::dialog::Dialog::new("answer-invitation", title, crate::icons::Icon::NewMeeting).width(460.0).show(ctx, &t, |ui| {
+            ui.label(egui::RichText::new(&a.subject).font(crate::bold(13.0)).color(t.text));
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut a.response, "accept", "Accept");
+                ui.radio_value(&mut a.response, "tentative", "Tentative");
+                ui.radio_value(&mut a.response, "decline", "Decline");
+            });
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("A few words to the organizer").font(crate::font(12.5)).color(t.text_dim));
+            ui.add_enabled(
+                a.send,
+                egui::TextEdit::multiline(&mut a.comment)
+                    .id(egui::Id::new("answer-comment"))
+                    .desired_rows(5)
+                    .desired_width(f32::INFINITY)
+                    .char_limit(MAX_COMMENT),
+            );
+            if !a.error.is_empty() {
+                crate::dialog::callout(ui, &t, t.danger, |ui| {
+                    ui.label(egui::RichText::new(&a.error).font(crate::font(12.5)).color(t.text));
+                });
+            }
+            crate::dialog::foot(ui, &t, |ui| {
+                ui.checkbox(&mut a.send, "Send the answer").on_hover_text("Unticked, your calendar is changed and the organizer is not told");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(crate::dialog::plain("Cancel")).clicked() {
+                        close = true;
+                    }
+                    if ui.add(crate::dialog::primary(&t, if a.send { "Send" } else { "Answer" })).clicked() {
+                        go = true;
+                    }
+                });
+            });
+        });
+        if go {
+            a.error = self.send_answer(&a).err().unwrap_or_default();
+            close |= a.error.is_empty();
+        }
+        self.answer = if shown.closed || close { None } else { Some(a) };
+    }
+
+    /// The answer written given, to the invitation it was written for only.
+    pub(crate) fn send_answer(&mut self, a: &Answer) -> Result<(), String> {
+        if self.answer_key().as_deref() != Some(a.of.as_str()) {
+            return Err("The invitation is no longer open: open it again to answer it".to_string());
+        }
+        let mut p = json!({ "response": a.response, "send": a.send });
+        if a.send && !a.comment.trim().is_empty() {
+            p["comment"] = json!(a.comment);
+        }
+        self.session.run("calendar.respond", &p).map_err(|e| e.to_string())?;
+        self.invitation = None;
+        Ok(())
+    }
+
     /// The bar drawn: its words, and what it offers, as commands to run.
     pub(crate) fn meeting_bar_ui(&self, ui: &mut egui::Ui, bar: &Bar, acts: &mut Vec<(&'static str, Value)>) {
         let t = &self.tokens;
@@ -217,11 +330,17 @@ impl MailUi {
                         ("Tentative", "tentative", "Put it in your calendar as tentative and tell the organizer"),
                         ("Decline", "decline", "Tell the organizer you will not come; it stays out of your calendar"),
                     ] {
-                        let r = ui.add(crate::dialog::plain(label)).on_hover_text(hint);
-                        if r.clicked() {
-                            acts.push(("calendar.respond", json!({ "response": response })));
-                        }
-                        r.context_menu(|ui| {
+                        // As Outlook asks: a comment first, the answer at once, or no answer
+                        // sent, on a click or a right-click alike.
+                        // Room at the right for a chevron drawn in, as the ribbon's menus have.
+                        let r = ui.add(crate::dialog::plain(&format!("{label}    "))).on_hover_text(hint);
+                        let at = egui::Rect::from_center_size(egui::pos2(r.rect.right() - 13.0, r.rect.center().y), egui::vec2(9.0, 9.0));
+                        crate::icons::paint(ui.painter(), at, crate::icons::Icon::ChevronDown, self.tokens.text_dim);
+                        let choices = |ui: &mut egui::Ui, acts: &mut Vec<(&'static str, Value)>| {
+                            if ui.button("Edit the Response before Sending…").clicked() {
+                                acts.push(("ui.answerInvitation", json!({ "response": response })));
+                                ui.close();
+                            }
                             if ui.button("Send the Response Now").clicked() {
                                 acts.push(("calendar.respond", json!({ "response": response })));
                                 ui.close();
@@ -230,7 +349,11 @@ impl MailUi {
                                 acts.push(("calendar.respond", json!({ "response": response, "send": false })));
                                 ui.close();
                             }
-                        });
+                        };
+                        // One menu for both buttons: egui's own context menu shares its place
+                        // and would shut it on the click that opened it.
+                        let toggle = (r.clicked() || r.secondary_clicked()).then_some(egui::SetOpenCommand::Toggle);
+                        egui::Popup::menu(&r).open_memory(toggle).show(|ui| choices(ui, acts));
                     }
                 }
                 if let Some(id) = bar.remove

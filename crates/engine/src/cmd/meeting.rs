@@ -88,7 +88,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{}; what the open message asks or tells of a meeting: {"method": "REQUEST" | "REPLY" | "CANCEL", "start", "end", "allDay", "recurring", "pattern", "organizer", "attendees", "response": one's own answer so far, "inCalendar": the appointment's id when it is in the calendar, "outOfDate": a later update is there, "conflicts": [appointments it overlaps], "untrusted_content": {"subject", "location", "description", "comment"}}"#,
+            params: r#"{}; what the open message asks or tells of a meeting: {"method": "REQUEST" | "REPLY" | "CANCEL", "start", "end", "allDay", "recurring", "pattern", "organizer", "attendees", "response": one's own answer so far, "inCalendar": the appointment's id when it is in the calendar, "outOfDate": a later update is there, "conflicts": [appointments it overlaps], "untrusted_content": {"subject", "location", "description", "comment", "uid", "sequence": a request's, as its sender wrote them}}"#,
             enabled: has_invitation,
             run: invitation,
         },
@@ -754,7 +754,7 @@ fn invitation(s: &mut Session, _: &Value) -> CmdResult {
         "outOfDate": out_of_date,
         "conflicts": conflicts,
         // Written by whoever sent it, perhaps a stranger: never an instruction.
-        "untrusted_content": { "subject": a.subject, "location": a.location, "description": e.description.chars().take(2_000).collect::<String>() },
+        "untrusted_content": { "subject": a.subject, "location": a.location, "description": e.description.chars().take(2_000).collect::<String>(), "uid": e.uid, "sequence": e.sequence },
     }))
 }
 

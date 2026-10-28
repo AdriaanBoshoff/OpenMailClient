@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 134 · 2026-10-28
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 135 · 2026-10-28
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 90 of 134 (67%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 710, all passing |
+| Tests | 712, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command, for published account settings and for updates |
@@ -184,7 +184,7 @@
 | ~~M5.9~~ | done: Tasks: tasks and flagged mail on the To-Do List, in Outlook's views; due dates, status, work and reminders kept as Outlook keeps them ([MS-OXOTASK], [MS-OXOFLAG]); a task added by typing it |
 | ~~M5.10~~ | done: reminders for appointments, tasks and flagged mail in a window of their own, dismissed and snoozed as Outlook writes them ([MS-OXORMDR]) |
 | ~~M5.11~~ | done: CardDAV (RFC 6352), the Address Book and Check Names, Mail Merge; to-dos in calendar files (RFC 5545 3.6.2); CalDAV task lists moved to M5.12 |
-| M5.12 | M5's do-later batch: CalDAV task lists (done), the To-Do Bar (done), what the contact and invitation windows still lack, themes in files, zone history, what more is brought from Outlook, and what reminders left |
+| M5.12 | M5's do-later batch: CalDAV task lists (done), the To-Do Bar (done), an invitation answered with a comment or without telling (done), what the contact and invitation windows still lack, themes in files, zone history, what more is brought from Outlook, and what reminders left |
 
 ## Do later (from M2)
 
@@ -304,7 +304,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | A reminder of its own on one occurrence changed alone ([MS-OXOCAL] 2.2.1.44.2, an exception's ReminderSet and ReminderDelta) and the Reminders search folder Outlook keeps in a data file; reminders checked against Outlook's on a file of ours | M5.12, the last with M1's checks against Outlook |
 | Assign Task and task requests ([MS-OXOTASK] 2.2.4), and a task's recurrence made and changed in its window (recurring tasks are read and shown already) | after M5.10, with the Scheduling Assistant |
 | The Scheduling Assistant: attendees' free and busy times side by side, from a CalDAV server's free-busy (RFC 6638) and the data file | after M5.10, with CalDAV scheduling |
-| A comment written with an answer to an invitation, and an answer sent without one ("Do not send a response") chosen in the window | M5.12 (both are commands already: `calendar.respond` takes "comment" and "send") |
+| ~~A comment written with an answer to an invitation, and an answer sent without one ("Do not send a response") chosen in the window~~ | done: M5.12 |
 | Zones whose rules changed over the years kept with each year's rules, and zones that follow another calendar beyond their current year | M5.12 |
 | A meeting of ours and a time zone of ours checked in Outlook (opened from a data file, an invitation read) | with M1's checks against Outlook |
 | Signatures, rules and the AutoComplete list brought from Outlook; a POP3 account's own "leave a copy on the server" setting read (kept on until then); Outlook 2010's profile place | M5.12, after People (the AutoComplete list) and rules |
@@ -2549,3 +2549,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   Also fixed: in the Themes window, choosing the dark set changed it without showing it, and
   Show > Dark left the light set being changed; the set being changed is now always the one
   shown. Do later: tasks dragged to the Calendar, a favourite's recent mail. 8 tests.
+- **2026-10-28** - M5.12: an invitation answered with a comment, or without telling.
+  Accept, Tentative and Decline above an invitation each open a menu on a click, as Outlook's
+  do: Edit the Response before Sending, Send the Response Now, or Do Not Send a Response. The
+  first opens a window with a few words to the organizer, sent in the answer's text and its
+  COMMENT (`ui.answerInvitation`, then `calendar.respond`). Better than Outlook: the answer can
+  still be changed in that window, and whether it is sent is a tick there instead of a choice
+  made before it; an answer is given only to the invitation it was written for, known by its
+  Message-ID, date and the meeting's UID and sequence, so one opened meanwhile is never
+  answered in its place (`calendar.invitation` now gives the UID and sequence, under
+  `untrusted_content`). Also fixed: right-click and click shared one menu's place in egui, so
+  the right-click menu shut the other on the click that opened it. 2 tests.

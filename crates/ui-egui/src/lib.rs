@@ -171,6 +171,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         params: r#"{} opens the window on a meeting in reply to the open message: its sender and those it went to asked, those it was copied to as optional, oneself left out, at the next whole hour; nothing is kept until it is sent or saved"#,
     },
     UiCommand {
+        id: "ui.answerInvitation",
+        label: "Edit the Response before Sending",
+        params: r#"{"response": "accept" | "tentative" | "decline"}; opens the window that answers the open invitation with a comment, and sends the answer or keeps it unsent; nothing is answered until it is sent"#,
+    },
+    UiCommand {
         id: "ui.timeZones",
         label: "Time Zones…",
         params: r#"{"open": true or false (default: the other way)}; the window that chooses the zone dates are shown in (calendar.timeZone) and a second one whose hours the Calendar shows (calendar.secondTimeZone)"#,
@@ -447,6 +452,8 @@ pub struct MailUi {
     pub(crate) tasks_scroll: bool,
     /// The bar above the open meeting message, by the message it was worked out for.
     pub(crate) invitation: Option<(String, Option<meeting::Bar>)>,
+    /// The answer to an invitation being written, with its comment, before it goes.
+    pub(crate) answer: Option<meeting::Answer>,
 }
 
 pub(crate) fn font(size: f32) -> FontId {
@@ -687,6 +694,7 @@ impl MailUi {
             tasks_search_focus: false,
             tasks_scroll: false,
             invitation: None,
+            answer: None,
         }
     }
 
@@ -1045,6 +1053,7 @@ impl MailUi {
                 self.new_meeting();
             }
             "ui.replyWithMeeting" => self.reply_with_meeting()?,
+            "ui.answerInvitation" => self.answer_invitation(params)?,
             "ui.timeZones" => {
                 self.time_zones_open = match params.get("open") {
                     None | Some(Value::Null) => !self.time_zones_open,
@@ -1299,6 +1308,7 @@ impl MailUi {
         self.reminders_window(&ctx);
         self.address_book_window(&ctx);
         self.mail_merge_window(&ctx);
+        self.answer_window(&ctx);
         self.updates_window(&ctx);
         self.time_zones_window(&ctx);
         self.alert_window(&ctx);

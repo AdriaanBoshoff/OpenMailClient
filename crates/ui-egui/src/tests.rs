@@ -3408,3 +3408,71 @@ fn what_the_to_do_bar_shows_is_opened_from_it_in_any_module() {
     assert!(h.state().task.is_some(), "a task on the bar opens though the Tasks module was never shown");
     h.run_steps(2);
 }
+
+#[test]
+fn an_invitation_is_answered_with_a_comment_or_without_telling_and_only_the_one_open() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.user_email = "pat@example.test".to_string();
+    let outbox = |ui: &mut MailUi| {
+        ui.execute("folder.select", &json!({ "folder": "Outbox" })).unwrap();
+        ui.session.rows.len()
+    };
+    let before = outbox(&mut ui);
+    assert!(ui.execute("ui.answerInvitation", &json!({ "response": "accept" })).is_err(), "nothing open");
+    let event = "UID:review-2@example.test\r\nDTSTART:20261007T090000Z\r\nDTEND:20261007T100000Z\r\nSUMMARY:Quarterly review\r\nORGANIZER;CN=Sam Reyes:mailto:sam@example.test\r\nATTENDEE;RSVP=TRUE:mailto:pat@example.test\r\nSEQUENCE:0";
+    ui.session.open = Some(meeting_message("Sam Reyes <sam@example.test>", "REQUEST", event));
+    for junk in [json!({}), json!({ "response": "maybe" }), json!({ "response": 3 }), json!(null)] {
+        assert!(ui.execute("ui.answerInvitation", &junk).is_err(), "{junk}");
+    }
+    ui.execute("ui.answerInvitation", &json!({ "response": "tentative" })).unwrap();
+    let mut a = ui.answer.clone().unwrap();
+    assert_eq!((a.response, a.send, a.subject.as_str()), ("tentative", true, "Quarterly review"));
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    draw_window(&mut ui, egui::vec2(320.0, 240.0));
+    assert!(ui.answer.is_some(), "the window stays open until it is sent or closed");
+
+    // Another message opened meanwhile is not answered in its place.
+    let other = "UID:other@example.test\r\nDTSTART:20261008T090000Z\r\nSUMMARY:Other\r\nORGANIZER:mailto:sam@example.test\r\nATTENDEE;RSVP=TRUE:mailto:pat@example.test";
+    let kept = ui.session.open.replace(meeting_message("Sam Reyes <sam@example.test>", "REQUEST", other));
+    assert!(ui.send_answer(&a).unwrap_err().contains("no longer open"));
+    ui.session.open = kept;
+
+    // Answered without telling: in the calendar, and nothing put in the Outbox.
+    a.response = "accept";
+    a.send = false;
+    a.comment = "Not sent, as it is not told".to_string();
+    ui.send_answer(&a).unwrap();
+    let items = ui.session.run("calendar.items", &json!({ "from": "2026-10-07", "to": "2026-10-08" })).unwrap();
+    assert!(items["items"].as_array().unwrap().iter().any(|i| i["untrusted_content"]["subject"] == "Quarterly review"), "{items}");
+    assert_eq!(outbox(&mut ui), before, "nothing was sent");
+
+    // Answered with a comment: the answer waits in the Outbox with the words in it.
+    ui.session.open = Some(meeting_message("Sam Reyes <sam@example.test>", "REQUEST", other));
+    ui.execute("ui.answerInvitation", &json!({ "response": "decline" })).unwrap();
+    let mut a = ui.answer.clone().unwrap();
+    a.comment = "Away that week, sorry".to_string();
+    ui.send_answer(&a).unwrap();
+    assert_eq!(outbox(&mut ui), before + 1);
+    let at = ui.session.rows.iter().position(|r| r.subject.contains("Other")).unwrap();
+    ui.execute("mail.select", &json!({ "index": at })).unwrap();
+    let open = ui.session.open.as_ref().unwrap();
+    assert!(open.body_text().contains("Away that week, sorry"), "{}", open.body_text());
+}
+
+#[test]
+fn an_answer_button_opens_its_choices_on_a_click() {
+    use egui_kittest::kittest::Queryable;
+    let mut s = Session::with_sample();
+    s.user_email = "pat@example.test".to_string();
+    let event = "UID:review-3@example.test\r\nDTSTART:20261007T090000Z\r\nDTEND:20261007T100000Z\r\nSUMMARY:Quarterly review\r\nORGANIZER:mailto:sam@example.test\r\nATTENDEE;RSVP=TRUE:mailto:pat@example.test";
+    s.open = Some(meeting_message("Sam Reyes <sam@example.test>", "REQUEST", event));
+    let mut h = egui_kittest::Harness::builder().with_size((1280.0, 800.0)).build_ui_state(|ui, app: &mut MailUi| app.ui(ui), MailUi::new(s));
+    h.run_steps(3);
+    assert!(h.query_by_label("Send the Response Now").is_none());
+    h.get_by_label("Tentative    ").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Send the Response Now").is_some(), "the choices are shown");
+    h.get_by_label("Edit the Response before Sending\u{2026}").click();
+    h.run_steps(3);
+    assert_eq!(h.state().answer.as_ref().map(|a| a.response), Some("tentative"));
+}
