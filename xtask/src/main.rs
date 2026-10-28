@@ -7,7 +7,7 @@
 //! cargo xtask parity    write docs/parity-checklist.md from the feature catalog
 //! cargo xtask wasm      the engine and everything under it builds for wasm32
 //! cargo xtask icon      draw the program's icon into apps/openmailclient/assets
-//! cargo xtask package   build for release and make the Windows installer and its sums
+//! cargo xtask package   build for release and make the Windows installer, or the Linux archive, and its sums
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

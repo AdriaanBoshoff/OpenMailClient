@@ -168,30 +168,55 @@ read, a reader we can try without driving a window, a printer we may use).
   on screen beyond what egui shapes; metafiles that copy with a mask or see-through; the
   printer's own settings (trays, two-sided). Each is scheduled in
   [ROADMAP.md](ROADMAP.md#do-later-from-m2).
-- The To-Do Bar; CardDAV, the Address Book and Mail Merge; the Scheduling Assistant.
+- The To-Do Bar and the Scheduling Assistant.
 - The MCP server, the control channel and the web build.
-- Signed installers, and packages for macOS and Linux.
+- Signed installers, and packages for macOS.
 
 ## Download
 
-The first pre-release, **0.1.0-alpha.1**, is on the
-[releases page](https://github.com/AdriaanBoshoff/OpenMailClient/releases) for Windows 10 and 11
-(x64): `OpenMailClient-0.1.0-alpha.1-windows-x64-setup.exe`. It installs for you alone unless you
+The newest pre-release, **0.1.0-alpha.2**, is on the
+[releases page](https://github.com/AdriaanBoshoff/OpenMailClient/releases) for Windows and Linux.
+
+**Windows 10 and 11 (x64):** `OpenMailClient-0.1.0-alpha.2-windows-x64-setup.exe`. It installs for you alone unless you
 choose everyone, needs no administrator, and asks whether to put OpenMailClient on the Start menu
 and the desktop. Uninstalling it leaves your mail, settings and accounts where they are.
 `SHA256SUMS.txt` beside it gives the installer's SHA-256.
 
 The installer is not signed yet, so Windows SmartScreen may ask whether to run it ("More info",
-then "Run anyway"). It is an alpha: keep a copy of any data file you open with it.
+then "Run anyway").
+
+**Linux (x64):** `OpenMailClient-0.1.0-alpha.2-linux-x64.tar.gz`, for any distribution with glibc
+2.31 or newer (Ubuntu 20.04, Debian 11, Fedora 32 and since) and an X11 or Wayland desktop. It
+installs for you alone, under `~/.local`, with no administrator, and puts OpenMailClient among
+your applications:
+
+```bash
+tar xzf OpenMailClient-0.1.0-alpha.2-linux-x64.tar.gz
+```
+
+```bash
+OpenMailClient-0.1.0-alpha.2-linux-x64/install.sh
+```
+
+`install.sh --uninstall` takes it away again and leaves your mail, settings and accounts where
+they are. The programs also run from the folder as they are, without installing. Passwords are
+kept in the desktop's secret service (GNOME Keyring or KWallet).
+
+`SHA256SUMS.txt` gives the SHA-256 of both. It is an alpha: keep a copy of any data file you open
+with it.
 
 **Updates.** Help, Check for Updates asks GitHub for the newest release, shows what it says of
 itself, downloads its installer and checks it against the release's `SHA256SUMS.txt` before
 anything is run; it is installed when OpenMailClient closes, after every change is saved, and
 OpenMailClient starts again. Pre-releases are offered when "Offer pre-releases too" is on, and
 always to a pre-release. It looks once a day on its own and only tells; nothing is downloaded or
-installed without being asked. Installers are taken only from this repository's releases.
+installed without being asked. Installers are taken only from this repository's releases. On
+Linux it tells of a new release and opens its page; the archive is installed as above.
 
-To make the installer yourself (Windows, [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
+To make the packages yourself, run this on each system. On Windows it makes the installer with
+[Inno Setup 6](https://jrsoftware.org/isinfo.php). On Linux it makes the archive, linked against
+glibc 2.31 when [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) and Zig are
+installed (`GLIBC=2.35` picks another):
 
 ```bash
 cargo xtask package

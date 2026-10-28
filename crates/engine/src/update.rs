@@ -189,7 +189,8 @@ pub struct Release {
     pub page: String,
     /// When it was published, as GitHub says it (RFC 3339).
     pub published: String,
-    /// The installer for Windows, and the sums of its files.
+    /// The installer for Windows, and the sums of its files. It is run only on Windows
+    /// (`cmd::update::install`); other systems install a release from its page.
     pub setup: Option<Asset>,
     pub sums: Option<Asset>,
 }
