@@ -850,66 +850,92 @@ impl MailUi {
     pub(crate) fn backstage(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
         let p = ui.painter_at(rect);
-        let side = Rect::from_min_size(rect.min, vec2(256.0, rect.height()));
+        let side = Rect::from_min_size(rect.min, vec2(SIDE_W, rect.height()));
         p.rect_filled(rect, 0.0, t.surface);
         p.rect_filled(side, 0.0, t.accent);
-        let entries: [(Icon, &str, &str, Value); 17] = [
-            (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
-            (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
-            (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
-            (Icon::Save, "Save Changes", "file.save", json!({ "wait": false })),
-            (Icon::Save, "Save Message As…", "ui.saveAsDialog", Value::Null),
-            (Icon::Clip, "Save Attachment…", "ui.saveAttachmentDialog", json!({ "index": 0 })),
-            (Icon::Clip, "Save All Attachments…", "ui.saveAllAttachmentsDialog", Value::Null),
-            (Icon::Print, "Print…", "ui.printPreview", Value::Null),
-            (Icon::Save, "Export to a Data File…", "ui.exportDialog", Value::Null),
-            (Icon::Calendar, "Open Calendar…", "ui.openCalendarDialog", Value::Null),
-            (Icon::Calendar, "Save Calendar…", "ui.saveCalendarDialog", Value::Null),
-            (Icon::People, "Open vCard File…", "ui.openCardsDialog", Value::Null),
-            (Icon::People, "Save Contacts as vCard…", "ui.saveCardsDialog", json!({ "all": true })),
-            (Icon::Close, "Close Data File", "file.closeStore", Value::Null),
-            (Icon::Import, "Import from Outlook…", "ui.importOutlook", Value::Null),
-            (Icon::People, "Account Settings…", "ui.accountSettings", Value::Null),
-            (Icon::Junk, "Exit", "ui.quit", Value::Null),
+        // The pages of the File tab, then what is done at once: Print, Options and Exit.
+        let entries: [(Icon, &str, Side); 7] = [
+            (Icon::Back, "Back", Side::Act("ui.ribbonTab", json!({ "tab": "home" }))),
+            (Icon::Info, "Info", Side::Page(FilePage::Info)),
+            (Icon::Open, "Open & Export", Side::Page(FilePage::Open)),
+            (Icon::Save, "Save", Side::Page(FilePage::Save)),
+            (Icon::Print, "Print", Side::Act("ui.printPreview", Value::Null)),
+            (Icon::Settings, "Options", Side::Act("ui.options", Value::Null)),
+            (Icon::Junk, "Exit", Side::Act("ui.quit", Value::Null)),
         ];
-        for (n, (icon, label, cmd, params)) in entries.into_iter().enumerate() {
-            let r = Rect::from_min_size(pos2(side.left(), side.top() + 10.0 + n as f32 * 38.0), vec2(side.width(), 36.0));
-            let on = match cmd {
-                "ui.saveAsDialog" => self.session.is_enabled("file.saveAs"),
-                "ui.saveAttachmentDialog" | "ui.saveAllAttachmentsDialog" => {
-                    self.session.is_enabled("file.saveAttachment") && self.session.open.as_ref().is_some_and(|it| !it.attachments.is_empty())
-                }
-                "ui.printPreview" => self.session.is_enabled("file.print"),
-                "ui.exportDialog" => self.session.is_enabled("file.export"),
-                "ui.importOutlook" => self.session.is_enabled("file.importOutlook"),
-                "ui.saveCalendarDialog" => self.session.is_enabled("calendar.saveAs"),
-                "ui.saveCardsDialog" => self.session.is_enabled("people.saveAs") && self.session.people.total > 0,
-                c if c.starts_with("ui.") => true,
-                c => self.session.is_enabled(c),
+        let mut y = side.top() + 10.0;
+        for (n, (icon, label, what)) in entries.into_iter().enumerate() {
+            // A gap between the pages and what is done at once.
+            if n == 4 {
+                p.hline(side.left() + 18.0..=side.right() - 18.0, y + 6.0, egui::Stroke::new(1.0, t.on_accent.gamma_multiply(0.3)));
+                y += 14.0;
+            }
+            let r = Rect::from_min_size(pos2(side.left(), y), vec2(side.width(), 40.0));
+            y += 42.0;
+            let on = match &what {
+                Side::Act("ui.printPreview", _) => self.session.is_enabled("file.print"),
+                _ => true,
             };
+            let shown = matches!(what, Side::Page(page) if page == self.file_page);
             let resp = ui.interact(r, egui::Id::new(("backstage", label)), if on { Sense::click() } else { Sense::hover() });
-            if on && resp.hovered() {
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, on, shown, label));
+            if shown {
+                p.rect_filled(r, 0.0, t.accent_dark);
+                p.rect_filled(Rect::from_min_size(r.min, vec2(4.0, r.height())), 0.0, t.on_accent);
+            } else if on && resp.hovered() {
                 p.rect_filled(r, 0.0, t.accent_dark);
             }
             let color = if on { t.on_accent } else { t.on_accent.gamma_multiply(0.45) };
-            icons::paint(&p, Rect::from_center_size(pos2(r.left() + 24.0, r.center().y), vec2(16.0, 16.0)), icon, color);
-            p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, label, font(13.0), color);
+            icons::paint(&p, Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(16.0, 16.0)), icon, color);
+            p.text(pos2(r.left() + 48.0, r.center().y), Align2::LEFT_CENTER, label, if shown { bold(13.5) } else { font(13.5) }, color);
             if on && resp.clicked() {
-                self.act(cmd, params);
-                if cmd != "ui.ribbonTab" && cmd != "ui.quit" {
-                    self.act("ui.ribbonTab", json!({ "tab": "home" }));
+                match what {
+                    Side::Page(page) => self.file_page = page,
+                    Side::Act(cmd, params) => {
+                        self.act(cmd, params);
+                        if cmd != "ui.ribbonTab" && cmd != "ui.quit" {
+                            self.act("ui.ribbonTab", json!({ "tab": "home" }));
+                        }
+                    }
                 }
             }
         }
 
-        let x = side.right() + 36.0;
-        let width = rect.right() - x - 30.0;
+        let x = side.right() + 40.0;
+        let width = (rect.right() - x - 30.0).max(40.0);
         let mut y = rect.top() + 26.0;
-        p.text(pos2(x, y), Align2::LEFT_TOP, "Data files", font(24.0), t.text);
-        y += 44.0;
+        let (title, tiles): (&str, Vec<Tile>) = match self.file_page {
+            FilePage::Info => ("Info", self.info_tiles()),
+            FilePage::Open => ("Open & Export", self.open_tiles()),
+            FilePage::Save => ("Save", self.save_tiles()),
+        };
+        p.text(pos2(x, y), Align2::LEFT_TOP, title, font(26.0), t.text);
+        y += 50.0;
+        if self.file_page == FilePage::Info {
+            y = self.data_files(&p, x, y, width);
+        }
+        y = self.tiles(ui, &p, tiles, x, y, width);
+        if self.file_page == FilePage::Info {
+            y += 10.0;
+            for line in [
+                "A data file is not written to until Save Changes; the first save keeps the file as it was beside it.",
+                "Accounts, themes, time zones, reminders, saving and updates are all set in Options.",
+            ] {
+                clip_text(&p, pos2(x, y), width, line, font(12.0), t.text_faint);
+                y += 20.0;
+            }
+        }
+    }
+
+    /// The data files open, each with where it is, how many folders it has and whether it
+    /// can be written; returns where the next thing goes.
+    fn data_files(&self, p: &egui::Painter, x: f32, mut y: f32, width: f32) -> f32 {
+        let t = &self.tokens;
+        p.text(pos2(x, y), Align2::LEFT_TOP, "Data files", bold(14.0), t.text);
+        y += 28.0;
         if self.session.stores.is_empty() {
             clip_text(
-                &p,
+                p,
                 pos2(x, y),
                 width,
                 "Nothing is open. Open an Outlook data file (.pst, .ost), a message (.msg, .eml, .oft) or the sample mailbox.",
@@ -921,7 +947,7 @@ impl MailUi {
         for (i, store) in self.session.stores.iter().enumerate() {
             let folders = self.session.folders.get(i).map_or(0, Vec::len);
             p.rect_filled(Rect::from_min_size(pos2(x, y), vec2(4.0, 40.0)), 2.0, t.accent);
-            clip_text(&p, pos2(x + 14.0, y), width, &store.display_name(), bold(14.0), t.text);
+            clip_text(p, pos2(x + 14.0, y), width, &store.display_name(), bold(14.0), t.text);
             let location = store.path().map_or_else(|| "In memory (not saved to disk)".to_string(), |path| path.display().to_string());
             let mode = match (store.writable(), store.unsaved()) {
                 (_, true) if store.journal_trouble().is_some() => "unsaved changes, in memory only",
@@ -930,17 +956,157 @@ impl MailUi {
                 (true, false) => "editable",
                 (false, _) => "read-only",
             };
-            clip_text(&p, pos2(x + 14.0, y + 20.0), width, &format!("{location}  ·  {folders} folders  ·  {mode}"), font(12.0), t.text_dim);
+            clip_text(p, pos2(x + 14.0, y + 20.0), width, &format!("{location}  ·  {folders} folders  ·  {mode}"), font(12.0), t.text_dim);
             y += 54.0;
         }
-        y += 12.0;
-        for line in [
-            "A data file is not written to until Save Changes; the first save keeps the file as it was beside it.",
-            "Messages can be saved as .msg, .oft or .eml. Mail is sent and received through the accounts in Account Settings.",
-        ] {
-            clip_text(&p, pos2(x, y), width, line, font(12.0), t.text_faint);
-            y += 20.0;
+        y + 10.0
+    }
+
+    fn info_tiles(&self) -> Vec<Tile> {
+        let s = &self.session;
+        vec![
+            Tile::new(
+                Icon::Save,
+                "Save Changes",
+                "Write what changed into the data files, checked as it goes",
+                "file.save",
+                json!({ "wait": false }),
+            )
+            .on(s.is_enabled("file.save")),
+            Tile::new(Icon::Close, "Close Data File", "Close the data file chosen in the folder pane", "file.closeStore", Value::Null)
+                .on(s.is_enabled("file.closeStore")),
+            Tile::new(Icon::People, "Account Settings", "Add, change, test and remove mail accounts", "ui.options", json!({ "page": "accounts" })),
+            Tile::new(Icon::Settings, "Options", "Every setting of OpenMailClient, in one place", "ui.options", Value::Null),
+        ]
+    }
+
+    fn open_tiles(&self) -> Vec<Tile> {
+        let s = &self.session;
+        vec![
+            Tile::new(
+                Icon::Open,
+                "Open Data File or Message",
+                "A .pst or .ost data file, or a .msg, .eml or .oft message",
+                "ui.openDialog",
+                Value::Null,
+            ),
+            Tile::new(Icon::Mail, "Open Sample Mailbox", "A mailbox of our own, to try things on", "file.openSample", Value::Null)
+                .on(s.is_enabled("file.openSample")),
+            Tile::new(
+                Icon::Import,
+                "Import from Outlook",
+                "Outlook's accounts and data files, copied without changing them",
+                "ui.importOutlook",
+                Value::Null,
+            )
+            .on(s.is_enabled("file.importOutlook")),
+            Tile::new(Icon::Save, "Export to a Data File", "The data file chosen, written as a new .pst", "ui.exportDialog", Value::Null)
+                .on(s.is_enabled("file.export")),
+            Tile::new(Icon::Calendar, "Open Calendar", "Events from an .ics file, shown before they are added", "ui.openCalendarDialog", Value::Null),
+            Tile::new(Icon::Calendar, "Save Calendar", "The calendar as an .ics file", "ui.saveCalendarDialog", Value::Null)
+                .on(s.is_enabled("calendar.saveAs")),
+            Tile::new(Icon::People, "Open vCard File", "Contacts from a .vcf file, shown before they are added", "ui.openCardsDialog", Value::Null),
+            Tile::new(Icon::People, "Save Contacts as vCard", "Every contact as one .vcf file", "ui.saveCardsDialog", json!({ "all": true }))
+                .on(s.is_enabled("people.saveAs") && s.people.total > 0),
+        ]
+    }
+
+    fn save_tiles(&self) -> Vec<Tile> {
+        let s = &self.session;
+        let attached = s.is_enabled("file.saveAttachment") && s.open.as_ref().is_some_and(|it| !it.attachments.is_empty());
+        vec![
+            Tile::new(
+                Icon::Save,
+                "Save Changes",
+                "Write what changed into the data files, checked as it goes",
+                "file.save",
+                json!({ "wait": false }),
+            )
+            .on(s.is_enabled("file.save")),
+            Tile::new(Icon::Save, "Save Message As", "The message open, as .msg, .oft or .eml", "ui.saveAsDialog", Value::Null)
+                .on(s.is_enabled("file.saveAs")),
+            Tile::new(Icon::Clip, "Save Attachment", "The open message's first attachment", "ui.saveAttachmentDialog", json!({ "index": 0 }))
+                .on(attached),
+            Tile::new(
+                Icon::Clip,
+                "Save All Attachments",
+                "Every attachment of the open message, into a folder",
+                "ui.saveAllAttachmentsDialog",
+                Value::Null,
+            )
+            .on(attached),
+        ]
+    }
+
+    /// Tiles two to a row where there is room, one where there is not; returns where the next
+    /// thing goes.
+    fn tiles(&mut self, ui: &mut Ui, p: &egui::Painter, tiles: Vec<Tile>, x: f32, y: f32, width: f32) -> f32 {
+        let t = self.tokens.clone();
+        let across = if width >= 2.0 * TILE_W + 16.0 { 2 } else { 1 };
+        let w = if across == 2 { TILE_W } else { width.min(TILE_W) };
+        let mut bottom = y;
+        for (n, tile) in tiles.into_iter().enumerate() {
+            let (row, col) = (n / across, n % across);
+            let r = Rect::from_min_size(pos2(x + col as f32 * (TILE_W + 16.0), y + row as f32 * (TILE_H + 12.0)), vec2(w, TILE_H));
+            bottom = r.bottom() + 12.0;
+            let resp = ui.interact(r, egui::Id::new(("backstage-tile", tile.label)), if tile.on { Sense::click() } else { Sense::hover() });
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, tile.on, tile.label));
+            let lit = tile.on && resp.hovered();
+            p.rect_filled(r, 8.0, if lit { t.hover } else { t.window });
+            p.rect_stroke(r, 8.0, egui::Stroke::new(1.0, if lit { t.accent } else { t.line }), egui::StrokeKind::Inside);
+            let (mark, words, dim) = if tile.on { (t.accent, t.text, t.text_dim) } else { (t.text_faint, t.text_faint, t.text_faint) };
+            let ring = pos2(r.left() + 30.0, r.center().y);
+            p.circle_filled(ring, 18.0, mark.gamma_multiply(0.12));
+            icons::paint(p, Rect::from_center_size(ring, vec2(20.0, 20.0)), tile.icon, mark);
+            clip_text(p, pos2(r.left() + 60.0, r.top() + 13.0), r.width() - 72.0, tile.label, bold(14.0), words);
+            clip_text(p, pos2(r.left() + 60.0, r.top() + 34.0), r.width() - 72.0, tile.about, font(12.0), dim);
+            if tile.on && resp.clicked() {
+                self.act(tile.cmd, tile.params);
+                self.act("ui.ribbonTab", json!({ "tab": "home" }));
+            }
         }
+        bottom
+    }
+}
+
+/// How wide the File tab's side stands.
+const SIDE_W: f32 = 220.0;
+const TILE_W: f32 = 380.0;
+const TILE_H: f32 = 64.0;
+
+/// The pages of the File tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum FilePage {
+    #[default]
+    Info,
+    Open,
+    Save,
+}
+
+/// What an entry at the side of the File tab does: show a page, or run a command.
+enum Side {
+    Page(FilePage),
+    Act(&'static str, Value),
+}
+
+/// One thing the File tab offers: its mark, its name, a line of what it does, and its command.
+struct Tile {
+    icon: Icon,
+    label: &'static str,
+    about: &'static str,
+    cmd: &'static str,
+    params: Value,
+    on: bool,
+}
+
+impl Tile {
+    fn new(icon: Icon, label: &'static str, about: &'static str, cmd: &'static str, params: Value) -> Self {
+        Self { icon, label, about, cmd, params, on: true }
+    }
+
+    fn on(mut self, on: bool) -> Self {
+        self.on = on;
+        self
     }
 }
 

@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 24 · 2026-10-17 · an account's mail compared with Outlook's showing of it: padding, links, Sent Items rows, previews, date headings, region formats and an `.ost`'s folder pane follow Outlook (M1.8); metafiles are drawn in full, from the specifications and not compared (M3b.28); an RTF highlight is a marker colour as in the one case seen (M3b.27); borders round text within a line and rounded corners on boxes and cells (M3b.26), ours, not compared with Outlook; boxes inside one another, tables inside blocks and a colour behind the whole body in the reading pane (M3b.25), ours, not compared with Outlook; several pictures at the sides of a paragraph and paper behind dark see-through pictures in the dark pane (M3b.24), ours, not compared with Outlook; the print window has a zoom and Table Style's columns, headings and rows (M3b.22); side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
+**Status:** revision 25 · 2026-10-28 · every setting in one Options window and the File tab in pages; before that, an account's mail compared with Outlook's showing of it: padding, links, Sent Items rows, previews, date headings, region formats and an `.ost`'s folder pane follow Outlook (M1.8); metafiles are drawn in full, from the specifications and not compared (M3b.28); an RTF highlight is a marker colour as in the one case seen (M3b.27); borders round text within a line and rounded corners on boxes and cells (M3b.26), ours, not compared with Outlook; boxes inside one another, tables inside blocks and a colour behind the whole body in the reading pane (M3b.25), ours, not compared with Outlook; several pictures at the sides of a paragraph and paper behind dark see-through pictures in the dark pane (M3b.24), ours, not compared with Outlook; the print window has a zoom and Table Style's columns, headings and rows (M3b.22); side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How OpenMailClient's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -110,6 +110,10 @@ Outlook's print pane was not observed.
 
 ## Behaviour seen
 
+- The File tab is in pages, as Outlook's is: Info, Open & Export, Save, then Print, Options and
+  Exit at the side. Outlook keeps its settings in Options and Account Settings apart, with OK
+  and Cancel; OpenMailClient keeps every setting, accounts and themes too, in one Options window
+  with a page each, and a change is kept as it is made.
 - Opening a folder selects the first row but **does not open it** in the reading pane; the pane shows the
   empty state until the user picks a message. OpenMailClient selects nothing when a folder opens. To check
   further before changing: this may depend on Outlook's reading-pane options.
@@ -134,6 +138,7 @@ Outlook's print pane was not observed.
 
 ## Revision history
 
+- 25 · 2026-10-28 — the File tab in pages (Info, Open & Export, Save, then Print, Options and Exit) and one Options window for every setting, a page each (M1.9).
 - 24 · 2026-10-17 — an account's mail compared with Outlook's showing of it, locally (nothing of it is kept in the repo); padding, links, Sent Items rows, previews and their end mark, date headings, region formats and an `.ost`'s folder pane now follow Outlook (M1.8).
 - 23 · 2026-10-13 — metafiles draw parts of bitmaps, mirrored, turned and run-packed ones, raster operations, hatched and patterned brushes and regions (M3b.28). Drawn from [MS-WMF] and [MS-EMF]; no metafile was compared with Outlook's showing of it.
 - 22 · 2026-10-13 — an RTF highlight is shown as one of sixteen marker colours: the pale yellow of the receipt message is bright yellow, as Outlook shows it (M3b.27). Other colours are chosen by hue, which is ours and was not compared.

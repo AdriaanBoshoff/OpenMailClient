@@ -8,7 +8,7 @@
 //! ground is checked for contrast as it changes, and the window may follow the system's light or
 //! dark setting.
 
-use crate::dialog::{self, Dialog};
+use crate::dialog;
 use crate::icons::{self, Icon};
 use crate::line_edit::LineEdit;
 use crate::theme::{self, COLORS, MAX_THEMES, Theme, Tokens};
@@ -109,10 +109,7 @@ impl MailUi {
         let text = |key: &str| params.get(key).and_then(Value::as_str);
         let dark = self.tokens.dark;
         match id {
-            "ui.themes" => {
-                let open = params.get("open").and_then(Value::as_bool).unwrap_or(self.themes_window.is_none());
-                self.themes_window = open.then(ThemesWindow::default);
-            }
+            "ui.themes" => self.options_page_command(crate::options::Page::Themes, params)?,
             "ui.useTheme" => {
                 let name = text("name").ok_or("\"name\" is missing")?;
                 let found = self.find_theme(name).ok_or_else(|| format!("There is no theme called {}", one_line(name)))?;
@@ -238,7 +235,8 @@ impl MailUi {
         self.set_dark(dark);
     }
 
-    pub(crate) fn themes_window(&mut self, ctx: &egui::Context) {
+    /// The Themes page of Options.
+    pub(crate) fn themes_page(&mut self, ui: &mut Ui) {
         let Some(mut window) = self.themes_window.take() else { return };
         let t = self.tokens.clone();
         let all = self.all_themes();
@@ -246,14 +244,7 @@ impl MailUi {
         let editing_dark = t.dark;
         let editing = current.tokens(editing_dark);
         let mut run: Vec<(&'static str, Value)> = Vec::new();
-        let mut close = false;
-        let shown = Dialog::new("themes", "Themes", Icon::Palette).width(760.0).show(ctx, &t, |ui| {
-            ui.label(
-                egui::RichText::new("Colours for the window and its dialogs, for the light set and the dark set each. A change shows at once.")
-                    .font(font(12.0))
-                    .color(t.text_dim),
-            );
-            ui.add_space(10.0);
+        {
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(220.0);
@@ -414,8 +405,9 @@ impl MailUi {
                     }
                 });
             });
-            dialog::foot(ui, &t, |ui| {
-                if !current.built_in {
+            // A built-in theme has nothing to delete, so no row for it.
+            if !current.built_in {
+                crate::options::bar(ui, &t, |ui| {
                     let label = if window.deleting { "Delete it" } else { "Delete theme…" };
                     let button = if window.deleting { dialog::danger(&t, label) } else { dialog::plain(label) };
                     if ui.add(button).clicked() {
@@ -424,19 +416,8 @@ impl MailUi {
                         }
                         window.deleting = !window.deleting;
                     }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(dialog::primary(&t, "Done")).clicked() {
-                        close = true;
-                    }
                 });
-            });
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !ui.memory(|m| m.focused().is_some()) {
-                close = true;
             }
-        });
-        if shown.closed || close {
-            return;
         }
         self.themes_window = Some(window);
         for (id, params) in run {

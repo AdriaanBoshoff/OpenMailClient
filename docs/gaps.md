@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 125 · 2026-10-28 · ranked: the top of the list is what hurts most.
+**Status:** revision 126 · 2026-10-28 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 126 · 2026-10-28 — M1.9: every setting in one Options window, the File tab in pages.
 - 125 · 2026-10-28 — M5.12: invitations answered with a comment; item 4.
 - 124 · 2026-10-28 — M5.12: the To-Do Bar; item 4.
 - 123 · 2026-10-27 — M5.12: CalDAV task lists; item 4.

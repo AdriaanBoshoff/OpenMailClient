@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M5%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-90%20of%20134%20%C2%B7%2067%25-yellow)
-![tests](https://img.shields.io/badge/tests-712%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-715%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -31,13 +31,13 @@ Every picture is the app drawing its own invented sample mailbox, headless, with
 | **Dark theme.** Unread, flagged and important mail, date groups, categories. | **Replying in place.** It notices a mentioned attachment that is missing. |
 | ![The Calendar's week view with appointments, all-day events, reminders and a line at the current time](docs/images/openmailclient-calendar.png) | ![The Calendar's month view in the dark theme](docs/images/openmailclient-calendar-month-dark.png) |
 | **Calendar, week.** All-day events, side-by-side overlaps, the time now. | **Calendar, month,** in the dark theme. |
-| ![The New Appointment dialog over the work week view](docs/images/openmailclient-appointment.png) | ![The Themes dialog: built-in themes, the light and dark sets, a live preview, accent colours and a contrast check](docs/images/openmailclient-themes.png) |
+| ![The New Appointment dialog over the work week view](docs/images/openmailclient-appointment.png) | ![Options at its Themes page: built-in themes, the light and dark sets, a live preview, accent colours and a contrast check](docs/images/openmailclient-themes.png) |
 | **New appointment.** Dialogs take the theme's colours. | **Themes of your own,** each with a light and a dark set and a contrast check. |
-| ![Account Settings with an IMAP account, its servers and how it signs in](docs/images/openmailclient-accounts.png) | ![The Print dialog with a printer, copies and pages, the message body alone on the page, paper and margins](docs/images/openmailclient-print-preview.png) |
-| **Account Settings.** IMAP or POP3 over TLS, servers found from the address. | **Print** on a printer or to PDF, the message body alone if you like. |
+| ![Options at its Accounts page: an IMAP account, its servers and how it signs in, beside the other pages of Options](docs/images/openmailclient-accounts.png) | ![The Print dialog with a printer, copies and pages, the message body alone on the page, paper and margins](docs/images/openmailclient-print-preview.png) |
+| **Options, one window for every setting:** accounts over TLS, servers found from the address. | **Print** on a printer or to PDF, the message body alone if you like. |
 | ![Opening an attachment whose name reads as a PDF but is a web page: it can be saved, not opened](docs/images/openmailclient-attachment.png) | ![A recurring appointment's window on the whole series: weekly on Monday and Wednesday, eight times, said in words with the first days it falls on; behind it, each occurrence with a loop and a changed one with the loop struck through](docs/images/openmailclient-recurrence.png) |
 | **Opening an attachment.** A file passing for another kind is only saved. | **Recurring appointments.** One occurrence or the whole series, the pattern in words as you choose it. |
-| ![Open Calendar: a calendar file's events shown before they are added, each with its time, place and pattern, chosen one by one](docs/images/openmailclient-open-calendar.png) | ![Time Zones: dates shown in Berlin's time, with New York's hours beside them in the work week view and the time now in each](docs/images/openmailclient-time-zones.png) |
+| ![Open Calendar: a calendar file's events shown before they are added, each with its time, place and pattern, chosen one by one](docs/images/openmailclient-open-calendar.png) | ![Options at its Calendar page: dates shown in Berlin's time, with New York's hours beside them in the work week view and the time now in each](docs/images/openmailclient-time-zones.png) |
 | **Open Calendar.** Each event shown and chosen; one you have already is brought up to date. | **Time zones.** Summer time kept, a second zone's hours beside ours. |
 | ![A meeting invitation: a bar above it says when and where, that nothing else is planned then, with Accept, Tentative, Decline and Show in Calendar](docs/images/openmailclient-meeting.png) | ![People: the sample contacts listed by surname beside the chosen contact group's card with its members](docs/images/openmailclient-people.png) |
 | **Meetings,** answered from a bar above the invitation, to and from Outlook. | **People,** found in every field as you type; vCard files shown card by card first. |
@@ -92,7 +92,7 @@ read, a reader we can try without driving a window, a printer we may use).
 | `.eml` | yes | yes |
 | `.ics` | yes, each event shown before it is added; one opened again brings what is there up to date | yes, the calendar, a range of days or one appointment, with its series |
 | `.pdf` | | yes, a message (Memo Style) or a folder's list (Table Style), printed |
-| IMAP, POP3, SMTP | accounts are set up and tested in Account Settings, mail is sent and received into each account's own data file, checked against a real server; every IMAP folder is taken down, what is sent is put in the server's Sent folder, read, flagged, moved and deleted messages go both ways, folders renamed, moved and deleted are followed both ways, and drafts are kept on the server as they are written (M4) | the same |
+| IMAP, POP3, SMTP | accounts are set up and tested in Options, Accounts, mail is sent and received into each account's own data file, checked against a real server; every IMAP folder is taken down, what is sent is put in the server's Sent folder, read, flagged, moved and deleted messages go both ways, folders renamed, moved and deleted are followed both ways, and drafts are kept on the server as they are written (M4) | the same |
 
 ## What works today
 
@@ -112,6 +112,11 @@ read, a reader we can try without driving a window, a printer we may use).
   date groups, reading pane; dialogs in the theme's colours; nine built-in themes and themes of
   your own, each with its own light and dark colours, any of 25 colours changed with a live
   preview and a contrast check, or following the system's light or dark setting.
+- **Options.** Every setting in one window, a page each: General (ribbon, plain text,
+  animations), Mail (Send/Receive timer, new-mail alerts), Calendar (time zones), Reminders,
+  Saving (autosave, saving in place, keeping the original), Accounts, Themes and Updates. Each
+  change is kept as it is made. The File tab is in pages too: Info (the data files open and what
+  can be done with them), Open & Export, Save, then Print, Options and Exit.
 - Read, flag, categorise, move, delete, archive, search, sort and filter in writable (in-memory) stores.
 - Reply, reply all, forward and new mail as drafts; saving messages as `.msg`, `.oft` or `.eml`.
 - **Formatted bodies.** HTML and RTF mail is laid out and drawn: fonts the message names (installed
@@ -205,7 +210,7 @@ kept in the desktop's secret service (GNOME Keyring or KWallet).
 `SHA256SUMS.txt` gives the SHA-256 of both. It is an alpha: keep a copy of any data file you open
 with it.
 
-**Updates.** Help, Check for Updates asks GitHub for the newest release, shows what it says of
+**Updates.** Help, Check for Updates (or Options, Updates) asks GitHub for the newest release, shows what it says of
 itself, downloads its installer and checks it against the release's `SHA256SUMS.txt` before
 anything is run; it is installed when OpenMailClient closes, after every change is saved, and
 OpenMailClient starts again. Pre-releases are offered when "Offer pre-releases too" is on, and

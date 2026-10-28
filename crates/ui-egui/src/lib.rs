@@ -20,6 +20,7 @@ mod import;
 mod line_edit;
 mod meeting;
 mod merge;
+pub mod options;
 mod panes;
 mod people;
 mod pictures;
@@ -153,7 +154,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand {
         id: "ui.accountSettings",
         label: "Account Settings…",
-        params: r#"{"id": the account to show (the first when not given), "new": true for a new one, "close": true to close it}; the window adds, changes, tests and removes accounts through the account.* commands"#,
+        params: r#"{"id": the account to show (the first when not given), "new": true for a new one, "close": true to close Options}; Options at its Accounts page, which adds, changes, tests and removes accounts through the account.* commands"#,
     },
     UiCommand {
         id: "ui.importOutlook",
@@ -176,9 +177,14 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         params: r#"{"response": "accept" | "tentative" | "decline"}; opens the window that answers the open invitation with a comment, and sends the answer or keeps it unsent; nothing is answered until it is sent"#,
     },
     UiCommand {
+        id: "ui.options",
+        label: "Options",
+        params: r#"{"page": "general" | "mail" | "calendar" | "reminders" | "saving" | "accounts" | "themes" | "updates" (default: the one shown, or general), "close": true to close it}; every setting in one window, each page changing it through the command that does, kept between runs at once"#,
+    },
+    UiCommand {
         id: "ui.timeZones",
         label: "Time Zones…",
-        params: r#"{"open": true or false (default: the other way)}; the window that chooses the zone dates are shown in (calendar.timeZone) and a second one whose hours the Calendar shows (calendar.secondTimeZone)"#,
+        params: r#"{"open": true or false (default: the other way)}; Options at its Calendar page, which chooses the zone dates are shown in (calendar.timeZone) and a second one whose hours the Calendar shows (calendar.secondTimeZone)"#,
     },
     UiCommand {
         id: "ui.showProgress",
@@ -205,7 +211,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand {
         id: "ui.themes",
         label: "Themes…",
-        params: r#"{"open": true or false (default: the other way)}; the window that chooses, makes and changes themes"#,
+        params: r#"{"open": true or false (default: the other way)}; Options at its Themes page, which chooses, makes and changes themes"#,
     },
     UiCommand {
         id: "ui.useTheme",
@@ -233,7 +239,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand {
         id: "ui.updates",
         label: "Check for Updates",
-        params: r#"{"open": true or false; toggles when not given}; opens on what was last found and asks GitHub again when nothing was"#,
+        params: r#"{"open": true or false; toggles when not given}; Options at its Updates page, on what was last found, asking GitHub again when nothing was"#,
     },
     UiCommand {
         id: "ui.appointment",
@@ -416,10 +422,10 @@ pub struct MailUi {
     pub(crate) book: address_book::Book,
     pub(crate) suggest: Option<address_book::Suggest>,
     pub(crate) merge: Option<merge::Merge>,
-    /// Check for Updates is open.
-    pub(crate) updates_open: bool,
-    /// The Time Zones window is open.
-    pub(crate) time_zones_open: bool,
+    /// Options is open, at this page.
+    pub(crate) options: Option<options::Page>,
+    /// The page of the File tab shown.
+    pub(crate) file_page: ribbon::FilePage,
     /// What is typed in the compose window's Delivery menu: a time to go, and to expire.
     pub(crate) go_at_text: String,
     pub(crate) expire_at_text: String,
@@ -671,8 +677,8 @@ impl MailUi {
             book: address_book::Book::default(),
             suggest: None,
             merge: None,
-            updates_open: false,
-            time_zones_open: false,
+            options: None,
+            file_page: ribbon::FilePage::Info,
             go_at_text: String::new(),
             expire_at_text: String::new(),
             cal_nav: None,
@@ -1054,25 +1060,9 @@ impl MailUi {
             }
             "ui.replyWithMeeting" => self.reply_with_meeting()?,
             "ui.answerInvitation" => self.answer_invitation(params)?,
-            "ui.timeZones" => {
-                self.time_zones_open = match params.get("open") {
-                    None | Some(Value::Null) => !self.time_zones_open,
-                    Some(Value::Bool(open)) => *open,
-                    Some(_) => return Err("\"open\" is true or false".to_string()),
-                };
-            }
-            "ui.updates" => {
-                self.updates_open = match params.get("open") {
-                    None | Some(Value::Null) => !self.updates_open,
-                    Some(Value::Bool(open)) => *open,
-                    Some(_) => return Err("\"open\" is true or false".to_string()),
-                };
-                // Opened on nothing found yet: asked at once, on a thread of its own.
-                let asking = self.session.running().iter().any(|r| r.what == openmailclient_engine::update::CHECKING);
-                if self.updates_open && !self.session.update.checked && !asking && self.session.connector.is_some() {
-                    let _ = self.session.run("help.checkForUpdates", &json!({ "wait": false }));
-                }
-            }
+            "ui.options" => self.options_command(params)?,
+            "ui.timeZones" => self.options_page_command(options::Page::Calendar, params)?,
+            "ui.updates" => self.options_page_command(options::Page::Updates, params)?,
             "ui.showProgress" => {
                 self.progress_open = match params.get("open") {
                     None | Some(Value::Null) => !self.progress_open,
@@ -1083,11 +1073,12 @@ impl MailUi {
             "ui.accountSettings" => {
                 // Closed, the window's Drop wipes any password typed in it.
                 if params.get("close").and_then(Value::as_bool) == Some(true) {
-                    self.account_window = None;
+                    self.close_options();
                     return Ok(Value::Null);
                 }
                 let new = params.get("new").and_then(Value::as_bool) == Some(true);
                 self.open_accounts(text("id"), new)?;
+                self.options = Some(options::Page::Accounts);
             }
             "ui.prompt" => {
                 let (title, command) = match text("command") {
@@ -1296,11 +1287,10 @@ impl MailUi {
         if self.modal_open() {
             dialog::scrim(ui, &t, full);
         }
-        self.themes_window(&ctx);
+        self.options_window(&ctx);
         self.import_window(&ctx);
         self.calendar_file_window(&ctx);
         self.prompt_window(&ctx);
-        self.accounts_window(&ctx);
         self.link_window(&ctx);
         self.attachment_window(&ctx);
         self.preview_window(&ctx);
@@ -1309,8 +1299,6 @@ impl MailUi {
         self.address_book_window(&ctx);
         self.mail_merge_window(&ctx);
         self.answer_window(&ctx);
-        self.updates_window(&ctx);
-        self.time_zones_window(&ctx);
         self.alert_window(&ctx);
         self.appointment_window(&ctx);
         self.contact_window(&ctx);
@@ -1331,9 +1319,8 @@ impl MailUi {
             || self.link_ask.is_some()
             || self.attachment_ask.is_some()
             || self.preview.is_some()
-            || self.account_window.is_some()
+            || self.options.is_some()
             || self.appointment.is_some()
-            || self.themes_window.is_some()
             || self.import_window.is_some()
             || self.calendar_file.is_some()
             || self.contact.is_some()
@@ -1708,8 +1695,8 @@ impl MailUi {
         if show_progress {
             self.progress_open = true;
         }
-        if show_update {
-            self.updates_open = true;
+        if show_update && let Err(e) = self.open_options(options::Page::Updates) {
+            self.session.status = e;
         }
         if open_new {
             self.alert = None;

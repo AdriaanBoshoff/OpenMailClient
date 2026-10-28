@@ -2261,7 +2261,7 @@ fn an_appointment_typed_in_another_zone_and_a_second_zone_beside_ours() {
     // The window that chooses them, and a second zone's hours in each view.
     assert!(ui.execute("ui.timeZones", &json!({ "open": "yes" })).is_err());
     ui.execute("ui.timeZones", &Value::Null).unwrap();
-    assert!(ui.time_zones_open);
+    assert!(ui.options == Some(crate::options::Page::Calendar));
     ui.execute("calendar.secondTimeZone", &json!({ "zone": "America/New_York" })).unwrap();
     for view in ["day", "workWeek", "week", "month"] {
         ui.execute("calendar.view", &json!({ "view": view })).unwrap();
@@ -2270,7 +2270,7 @@ fn an_appointment_typed_in_another_zone_and_a_second_zone_beside_ours() {
         }
     }
     ui.execute("ui.timeZones", &json!({ "open": false })).unwrap();
-    assert!(!ui.time_zones_open);
+    assert!(ui.options.is_none());
 }
 
 #[test]
@@ -3294,7 +3294,7 @@ fn check_for_updates_draws_in_every_state_and_shows_a_release_s_words_as_text() 
     // No network here: opened, nothing is asked and it says nothing was checked.
     ui.execute("ui.updates", &json!({ "open": true })).unwrap();
     frame(&mut ui, &ctx, Vec::new(), None);
-    assert!(ui.updates_open && ui.session.running().is_empty());
+    assert!(ui.options == Some(crate::options::Page::Updates) && ui.session.running().is_empty());
     ui.session.update.checked = true;
     frame(&mut ui, &ctx, Vec::new(), None);
     let asset = |name: &str| Asset {
@@ -3330,7 +3330,7 @@ fn check_for_updates_draws_in_every_state_and_shows_a_release_s_words_as_text() 
     assert!(ui.session.update.install.is_none());
     ui.execute("ui.updates", &json!({ "open": false })).unwrap();
     frame(&mut ui, &ctx, Vec::new(), None);
-    assert!(!ui.updates_open);
+    assert!(ui.options.is_none());
 }
 
 /// Mail Merge shows the first messages as they will be while the text is written, says a wrong
@@ -3475,4 +3475,101 @@ fn an_answer_button_opens_its_choices_on_a_click() {
     h.get_by_label("Edit the Response before Sending\u{2026}").click();
     h.run_steps(3);
     assert_eq!(h.state().answer.as_ref().map(|a| a.response), Some("tentative"));
+}
+
+#[test]
+fn every_setting_is_in_options_and_the_old_ways_in_open_its_pages() {
+    use crate::options::Page;
+    let mut ui = MailUi::new(Session::with_sample());
+    assert!(ui.execute("ui.options", &json!({ "page": "nope" })).is_err());
+    assert!(ui.execute("ui.options", &json!({ "page": 7 })).is_err());
+    assert!(ui.options.is_none(), "nothing opened on a bad page");
+    for page in Page::ALL {
+        ui.execute("ui.options", &json!({ "page": page.name() })).unwrap();
+        assert_eq!(ui.options, Some(page));
+        assert!(ui.modal_open());
+        draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+        draw_window(&mut ui, egui::vec2(320.0, 240.0));
+        assert_eq!(ui.options, Some(page), "a page drawn stays open");
+    }
+    // The pages that were windows of their own make what they keep.
+    assert!(ui.account_window.is_some() && ui.themes_window.is_some());
+    ui.execute("ui.options", &json!({ "close": true })).unwrap();
+    assert!(ui.options.is_none() && ui.account_window.is_none() && ui.themes_window.is_none(), "closed, what the pages kept is gone");
+    // The ribbon's own buttons open Options at their page, and close it from there.
+    for (id, page) in [("ui.timeZones", Page::Calendar), ("ui.themes", Page::Themes), ("ui.updates", Page::Updates)] {
+        ui.execute(id, &Value::Null).unwrap();
+        assert_eq!(ui.options, Some(page), "{id}");
+        ui.execute(id, &Value::Null).unwrap();
+        assert!(ui.options.is_none(), "{id} again closes it");
+    }
+    ui.execute("ui.accountSettings", &json!({ "new": true })).unwrap();
+    assert_eq!(ui.options, Some(Page::Accounts));
+    ui.execute("ui.timeZones", &json!({ "open": false })).unwrap();
+    assert_eq!(ui.options, Some(Page::Accounts), "closing another page leaves the one shown");
+    ui.execute("ui.accountSettings", &json!({ "close": true })).unwrap();
+    assert!(ui.options.is_none() && ui.account_window.is_none());
+    // Opened without a page: the one shown last, or General.
+    ui.execute("ui.options", &Value::Null).unwrap();
+    assert_eq!(ui.options, Some(Page::General));
+}
+
+#[test]
+fn a_setting_changed_in_options_is_changed_and_kept() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::builder()
+        .with_size((1280.0, 800.0))
+        .build_ui_state(|ui, app: &mut MailUi| app.ui(ui), MailUi::new(Session::with_sample()));
+    h.run_steps(3);
+    h.state_mut().execute("ui.options", &Value::Null).unwrap();
+    h.run_steps(4);
+    let keep = h.state().session.keep_original;
+    h.get_by_label("Saving").click();
+    h.run_steps(3);
+    assert_eq!(h.state().options, Some(crate::options::Page::Saving));
+    h.get_by_label("Keep the file as it was beside it on its first save").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.keep_original, !keep, "changed through file.keepOriginal");
+    let settings = h.state().session.settings(None);
+    assert_eq!(settings["keepOriginal"], json!(!keep), "and kept with the settings");
+    h.get_by_label("Reminders").click();
+    h.run_steps(3);
+    let sound = h.state().session.reminders.sound;
+    h.get_by_label("Play a sound").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.reminders.sound, !sound);
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    assert!(h.state().options.is_none());
+}
+
+#[test]
+fn the_file_tab_shows_its_pages_and_opens_options() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::builder()
+        .with_size((1280.0, 800.0))
+        .build_ui_state(|ui, app: &mut MailUi| app.ui(ui), MailUi::new(Session::with_sample()));
+    h.run_steps(3);
+    h.state_mut().execute("ui.ribbonTab", &json!({ "tab": "file" })).unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close Data File").is_some(), "Info is shown first");
+    h.get_by_label("Open & Export").click();
+    h.run_steps(3);
+    assert_eq!(h.state().file_page, crate::ribbon::FilePage::Open);
+    assert!(h.query_by_label("Import from Outlook").is_some() && h.query_by_label("Close Data File").is_none());
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Save Message As").is_some());
+    h.get_by_label("Options").click();
+    h.run_steps(3);
+    assert_eq!(h.state().options, Some(crate::options::Page::General));
+    assert_eq!(h.state().tab, Tab::Home, "the File tab gives way to the window");
+    // Account Settings on Info opens Options at Accounts.
+    h.state_mut().execute("ui.options", &json!({ "close": true })).unwrap();
+    h.state_mut().file_page = crate::ribbon::FilePage::Info;
+    h.state_mut().execute("ui.ribbonTab", &json!({ "tab": "file" })).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Account Settings").click();
+    h.run_steps(3);
+    assert_eq!(h.state().options, Some(crate::options::Page::Accounts));
 }

@@ -230,7 +230,6 @@ enum Ask {
     /// Find the servers from the address.
     Find,
     Remove,
-    Close,
     /// Trust the certificate with this fingerprint, for the servers of the account that showed it.
     Trust(String),
     /// Check this server ("incoming" or "outgoing") against what the system trusts again.
@@ -370,9 +369,10 @@ impl MailUi {
         }
     }
 
-    /// The Account Settings window, while it is open.
-    pub(crate) fn accounts_window(&mut self, ctx: &egui::Context) {
+    /// The Accounts page of Options.
+    pub(crate) fn accounts_page(&mut self, ui: &mut egui::Ui) {
         let Some(mut window) = self.account_window.take() else { return };
+        let ctx = &ui.ctx().clone();
         // A test that ended since the last frame: what each server said.
         if let Some(job) = window.testing.clone()
             && !self.session.jobs.iter().any(|j| j.what == job)
@@ -421,16 +421,10 @@ impl MailUi {
         let busy = window.testing.is_some() || window.finding.is_some();
         // A certificate shown scrolls in what room the window leaves, rather than run off it.
         let room = (ctx.content_rect().height() - 760.0).clamp(130.0, 420.0);
-        let shown = crate::dialog::Dialog::new("accounts", "Account Settings", crate::icons::Icon::People).width(LIST_W + 18.0 + FORM_W).show(
-            ctx,
-            &t,
-            |ui| {
-                ui.label(
-                    egui::RichText::new("Mail is sent and received through these accounts, each with a data file of its own.")
-                        .font(font(12.0))
-                        .color(t.text_dim),
-                );
-                ui.add_space(12.0);
+        // The form scrolls on a short screen; Save and Test stay in sight below it.
+        let tall = (ctx.content_rect().height() - 330.0).clamp(160.0, 680.0);
+        {
+            egui::ScrollArea::vertical().id_salt("account-page").max_height(tall).auto_shrink([false, true]).show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     // The accounts, each as a card: its name, its kind and its address.
                     ui.vertical(|ui| {
@@ -696,13 +690,12 @@ impl MailUi {
                         }
                     });
                 }
+            });
 
-                crate::dialog::foot(ui, &t, |ui| {
+            {
+                crate::options::bar(ui, &t, |ui| {
                     ui.label(egui::RichText::new("A test signs in to both servers; nothing is sent.").font(font(11.5)).color(t.text_faint));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(crate::dialog::plain("Close")).clicked() {
-                            ask = Some(Ask::Close);
-                        }
                         let can_test = self.session.connector.is_some();
                         if ui
                             .add_enabled(!busy && can_test, crate::dialog::plain("Test Account Settings…"))
@@ -716,20 +709,13 @@ impl MailUi {
                         }
                     });
                 });
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    ask = Some(Ask::Close);
-                }
-            },
-        );
-        if shown.closed {
-            ask = Some(Ask::Close);
+            }
         }
         if !matches!(ask, Some(Ask::Remove) | None) {
             window.removing = false;
         }
         match ask {
             None => {}
-            Some(Ask::Close) => return,
             Some(Ask::Choose(id)) => {
                 window.said.clear();
                 self.show_account(&mut window, &id);

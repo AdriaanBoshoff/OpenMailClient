@@ -1489,12 +1489,9 @@ impl MailUi {
 }
 
 impl MailUi {
-    /// The Time Zones window: the zone dates are shown in, the system's or one chosen, and a
+    /// The Calendar page of Options: the zone dates are shown in, the system's or one chosen, and a
     /// second one whose hours stand beside ours in the day and week views; the time now in each.
-    pub(crate) fn time_zones_window(&mut self, ctx: &egui::Context) {
-        if !self.time_zones_open {
-            return;
-        }
+    pub(crate) fn time_zones_page(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let zones = known_zones();
         let now = self.session.now;
@@ -1507,8 +1504,7 @@ impl MailUi {
             format!("{} {}", self.clock_name(c.hour, c.minute), zone.offset_text_at(now))
         };
         let (here_now, there_now) = (at(&self.session.zone), self.session.second_zone.as_ref().map(at));
-        let mut close = false;
-        let shown = crate::dialog::Dialog::new("time-zones", "Time Zones", Icon::Clock).width(460.0).show(ctx, &t, |ui| {
+        {
             egui::Grid::new("time-zones-form").num_columns(2).spacing(vec2(12.0, 10.0)).show(ui, |ui| {
                 ui.label(egui::RichText::new("Show dates in").color(t.text_dim));
                 let label = |name: &str, none: &str| zones.iter().find(|(n, _)| n == name).map_or_else(|| none.to_string(), |(_, l)| l.clone());
@@ -1545,23 +1541,13 @@ impl MailUi {
                     .font(font(12.0))
                     .color(t.text_dim),
             );
-            crate::dialog::foot(ui, &t, |ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(crate::dialog::primary(&t, "Close")).clicked() {
-                        close = true;
-                    }
-                });
-            });
-        });
+        }
         let name = |n: String| if n.is_empty() { Value::Null } else { Value::String(n) };
         if chosen != chosen_was {
             self.act("calendar.timeZone", json!({ "zone": name(chosen) }));
         }
         if second != second_was {
             self.act("calendar.secondTimeZone", json!({ "zone": name(second) }));
-        }
-        if shown.closed || close {
-            self.time_zones_open = false;
         }
     }
 }

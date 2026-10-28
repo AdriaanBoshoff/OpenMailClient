@@ -64,6 +64,8 @@ pub enum Icon {
     RecurChanged,
     /// A new version of the program: a ring with an arrow coming up out of it.
     Update,
+    /// Options: a wheel with eight teeth round a hole.
+    Settings,
 }
 
 struct Pen<'a> {
@@ -405,6 +407,18 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             if icon == Icon::RecurChanged {
                 pen.line(&[(2.0, 14.0), (14.0, 2.0)]);
             }
+        }
+        Icon::Settings => {
+            // Eight teeth, each a short square end standing out of the rim.
+            let rim: Vec<(f32, f32)> = (0..=48)
+                .map(|n| {
+                    let a = std::f32::consts::TAU * n as f32 / 48.0;
+                    let r = if (n % 6) < 3 { 6.6 } else { 4.9 };
+                    (8.0 + r * a.cos(), 8.0 + r * a.sin())
+                })
+                .collect();
+            pen.closed(&rim);
+            pen.circle(8.0, 8.0, 2.1);
         }
         Icon::Clock => {
             pen.circle(8.0, 8.0, 6.3);

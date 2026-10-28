@@ -3,7 +3,6 @@
 //! newest is asked after on its own; the installer brought down and checked with how far it is,
 //! and installed when the program closes or at once, every change saved or kept first.
 
-use crate::icons::Icon;
 use crate::{MailUi, UiRequest, bold, font, one_line};
 use openmailclient_engine::update;
 use serde_json::{Value, json};
@@ -12,10 +11,9 @@ use serde_json::{Value, json};
 const NOTES_H: f32 = 200.0;
 
 impl MailUi {
-    pub(crate) fn updates_window(&mut self, ctx: &egui::Context) {
-        if !self.updates_open {
-            return;
-        }
+    /// The Updates page of Options.
+    pub(crate) fn updates_page(&mut self, ui: &mut egui::Ui) {
+        let ctx = &ui.ctx().clone();
         let t = self.tokens.clone();
         let state = self.session.update.clone();
         let running = self.session.running();
@@ -23,10 +21,9 @@ impl MailUi {
         let downloading = running.iter().find(|r| r.what == update::DOWNLOADING).map(|r| (r.id.clone(), r.done, r.stopping));
         let current = update::current();
         let mut run: Vec<(&str, Value)> = Vec::new();
-        let mut close = false;
         let mut quit = false;
         let mut page = None;
-        let shown = crate::dialog::Dialog::new("updates", "Check for Updates", Icon::Update).width(480.0).show(ctx, &t, |ui| {
+        {
             ui.label(egui::RichText::new(format!("This is OpenMailClient {current}.")).font(font(13.0)).color(t.text));
             ui.add_space(6.0);
             match &state.found {
@@ -119,7 +116,7 @@ impl MailUi {
             {
                 run.push(("help.updateOptions", json!({ "automatic": automatic })));
             }
-            crate::dialog::foot(ui, &t, |ui| {
+            crate::options::bar(ui, &t, |ui| {
                 if ui.add_enabled(!checking && downloading.is_none(), crate::dialog::plain("Check Now")).clicked() {
                     run.push(("help.checkForUpdates", json!({ "wait": false })));
                 }
@@ -159,14 +156,8 @@ impl MailUi {
                             run.push(("help.installUpdate", json!({ "cancel": true })));
                         }
                     }
-                    if ui.add(crate::dialog::plain("Close")).clicked() {
-                        close = true;
-                    }
                 });
             });
-        });
-        if shown.closed || close {
-            self.updates_open = false;
         }
         for (id, params) in run {
             let result = if id.starts_with("ui.") {
@@ -183,7 +174,7 @@ impl MailUi {
             self.requests.push(UiRequest::OpenLink(page));
         }
         if quit && self.session.update.install.is_some() {
-            self.updates_open = false;
+            self.options = None;
             if let Err(e) = self.execute("ui.quit", &Value::Null) {
                 self.session.status = e;
             }
