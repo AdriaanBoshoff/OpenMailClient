@@ -15,6 +15,7 @@ pub enum Page {
     General,
     Mail,
     Signatures,
+    Rules,
     Calendar,
     Reminders,
     Saving,
@@ -24,14 +25,25 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 9] =
-        [Page::General, Page::Mail, Page::Signatures, Page::Calendar, Page::Reminders, Page::Saving, Page::Accounts, Page::Themes, Page::Updates];
+    pub const ALL: [Page; 10] = [
+        Page::General,
+        Page::Mail,
+        Page::Signatures,
+        Page::Rules,
+        Page::Calendar,
+        Page::Reminders,
+        Page::Saving,
+        Page::Accounts,
+        Page::Themes,
+        Page::Updates,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Page::General => "general",
             Page::Mail => "mail",
             Page::Signatures => "signatures",
+            Page::Rules => "rules",
             Page::Calendar => "calendar",
             Page::Reminders => "reminders",
             Page::Saving => "saving",
@@ -50,6 +62,7 @@ impl Page {
             Page::General => "General",
             Page::Mail => "Mail",
             Page::Signatures => "Signatures",
+            Page::Rules => "Rules",
             Page::Calendar => "Calendar",
             Page::Reminders => "Reminders",
             Page::Saving => "Saving",
@@ -64,6 +77,7 @@ impl Page {
             Page::General => Icon::Settings,
             Page::Mail => Icon::Mail,
             Page::Signatures => Icon::Rename,
+            Page::Rules => Icon::Rules,
             Page::Calendar => Icon::Clock,
             Page::Reminders => Icon::Bell,
             Page::Saving => Icon::Save,
@@ -79,6 +93,7 @@ impl Page {
             Page::General => "How the window looks and how messages are read.",
             Page::Mail => "When mail is sent and received, and how new mail is told of.",
             Page::Signatures => "The words put at the foot of what is written, chosen for each account.",
+            Page::Rules => "What is done with mail as it comes in: moved, flagged, sorted or set aside.",
             Page::Calendar => "The time zone dates are shown in, and a second one beside it.",
             Page::Reminders => "What happens when an appointment, a task or flagged mail is due.",
             Page::Saving => "How changes reach a data file, and when they are saved on their own.",
@@ -145,7 +160,11 @@ impl MailUi {
             })?,
             Some(_) => return Err(r#""page" is a page's name"#.to_string()),
         };
-        self.open_options(page)
+        self.open_options(page)?;
+        if page == Page::Rules {
+            self.rules_command(params)?;
+        }
+        Ok(())
     }
 
     /// A page's own command, `{"open": true or false}` or turned the other way when not given:
@@ -198,6 +217,7 @@ impl MailUi {
                         Page::General => self.general_page(ui),
                         Page::Mail => self.mail_page(ui),
                         Page::Signatures => self.signatures_page(ui),
+                        Page::Rules => self.rules_page(ui),
                         Page::Calendar => self.time_zones_page(ui),
                         Page::Reminders => self.reminders_page(ui),
                         Page::Saving => self.saving_page(ui),

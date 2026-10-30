@@ -1178,8 +1178,20 @@ fn kept(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut said
                     if let Some(said) = meeting.and_then(|m| super::meeting::arrived(s, &m)) {
                         meetings.push(said);
                     }
-                    if let Some(told) = told {
-                        s.arrived.note(store, folder, new, &t.name, told);
+                    // The rules are run on mail that came since, not on what a first receive
+                    // finds there already: Run Rules Now is there for that.
+                    let (at, id, still_new) = if first {
+                        (folder, new.0, true)
+                    } else {
+                        let mut ruled = Vec::new();
+                        let done = super::rules::on_arrival(s, store, folder, new.0, &t.id, &mut ruled);
+                        if let Some(why) = ruled.into_iter().next() {
+                            trouble.get_or_insert(why);
+                        }
+                        done
+                    };
+                    if let Some(told) = told.filter(|_| still_new) {
+                        s.arrived.note(store, at, openmailclient_model::ItemId(id), &t.name, told);
                     }
                     kept += 1;
                     unread += usize::from(is_unread);

@@ -45,7 +45,7 @@ const HOME: &[Group] = &[
             small(Icon::NewMeeting, "Meeting", "ui.replyWithMeeting"),
         ],
     ),
-    ("Move", &[small(Icon::Move, "Move", "menu:move"), small(Icon::Rules, "Rules", "")]),
+    ("Move", &[small(Icon::Move, "Move", "menu:move"), small(Icon::Rules, "Rules", "menu:rules")]),
     (
         "Tags",
         &[
@@ -571,6 +571,17 @@ impl MailUi {
                         .map(|(label, part, on)| MenuItem { checked: on, ..item(label, "view.todoBar", json!({ "part": part, "show": !on })) })
                         .collect();
                 items.push(MenuItem { checked: !shown.any(), ..item("Off", "view.todoBar", json!({ "part": "off" })) });
+                items
+            }
+            Menu::Rules => {
+                let mut items = Vec::new();
+                if s.is_enabled("rules.create") {
+                    items.push(item("Create Rule…", "ui.options", json!({ "page": "rules", "create": true })));
+                }
+                items.push(item("Manage Rules & Alerts…", "ui.options", json!({ "page": "rules" })));
+                if s.is_enabled("rules.runNow") {
+                    items.push(item("Run Rules Now…", "ui.options", json!({ "page": "rules", "runNow": true })));
+                }
                 items
             }
         }

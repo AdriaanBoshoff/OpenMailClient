@@ -21,6 +21,7 @@ mod picture;
 mod progress;
 pub(crate) mod receive;
 mod reminders;
+pub(crate) mod rules;
 mod send;
 pub(crate) mod settings;
 mod signatures;
@@ -61,6 +62,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(picture::commands());
         v.extend(compose::commands());
         v.extend(signatures::commands());
+        v.extend(rules::commands());
         v.extend(folder::commands());
         v.extend(view::commands());
         v.extend(settings::commands());

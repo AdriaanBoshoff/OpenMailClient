@@ -27,6 +27,7 @@ mod pictures;
 mod preview;
 mod progress;
 mod reminders;
+mod rules;
 mod signatures;
 pub use reminders::Sound;
 mod ribbon;
@@ -357,6 +358,7 @@ pub(crate) enum Menu {
     Reading,
     Groups,
     TodoBar,
+    Rules,
 }
 
 /// A link the person is being asked about.
@@ -429,6 +431,7 @@ pub struct MailUi {
     pub(crate) prompt: Option<Prompt>,
     pub(crate) account_window: Option<accounts::AccountsWindow>,
     pub(crate) signature_edit: signatures::SignatureEdit,
+    pub(crate) rule_edit: rules::RuleEdit,
     pub(crate) link_ask: Option<LinkAsk>,
     pub(crate) attachment_ask: Option<AttachmentAsk>,
     pub(crate) preview: Option<preview::Preview>,
@@ -703,6 +706,7 @@ impl MailUi {
             prompt: None,
             account_window: None,
             signature_edit: signatures::SignatureEdit::default(),
+            rule_edit: rules::RuleEdit::default(),
             link_ask: None,
             attachment_ask: None,
             preview: None,
@@ -1164,6 +1168,7 @@ impl MailUi {
                     Some("reading") => Menu::Reading,
                     Some("groups") => Menu::Groups,
                     Some("todobar") => Menu::TodoBar,
+                    Some("rules") => Menu::Rules,
                     _ => return Err("unknown menu".to_string()),
                 };
                 let coord = |key: &str| params.get(key).and_then(Value::as_f64).map_or(100.0, |v| v.clamp(0.0, 20_000.0) as f32);

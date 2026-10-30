@@ -81,6 +81,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "newMail": s.alerts.to_json(),
         "reminders": s.reminders.options_json(),
         "signatures": s.signatures.to_json(),
+        "rules": crate::rules::to_json(&s.rules),
         "timeZone": s.zone_chosen,
         "secondTimeZone": s.second_zone.as_ref().map(|z| z.name().to_string()),
         "dataFiles": files,
@@ -331,6 +332,16 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
                 took(false);
             }
             s.signatures = sigs;
+        }
+    }
+    if let Some(v) = all.get("rules") {
+        let (rules, left_out) = crate::rules::of_json(v);
+        took(v.is_array());
+        for _ in 0..left_out.min(1024) {
+            took(false);
+        }
+        if v.is_array() {
+            s.rules = rules;
         }
     }
     if let Some(v) = all.get("accounts") {

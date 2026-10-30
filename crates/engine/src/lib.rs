@@ -22,6 +22,7 @@ pub mod print;
 pub mod printers;
 pub mod reminders;
 pub mod remote;
+pub mod rules;
 pub mod sample;
 pub mod search;
 pub mod signatures;
@@ -60,6 +61,8 @@ mod tests_receive;
 mod tests_reminders;
 #[cfg(test)]
 mod tests_remote;
+#[cfg(test)]
+mod tests_rules;
 #[cfg(test)]
 mod tests_send;
 #[cfg(test)]
@@ -391,6 +394,8 @@ pub struct Session {
     pub reminders: reminders::Reminders,
     /// Signatures, and those chosen for new messages and for replies (`signatures.*`).
     pub signatures: signatures::Signatures,
+    /// Rules, tried in turn on mail as it comes and on Run Rules Now (`rules.*`).
+    pub rules: Vec<rules::Rule>,
     /// Outlook Classic's folder of signatures, read to import them; set by the host.
     pub outlook_signatures: Option<std::path::PathBuf>,
     /// How new mail is told of (`mail.newMailAlerts`).
@@ -544,6 +549,7 @@ impl Session {
             account_dir: None,
             outlook: None,
             signatures: signatures::Signatures::default(),
+            rules: Vec::new(),
             outlook_signatures: None,
             places: cmd::imap_sync::Places::default(),
             calendar: cmd::calendar::Shown::default(),
