@@ -275,6 +275,16 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             run: delete,
         },
         CommandSpec {
+            id: "calendar.fromTask",
+            label: "Schedule Task",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"the row (as tasks.markComplete takes it), "start": "YYYY-MM-DD HH:MM" local time, or a date alone for an all-day event, "minutes": how long (default: the work the task is thought to take, from a quarter of an hour to a day, else half an hour); an appointment with the task's subject and notes, as a task dragged onto the Calendar makes; the task stays on its list"#,
+            enabled: has_rows,
+            run: schedule,
+        },
+        CommandSpec {
             id: "mail.followUp",
             label: "Follow Up",
             tab: "",
@@ -745,6 +755,54 @@ fn new(s: &mut Session, p: &Value) -> CmdResult {
     s.reload_tasks()?;
     s.status = format!("Task made: {}", t.subject);
     Ok(json!({ "id": id, "store": store, "folder": folder.0 }))
+}
+
+/// Longest appointment a task is given by the work it is thought to take, in minutes.
+const LONGEST_FROM_WORK: i32 = 24 * 60;
+
+/// How long the appointment made from a task lasts: `minutes` when asked for, else the work the
+/// task is thought to take when that is from a quarter of an hour to a day, else half an hour.
+pub(crate) fn scheduled_minutes(asked: Option<i64>, total_work: i32) -> Result<i64, EngineError> {
+    match asked {
+        Some(m) if (1..=i64::from(LONGEST_FROM_WORK) * 14).contains(&m) => Ok(m),
+        Some(_) => Err(EngineError::BadParams("\"minutes\" must be from 1 to 20160 (two weeks)".into())),
+        None if (15..=LONGEST_FROM_WORK).contains(&total_work) => Ok(i64::from(total_work)),
+        None => Ok(30),
+    }
+}
+
+/// A task or a flagged message given a time in the calendar: an appointment with its subject
+/// and notes, as Outlook makes one when a task is dragged onto the Calendar. Better than
+/// Outlook, it lasts as long as the work the task is thought to take, and the notes say which
+/// task and when it is due.
+fn schedule(s: &mut Session, p: &Value) -> CmdResult {
+    let key = row_key(s, p)?;
+    let item = load_row(s, key)?;
+    let t = Task::of(&item, &s.zone);
+    let start = need_str(p, "start")?.trim().to_string();
+    let minutes = match p.get("minutes") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_i64().ok_or_else(|| EngineError::BadParams("\"minutes\" must be a number".into()))?),
+    };
+    let length = scheduled_minutes(minutes, t.total_work)?;
+    let off = s.zone.clone();
+    let all_day = !start.contains([' ', 'T']);
+    let mut asked = json!({ "subject": t.subject, "start": start });
+    if !all_day {
+        let at =
+            calendar::parse_local(&start, &off).ok_or_else(|| EngineError::BadParams("\"start\" is not a time written YYYY-MM-DD HH:MM".into()))?;
+        let end = off.civil(at.saturating_add(length.saturating_mul(calendar::MINUTE)));
+        asked["end"] = json!(format!("{:04}-{:02}-{:02} {:02}:{:02}", end.year, end.month, end.day, end.hour, end.minute));
+    }
+    let mut head = vec![if t.flagged_mail { "Flagged for follow-up".to_string() } else { "From the task".to_string() }];
+    if let Some(due) = t.due {
+        head.push(format!("due {}", super::calendar::day_text(due)));
+    }
+    let notes = if t.notes.trim().is_empty() { format!("{}.", head.join(", ")) } else { format!("{}.\n\n{}", head.join(", "), t.notes) };
+    asked["notes"] = json!(notes);
+    let made = super::calendar::new(s, &asked)?;
+    s.status = format!("Scheduled: {}", if t.subject.is_empty() { "(No subject)" } else { &t.subject });
+    Ok(json!({ "id": made["id"], "minutes": if all_day { Value::Null } else { json!(length) }, "allDay": all_day }))
 }
 
 /// Writes `f`'s change to the row's item, undone as one step, and shows it again wherever it

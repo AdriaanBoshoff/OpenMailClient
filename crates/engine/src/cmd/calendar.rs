@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 const MAX_ITEMS: usize = 20_000;
 /// Longest subject or location taken, in characters.
 const MAX_TEXT: usize = 2_000;
+/// The notes of an appointment are cut at this many characters.
+pub(crate) const MAX_NOTES: usize = 64_000;
 
 /// What the Calendar module shows.
 #[derive(Clone, Debug, Default)]
@@ -39,7 +41,7 @@ pub struct Shown {
 }
 
 const VIEW_PARAMS: &str = r#"{"view": "day" | "workWeek" | "week" | "month"}"#;
-const APPOINTMENT_PARAMS: &str = r#"{"subject", "start": "YYYY-MM-DD HH:MM" local time (a date alone for an all-day event), "end" (default: half an hour on, or the next day for an all-day event), "location", "allDay": bool, "busy": "free" | "tentative" | "busy" | "outOfOffice" | "workingElsewhere", "reminder": minutes before, or null for none (default 15; none for an all-day event), "repeat": as calendar.recurrence takes it, "zone": the time zone it is kept in and its times are given in, a name calendar.timeZones gives, or null for none (default: the one dates are shown in); a series in a zone keeps its hour there whatever the season, "attendees": those asked, which makes it a meeting one organizes (see calendar.newMeeting)}"#;
+const APPOINTMENT_PARAMS: &str = r#"{"subject", "start": "YYYY-MM-DD HH:MM" local time (a date alone for an all-day event), "end" (default: half an hour on, or the next day for an all-day event), "location", "allDay": bool, "busy": "free" | "tentative" | "busy" | "outOfOffice" | "workingElsewhere", "reminder": minutes before, or null for none (default 15; none for an all-day event), "repeat": as calendar.recurrence takes it, "zone": the time zone it is kept in and its times are given in, a name calendar.timeZones gives, or null for none (default: the one dates are shown in); a series in a zone keeps its hour there whatever the season, "attendees": those asked, which makes it a meeting one organizes (see calendar.newMeeting), "notes": its body, plain text (a series' alone; an occurrence has its series' notes)}"#;
 const REPEAT_PARAMS: &str = r#"{"id" (default: the one chosen), "repeat": null or "none" for once, or {"every": "day" | "weekday" | "week" | "month" | "year", "interval": days, weeks or months between (default 1), "on": weekday names (a week's days, or with "nth" the days of a month counted), "nth": 1 to 4 or "last", "day": the day of the month (default: the start's), "lastDay": true for the month's last day, "count": occurrences 1 to 999, or "until": "YYYY-MM-DD" (default: no end)}}; the first occurrence is the first day it falls on from the start, and occurrences changed on their own are as planned again"#;
 
 pub(crate) fn commands() -> Vec<CommandSpec> {
@@ -176,6 +178,16 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             params: DELETE_PARAMS,
             enabled: has_appointment,
             run: delete,
+        },
+        CommandSpec {
+            id: "calendar.notes",
+            label: "Appointment Notes",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"id" (default: the one chosen)}; returns {"untrusted_content": {"notes"}}, its body as plain text, a series' for each of its occurrences"#,
+            enabled: has_appointment,
+            run: notes,
         },
     ]
 }
@@ -328,6 +340,16 @@ impl Session {
         Appointment::of(&item).ok_or_else(|| EngineError::BadParams("that item is not an appointment".into()))
     }
 
+    /// The notes of appointment `id`, its body as plain text: a series' for each occurrence.
+    pub fn appointment_notes(&mut self, id: u64) -> Result<String, EngineError> {
+        let (store, folder) = calendar_folder(self).ok_or(StoreError::NoFolder)?;
+        let item = self.stores.get_mut(store).ok_or(StoreError::NoFolder)?.load(folder, ItemId(id))?;
+        if Appointment::of(&item).is_none() {
+            return Err(EngineError::BadParams("that item is not an appointment".into()));
+        }
+        Ok(item.body_text())
+    }
+
     /// The appointments any of which falls in `[from, to)`, earliest first, each occurrence of
     /// a series apart, and how many items could not be read.
     pub fn appointments_between(&mut self, from: i64, to: i64) -> Result<(Vec<(u64, Appointment)>, usize), EngineError> {
@@ -460,6 +482,40 @@ fn select(s: &mut Session, p: &Value) -> CmdResult {
     ok()
 }
 
+/// The notes `p` gives, plain text with lines kept and other control characters left out.
+pub(crate) fn notes_param(p: &Value) -> Result<Option<String>, EngineError> {
+    match p.get("notes") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(t)) => Ok(Some(
+            t.replace("\r\n", "\n")
+                .chars()
+                .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+                .take(MAX_NOTES)
+                .collect::<String>()
+                .trim_end()
+                .to_string(),
+        )),
+        Some(_) => Err(EngineError::BadParams("\"notes\" must be text".into())),
+    }
+}
+
+/// `item`'s body made `notes` alone: an HTML or RTF body it had is taken away, so no reader
+/// shows the old one.
+fn set_notes(item: &mut openmailclient_model::Item, notes: &str) {
+    use openmailclient_model::pid;
+    for id in [pid::HTML, pid::RTF_COMPRESSED, pid::RTF_IN_SYNC] {
+        item.props.remove(id);
+    }
+    item.set_body_text(notes);
+}
+
+fn notes(s: &mut Session, p: &Value) -> CmdResult {
+    let id = chosen(s, p)?;
+    let notes = s.appointment_notes(id)?;
+    // Written by whoever made it, an organizer a stranger may be.
+    Ok(json!({ "id": id, "untrusted_content": { "notes": notes } }))
+}
+
 fn text(p: &Value, key: &str) -> Result<Option<String>, EngineError> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -587,6 +643,9 @@ pub(super) fn new(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Its id for life, by which a copy of it (a calendar file, a server's) is known again.
     let mut item = a.item();
+    if let Some(notes) = notes_param(p)?.filter(|n| !n.is_empty()) {
+        set_notes(&mut item, &notes);
+    }
     if let Some(v) = p.get("attendees") {
         let asked = super::meeting::attendees_param(s, v)?;
         super::meeting::set_attendees(s, &mut item, asked)?;
@@ -823,6 +882,9 @@ fn change(s: &mut Session, p: &Value) -> CmdResult {
             if p.get("attendees").is_some() {
                 return Err(EngineError::BadParams("those asked are asked to the whole series; change the series".into()));
             }
+            if notes_param(p)?.is_some() {
+                return Err(EngineError::BadParams("an occurrence has the notes of its series; change the series".into()));
+            }
             let now = was.occurrence_of(day).ok_or_else(|| EngineError::BadParams("that appointment has no such occurrence".into()))?;
             let to = changed(s, p, Some(&now))?;
             // It stays between the occurrences before and after it, as Outlook keeps it.
@@ -848,6 +910,9 @@ fn change(s: &mut Session, p: &Value) -> CmdResult {
                 None => moved_series(&was, &mut a),
             }
             a.write(&mut item);
+            if let Some(notes) = notes_param(p)? {
+                set_notes(&mut item, &notes);
+            }
             if let Some(v) = p.get("attendees") {
                 let asked = super::meeting::attendees_param(s, v)?;
                 super::meeting::set_attendees(s, &mut item, asked)?;

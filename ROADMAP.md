@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); every setting in one Options window and the File tab in pages (M1.9); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 139 · 2026-10-30
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); every setting in one Options window and the File tab in pages (M1.9); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 140 · 2026-10-30
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 90 of 134 (67%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 720, all passing |
+| Tests | 723, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command, for published account settings and for updates |
@@ -299,7 +299,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~A contact's picture chosen in the contact window (`people.change` takes one already), and the other fields Outlook's Details page holds (office, profession, nickname, spouse)~~ | done: M5.12 |
 | ~~Tasks in calendar files (VTODO, RFC 5545 3.6.2)~~ | done: M5.11 |
 | ~~Tasks kept in step with a CalDAV server's task lists (calendars whose component set is VTODO, RFC 4791 5.2.3) in Tasks folders, as calendars are~~ | done: M5.12 |
-| Tasks dragged from the To-Do Bar to the Calendar, and a favourite's presence and recent mail | M5.12 |
+| ~~Tasks dragged from the To-Do Bar to the Calendar, and a favourite's presence and recent mail~~ | done: M5.12 |
+| A favourite's presence (free, busy, away) beside their name, from a chat or presence service an account offers (what they last sent is shown already) | M8, with the providers' own services |
 | Reminders standing above every other window in one of their own when the main window is hidden, and the sound chosen from a file of the owner's | M5.12 |
 | A reminder of its own on one occurrence changed alone ([MS-OXOCAL] 2.2.1.44.2, an exception's ReminderSet and ReminderDelta) and the Reminders search folder Outlook keeps in a data file; reminders checked against Outlook's on a file of ours | M5.12, the last with M1's checks against Outlook |
 | Assign Task and task requests ([MS-OXOTASK] 2.2.4), and a task's recurrence made and changed in its window (recurring tasks are read and shown already) | after M5.10, with the Scheduling Assistant |
@@ -2611,3 +2612,19 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   first name to "Sir or Madam" by itself. Hostile input: conditions and their values bounded,
   an unknown field or comparison refused by name, at most 2,000 letters (a page each at
   least). 2 tests.
+- **2026-10-30** - M5.12: Tasks dragged onto the Calendar, appointment notes, and what a
+  favourite last sent. A task or flagged message dragged from the To-Do Bar's list and let go
+  on the Calendar's hours is an appointment from that half hour, on a day's band or a day of
+  the month an all-day event, `calendar.fromTask` (`"start"`, and `"minutes"` if wanted); the
+  place it would go is lit while it is held, and the task stays. Appointments now have notes,
+  made, changed and read with them (`"notes"` on calendar.new and calendar.change, and
+  `calendar.notes`, its text marked as untrusted content), in a Notes box in the appointment's
+  window; one occurrence shows its series' notes. Each favourite in the To-Do Bar's People
+  shows the last message they sent that an Inbox holds and how many of theirs are not read,
+  `"lastHeard"` in todo.bar; a click shows it in Mail, `mail.showMessage`. Better than
+  Outlook: the appointment is as long as the work the task is thought to take, its notes name
+  the task and the day it is due before the task's own notes, someone else using a favourite's
+  name is not taken for them (the message's own sender is looked at), and the unread count is
+  beside the last subject. Presence itself needs a chat or presence service and has its own
+  row. Hostile input: the length bounded to two weeks, notes capped and their control
+  characters dropped, the messages looked at and opened bounded. 3 tests.

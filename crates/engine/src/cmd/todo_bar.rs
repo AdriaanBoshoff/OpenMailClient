@@ -6,7 +6,7 @@
 //! reminders are (`crate::reminders`). `todo.bar` reads it for agents and the CLI, shown or not.
 
 use super::tasks::{Row, View};
-use super::{CommandSpec, always, p_bool, p_str};
+use super::{CommandSpec, always, ok, p_bool, p_str};
 use crate::{CmdResult, EngineError, Module, Session};
 use openmailclient_model::calendar::{self, Appointment};
 use serde_json::{Value, json};
@@ -25,6 +25,10 @@ const MAX_ADDRESS: usize = 320;
 const LOOK_MS: u64 = 60_000;
 /// After something was done, it is read again this soon at the least.
 const AFTER_MS: u64 = 1_000;
+/// Messages of each Inbox looked through for what a favourite last sent, the newest first.
+const MAX_LOOKED: usize = 5_000;
+/// Messages opened at most, each time it is read, to be sure who sent one sent by a name alone.
+const MAX_OPENED: usize = 40;
 
 /// The parts of the bar one module shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -70,6 +74,22 @@ pub struct Favorite {
     pub address: String,
     /// Whether a contact of an open data file has the address.
     pub known: bool,
+    /// The last message they sent that an Inbox holds.
+    pub heard: Option<Heard>,
+}
+
+/// A message a favourite sent, where it is kept.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Heard {
+    pub subject: String,
+    /// When it came, UTC FILETIME ticks.
+    pub time: i64,
+    pub read: bool,
+    pub store: usize,
+    pub folder: openmailclient_model::FolderId,
+    pub id: u64,
+    /// Messages from them not read yet, of those looked through.
+    pub unread: usize,
 }
 
 /// What the bar shows, and when it was read.
@@ -108,7 +128,7 @@ pub fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{}; returns {"shown": the parts the module shown shows, "appointments" of today and the next days not ended yet, "tasks" of the To-Do List with their "heading", "people" marked as favourites, "unreadable", "leftOut"}, all parts whether shown or not"#,
+            params: r#"{}; returns {"shown": the parts the module shown shows, "appointments" of today and the next days not ended yet, "tasks" of the To-Do List with their "heading", "people" marked as favourites, each with "lastHeard": the last message they sent an Inbox holds ({"subject", "time", "read", "unread": how many of theirs are not read, "store", "folder", "id"}) or null, "unreadable", "leftOut"}, all parts whether shown or not"#,
             enabled: always,
             run: items,
         },
@@ -121,6 +141,16 @@ pub fn commands() -> Vec<CommandSpec> {
             params: r#"{"address": an e-mail address, "on": true to add it (default) or false to take it off}; the favourites stand in the To-Do Bar's People part"#,
             enabled: always,
             run: favorite,
+        },
+        CommandSpec {
+            id: "mail.showMessage",
+            label: "Show Message",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"store", "folder", "id"}: the numbers a favourite's "lastHeard" in todo.bar gives; Mail is shown at that folder with the message chosen"#,
+            enabled: always,
+            run: show_message,
         },
     ]
 }
@@ -192,12 +222,55 @@ impl Session {
                 .favorites
                 .iter()
                 .map(|address| match entries.iter().find(|e| e.address.eq_ignore_ascii_case(address)) {
-                    Some(e) if !e.name.trim().is_empty() => Favorite { name: e.name.clone(), address: address.clone(), known: true },
-                    found => Favorite { name: address.clone(), address: address.clone(), known: found.is_some() },
+                    Some(e) if !e.name.trim().is_empty() => Favorite { name: e.name.clone(), address: address.clone(), known: true, heard: None },
+                    found => Favorite { name: address.clone(), address: address.clone(), known: found.is_some(), heard: None },
                 })
                 .collect();
+            self.last_heard(&mut out.people);
         }
         out
+    }
+
+    /// What each favourite last sent that an Inbox holds, and how many of theirs are unread.
+    /// A message the list names only by a name is opened to be sure of its sender, up to
+    /// `MAX_OPENED` of them; one that cannot be read is passed over.
+    fn last_heard(&mut self, people: &mut [Favorite]) {
+        let mut opened = 0usize;
+        for store in 0..self.stores.len() {
+            let Some(inbox) = self.find_folder(store, openmailclient_model::FolderKind::Inbox) else { continue };
+            let Some(st) = self.stores.get_mut(store) else { continue };
+            let Ok(mut rows) = st.list(inbox) else { continue };
+            rows.sort_by_key(|r| std::cmp::Reverse(r.time));
+            rows.truncate(MAX_LOOKED);
+            let froms: Vec<String> = rows.iter().map(|r| r.from.trim().to_lowercase()).collect();
+            for f in people.iter_mut() {
+                let name = f.name.trim().to_lowercase();
+                for (r, from) in rows.iter().zip(&froms) {
+                    let by_address = from.contains(&f.address);
+                    if !by_address && (name.is_empty() || *from != name || f.address == name) {
+                        continue;
+                    }
+                    if !by_address {
+                        // Sent by that name: from that address only if the message says so.
+                        if opened >= MAX_OPENED {
+                            continue;
+                        }
+                        opened += 1;
+                        match st.load(inbox, openmailclient_model::ItemId(r.id)) {
+                            Ok(item) if item.sender_email().trim().eq_ignore_ascii_case(&f.address) => {}
+                            _ => continue,
+                        }
+                    }
+                    let newer = f.heard.as_ref().is_none_or(|h| r.time > h.time);
+                    let unread = f.heard.as_ref().map_or(0, |h| h.unread).saturating_add(usize::from(!r.read));
+                    if newer {
+                        f.heard = Some(Heard { subject: r.subject.clone(), time: r.time, read: r.read, store, folder: inbox, id: r.id, unread });
+                    } else if let Some(h) = f.heard.as_mut() {
+                        h.unread = unread;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -252,7 +325,24 @@ fn items(s: &mut Session, _: &Value) -> CmdResult {
             v
         })
         .collect();
-    let people: Vec<Value> = read.people.iter().map(|f| json!({ "name": f.name, "address": f.address, "known": f.known })).collect();
+    let people: Vec<Value> = read
+        .people
+        .iter()
+        .map(|f| {
+            let heard = f.heard.as_ref().map(|h| {
+                json!({
+                    "subject": h.subject,
+                    "time": super::calendar::stamp(s, h.time),
+                    "read": h.read,
+                    "unread": h.unread,
+                    "store": h.store,
+                    "folder": h.folder.0,
+                    "id": h.id,
+                })
+            });
+            json!({ "name": f.name, "address": f.address, "known": f.known, "lastHeard": heard })
+        })
+        .collect();
     Ok(json!({
         "shown": s.todo_bar_parts().to_json(),
         "appointments": appointments,
@@ -292,6 +382,23 @@ pub fn favorite_address(text: &str) -> Option<String> {
         return None;
     }
     Some(a.to_lowercase())
+}
+
+fn show_message(s: &mut Session, p: &Value) -> CmdResult {
+    let number = |key: &str| p.get(key).and_then(Value::as_u64).ok_or_else(|| EngineError::BadParams(format!("\"{key}\" must be a number")));
+    let store = usize::try_from(number("store")?).map_err(|_| EngineError::BadParams("no such data file is open".into()))?;
+    let folder = openmailclient_model::FolderId(number("folder")?);
+    let id = number("id")?;
+    if s.folder_info(store, folder).is_none() {
+        return Err(EngineError::BadParams("no such folder of a data file open".into()));
+    }
+    s.module = Module::Mail;
+    s.select_folder(store, folder)?;
+    if !s.rows.iter().any(|row| row.id == id) {
+        return Err(EngineError::BadParams("that message is not shown in its folder; a search or filter hides it".into()));
+    }
+    s.select_item(id)?;
+    ok()
 }
 
 fn favorite(s: &mut Session, p: &Value) -> CmdResult {

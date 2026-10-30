@@ -3771,3 +3771,59 @@ fn mail_merge_filters_in_its_window_and_saves_letters_as_a_document() {
     assert!(ui.execute("ui.mergeLetters", &json!({})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A task from the To-Do Bar let go on the Calendar's hours is an appointment at that half
+/// hour, on a day of the month an all-day event; its notes are in the appointment's window.
+#[test]
+fn a_task_let_go_on_the_calendar_is_an_appointment_with_its_notes() {
+    let mut ui = MailUi::new(Session::with_sample());
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    ui.execute("tasks.new", &json!({ "subject": "Write the rota", "notes": "Weekends first." })).unwrap();
+    let made = ui.session.tasks.selected.unwrap();
+    let drag = crate::todo_bar::TaskDrag { store: made.0, folder: made.1.0, id: made.2, subject: "Write the rota".into() };
+    ui.execute("nav.module", &json!({ "module": "calendar" })).unwrap();
+    ui.execute("calendar.view", &json!({ "view": "day" })).unwrap();
+    ui.execute("view.todoBar", &json!({ "part": "tasks", "show": true })).unwrap();
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let drop_at = |ui: &mut MailUi, at: egui::Pos2| {
+        frame(ui, &ctx, Vec::new(), None);
+        frame(ui, &ctx, Vec::new(), None);
+        egui::DragAndDrop::set_payload(&ctx, drag.clone());
+        frame(ui, &ctx, vec![egui::Event::PointerMoved(at)], None);
+        frame(ui, &ctx, vec![button(at, false)], None);
+        frame(ui, &ctx, Vec::new(), None);
+        assert!(!egui::DragAndDrop::has_any_payload(&ctx), "let go, nothing is held");
+    };
+    let mine = |ui: &MailUi| {
+        ui.session.calendar.items.iter().filter(|(_, a)| a.subject == "Write the rota").map(|(id, a)| (*id, a.clone())).collect::<Vec<_>>()
+    };
+    drop_at(&mut ui, egui::pos2(560.0, 480.0));
+    let got = mine(&ui);
+    assert_eq!(got.len(), 1, "{}", ui.session.status);
+    let (id, a) = got[0].clone();
+    assert!(!a.all_day);
+    assert_eq!(a.start % (30 * openmailclient_model::calendar::MINUTE), 0, "at a half hour");
+
+    ui.open_appointment(id, None);
+    let form = ui.appointment.as_ref().unwrap();
+    assert!(form.notes.starts_with("From the task."), "{}", form.notes);
+    assert!(form.notes.contains("Weekends first."));
+    let mut form = ui.appointment.take().unwrap();
+    form.notes = "Weekends first, then evenings.".into();
+    ui.execute("calendar.change", &form.params()).unwrap();
+    assert_eq!(ui.session.appointment_notes(id).unwrap(), "Weekends first, then evenings.");
+    assert!(
+        crate::calendar::AppointmentForm::of(Some(id), &a, &ui.session.zone.clone()).params().get("notes").is_none(),
+        "notes are sent only when changed"
+    );
+
+    // Let go on a day of the month: all day.
+    ui.execute("calendar.view", &json!({ "view": "month" })).unwrap();
+    drop_at(&mut ui, egui::pos2(560.0, 420.0));
+    assert!(mine(&ui).iter().any(|(_, a)| a.all_day), "{}", ui.session.status);
+    // Let go anywhere else, nothing is made.
+    let before = mine(&ui).len();
+    drop_at(&mut ui, egui::pos2(30.0, 650.0));
+    assert_eq!(mine(&ui).len(), before);
+}

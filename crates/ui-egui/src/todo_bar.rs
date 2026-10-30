@@ -25,6 +25,35 @@ fn iso(day: i64) -> String {
     format!("{:04}-{:02}-{:02}", c.year, c.month, c.day)
 }
 
+/// A task or a flagged message dragged from the To-Do List, to be given a time in the
+/// Calendar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TaskDrag {
+    pub(crate) store: usize,
+    pub(crate) folder: u64,
+    pub(crate) id: u64,
+    pub(crate) subject: String,
+}
+
+/// Where a task dragged from the To-Do List is held over `rect`, while it is.
+pub(crate) fn task_over(ui: &Ui, rect: Rect) -> Option<egui::Pos2> {
+    if !egui::DragAndDrop::has_payload_of_type::<TaskDrag>(ui.ctx()) {
+        return None;
+    }
+    ui.ctx().pointer_latest_pos().filter(|at| rect.contains(*at))
+}
+
+/// A task dragged from the To-Do List let go over `rect` now, and where; it is taken, so only
+/// one place has it.
+pub(crate) fn task_dropped(ui: &Ui, rect: Rect) -> Option<(TaskDrag, egui::Pos2)> {
+    let at = task_over(ui, rect)?;
+    if !ui.input(|i| i.pointer.any_released()) {
+        return None;
+    }
+    let d = egui::DragAndDrop::take_payload::<TaskDrag>(ui.ctx())?;
+    Some(((*d).clone(), at))
+}
+
 /// One line of a part's list.
 enum Line {
     Head(String),
@@ -185,9 +214,10 @@ impl MailUi {
         let body = self.todo_head(ui, rect, "People", "people");
         let people = self.session.todo.people.clone();
         let mut y = body.top() + 4.0;
-        let (mut write, mut off) = (None, None);
+        let (mut write, mut off, mut shown) = (None, None, None);
         for (n, f) in people.iter().enumerate() {
-            if y + ROW > body.bottom() - 30.0 {
+            let tall = if f.heard.is_some() { ROW + 16.0 } else { ROW };
+            if y + tall > body.bottom() - 30.0 {
                 break;
             }
             let r = Rect::from_min_size(pos2(body.left(), y), vec2(body.width(), ROW));
@@ -213,7 +243,34 @@ impl MailUi {
             } else if resp.clicked() {
                 write = Some(f.clone());
             }
-            y += ROW;
+            // The last they sent, and how many of theirs wait to be read; a click shows it.
+            if let Some(h) = &f.heard {
+                let line = Rect::from_min_size(pos2(body.left(), y + ROW - 4.0), vec2(body.width(), 18.0));
+                let line_resp = ui.interact(line, egui::Id::new(("todo-heard", n)), Sense::click()).on_hover_text("Show the message");
+                let p = ui.painter_at(line);
+                if line_resp.hovered() {
+                    p.rect_filled(line, 0.0, t.hover);
+                }
+                // Today's by the time, others by the day.
+                let c = self.session.zone.civil(h.time);
+                let today = calendar::day_of(h.time, &self.session.zone) == self.session.today();
+                let when = if today { self.session.region.time(&c) } else { self.session.region.date(&c) };
+                let mut right = line.right() - 8.0;
+                if h.unread > 0 {
+                    let count = h.unread.min(999).to_string();
+                    p.text(pos2(right, line.center().y), Align2::RIGHT_CENTER, &count, bold(11.0), t.accent);
+                    right -= crate::text_width(&p, &count, bold(11.0)) + 6.0;
+                }
+                p.text(pos2(right, line.center().y), Align2::RIGHT_CENTER, &when, font(10.5), t.text_faint);
+                right -= crate::text_width(&p, &when, font(10.5)) + 6.0;
+                let subject = if h.subject.trim().is_empty() { "(No subject)".to_string() } else { one_line(&h.subject) };
+                let weight = if h.read { font(11.0) } else { bold(11.0) };
+                clip_text(&p, pos2(line.left() + 32.0, line.center().y - 6.5), (right - line.left() - 32.0).max(0.0), &subject, weight, t.text_dim);
+                if line_resp.clicked() {
+                    shown = Some(h.clone());
+                }
+            }
+            y += tall;
         }
         if people.is_empty() {
             ui.painter_at(body).text(pos2(body.left() + 12.0, y + 9.0), Align2::LEFT_CENTER, "No favourites yet", font(12.0), t.text_dim);
@@ -243,7 +300,19 @@ impl MailUi {
             self.act("mail.new", Value::Null);
             self.act("compose.setField", json!({ "field": "to", "value": to }));
         }
+        if let Some(h) = shown {
+            self.act("mail.showMessage", json!({ "store": h.store, "folder": h.folder.0, "id": h.id }));
+        }
         (line.bottom() + 8.0).min(rect.bottom())
+    }
+
+    /// A task dragged from the To-Do List given a time in the Calendar: `start` as
+    /// `calendar.fromTask` takes it.
+    pub(crate) fn schedule_task(&mut self, d: &TaskDrag, start: &str) {
+        let asked = json!({ "id": d.id, "store": d.store, "folder": d.folder, "start": start });
+        if let Err(e) = self.execute("calendar.fromTask", &asked) {
+            self.session.status = e;
+        }
     }
 
     /// What was typed in the People part made a favourite: an address as it is, a name as the
@@ -320,7 +389,7 @@ impl MailUi {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
         egui::ScrollArea::vertical().id_salt("todo-tasks").auto_shrink([false, false]).show_rows(&mut child, ROW + 2.0, lines.len(), |ui, range| {
             for line in lines.get(range).unwrap_or(&[]) {
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW + 2.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW + 2.0), Sense::click_and_drag());
                 let p = ui.painter();
                 let n = match line {
                     Line::Head(name) => {
@@ -331,6 +400,9 @@ impl MailUi {
                     Line::Row(n) => *n,
                 };
                 let Some(row) = rows.get(n) else { continue };
+                // Dragged onto the Calendar, it is given a time there.
+                let (store, folder, id) = row.key();
+                resp.dnd_set_drag_payload(TaskDrag { store, folder: folder.0, id, subject: one_line(&row.task.subject) });
                 if resp.hovered() {
                     p.rect_filled(r, 0.0, t.hover);
                 }
@@ -349,6 +421,15 @@ impl MailUi {
                 }
             }
         });
+        // What is being dragged, by the pointer, above everything.
+        if let (Some(d), Some(at)) = (egui::DragAndDrop::payload::<TaskDrag>(ui.ctx()), ui.ctx().pointer_latest_pos()) {
+            let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("todo-task-drag")));
+            let words = if d.subject.trim().is_empty() { "(No subject)".to_string() } else { d.subject.clone() };
+            let r = Rect::from_min_size(at + vec2(14.0, 8.0), vec2(220.0, ROW));
+            p.rect_filled(r, 3.0, t.surface);
+            p.rect_stroke(r, 3.0, (1.0, t.accent), egui::StrokeKind::Inside);
+            clip_text(&p, pos2(r.left() + 8.0, r.center().y - 7.0), r.width() - 16.0, &words, font(12.0), t.text);
+        }
         if let Some((store, folder, id)) = ticked {
             self.act("tasks.markComplete", json!({ "id": id, "store": store, "folder": folder.0 }));
         }

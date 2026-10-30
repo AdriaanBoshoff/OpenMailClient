@@ -131,8 +131,13 @@ fn favourites_are_shown_by_their_contacts_names() {
     assert_eq!(s.favorites, ["priya.raman@example.org", "someone@elsewhere.example"], "kept once, in lower case");
     let bar = run(&mut s, "todo.bar", json!({}));
     let people = &bar["untrusted_content"]["people"];
-    assert_eq!(people[0], json!({"name": "Priya Raman", "address": "priya.raman@example.org", "known": true}));
-    assert_eq!(people[1], json!({"name": "someone@elsewhere.example", "address": "someone@elsewhere.example", "known": false}));
+    assert_eq!(
+        (&people[0]["name"], &people[0]["address"], &people[0]["known"]),
+        (&json!("Priya Raman"), &json!("priya.raman@example.org"), &json!(true))
+    );
+    assert_eq!(people[1]["name"], "someone@elsewhere.example");
+    assert_eq!(people[1]["known"], false);
+    assert_eq!(people[1]["lastHeard"], Value::Null, "nothing came from them");
     run(&mut s, "people.favorite", json!({"address": "PRIYA.RAMAN@example.org", "on": false}));
     assert_eq!(s.favorites, ["someone@elsewhere.example"]);
     for bad in ["", "nobody", "@example.org", "a@", "a@b@c", "a b@example.org", "<a@b.example>", "a@b.ex\u{7}ample"] {
@@ -171,4 +176,133 @@ fn the_parts_and_the_favourites_are_kept_with_the_settings() {
     assert_eq!(third.todo_bar[2], Parts::default());
     assert_eq!(third.favorites, ["x@y.example"]);
     assert!(loaded["ignored"].as_u64().unwrap() >= 4);
+}
+
+/// A favourite shows what they last sent that an Inbox holds, and how many of theirs are not
+/// read yet; one known by a name alone is made sure of by the message's own sender.
+#[test]
+fn a_favourite_shows_the_last_mail_they_sent() {
+    let mut s = session();
+    run(&mut s, "people.favorite", json!({"address": "priya.raman@example.org"}));
+    let inbox = s.find_folder(0, openmailclient_model::FolderKind::Inbox).unwrap();
+    let rows = s.stores[0].list(inbox).unwrap();
+    let theirs: Vec<_> = rows.iter().filter(|r| r.from == "Priya Raman").collect();
+    assert!(!theirs.is_empty(), "the sample has mail from Priya");
+    let newest = theirs.iter().max_by_key(|r| r.time).unwrap();
+    let unread = theirs.iter().filter(|r| !r.read).count();
+    let bar = run(&mut s, "todo.bar", json!({}));
+    let heard = &bar["untrusted_content"]["people"][0]["lastHeard"];
+    assert_eq!(heard["subject"], json!(newest.subject));
+    assert_eq!(heard["id"], json!(newest.id));
+    assert_eq!(heard["unread"], json!(unread));
+    assert_eq!(heard["folder"], json!(inbox.0));
+    run(&mut s, "nav.module", json!({"module": "calendar"}));
+    run(&mut s, "mail.showMessage", json!({"store": heard["store"], "folder": heard["folder"], "id": heard["id"]}));
+    assert_eq!(s.module, crate::Module::Mail);
+    assert_eq!(s.open.as_ref().map(|m| m.subject()), Some(newest.subject.clone()));
+    for bad in [
+        json!({}),
+        json!({"store": 9, "folder": inbox.0, "id": 1}),
+        json!({"store": 0, "folder": 999_999, "id": 1}),
+        json!({"store": 0, "folder": inbox.0, "id": 999_999}),
+        json!({"store": -1, "folder": "x", "id": 1}),
+    ] {
+        assert!(s.run("mail.showMessage", &bad).is_err(), "{bad} is refused");
+    }
+
+    // Someone else using the same name is not taken for them.
+    let mut forged = openmailclient_model::Item::default();
+    forged.props.set_str(openmailclient_model::pid::MESSAGE_CLASS, "IPM.Note");
+    forged.props.set_str(openmailclient_model::pid::SUBJECT, "Not really Priya");
+    forged.set_sender("Priya Raman", "someone.else@elsewhere.example");
+    forged.props.set(openmailclient_model::pid::MESSAGE_DELIVERY_TIME, openmailclient_model::PropValue::Time(s.now));
+    s.stores[0].add(inbox, forged).unwrap();
+    let bar = run(&mut s, "todo.bar", json!({}));
+    assert_eq!(bar["untrusted_content"]["people"][0]["lastHeard"]["subject"], json!(newest.subject));
+}
+
+/// A task dragged onto the Calendar is an appointment with its subject and notes, as long as
+/// the work it is thought to take; on the band of a day, an all-day event; the task stays.
+#[test]
+fn a_task_scheduled_in_the_calendar_is_an_appointment_with_its_subject_and_notes() {
+    let mut s = session();
+    let made = run(
+        &mut s,
+        "tasks.new",
+        json!({"subject": "Draft the venue contract", "due": "2030-10-11", "notes": "Clause 4 needs the new dates.", "totalWork": 90}),
+    );
+    let row = json!({"id": made["id"], "store": made["store"], "folder": made["folder"]});
+    let mut at = row.clone();
+    at["start"] = json!("2030-10-10 09:00");
+    let got = run(&mut s, "calendar.fromTask", at);
+    assert_eq!(got["minutes"], json!(90), "as long as the work it is thought to take");
+    let id = got["id"].as_u64().unwrap();
+    let a = s.appointment(id).unwrap();
+    assert_eq!(a.subject, "Draft the venue contract");
+    assert_eq!((a.end - a.start) / openmailclient_model::calendar::MINUTE, 90);
+    let notes = run(&mut s, "calendar.notes", json!({"id": id}));
+    let notes = notes["untrusted_content"]["notes"].as_str().unwrap();
+    assert!(notes.starts_with("From the task, due"), "{notes}");
+    assert!(notes.contains("Clause 4 needs the new dates."), "{notes}");
+    assert!(
+        run(&mut s, "todo.bar", json!({}))["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["untrusted_content"]["subject"] == "Draft the venue contract"),
+        "the task stays"
+    );
+
+    let mut all_day = row.clone();
+    all_day["start"] = json!("2030-10-12");
+    let got = run(&mut s, "calendar.fromTask", all_day);
+    assert_eq!(got["allDay"], json!(true));
+    assert!(s.appointment(got["id"].as_u64().unwrap()).unwrap().all_day);
+    let mut asked = row.clone();
+    asked["start"] = json!("2030-10-10 13:00");
+    asked["minutes"] = json!(45);
+    let got = run(&mut s, "calendar.fromTask", asked);
+    let a = s.appointment(got["id"].as_u64().unwrap()).unwrap();
+    assert_eq!((a.end - a.start) / openmailclient_model::calendar::MINUTE, 45);
+
+    // The notes of an appointment change with it, and an occurrence keeps its series'.
+    run(&mut s, "calendar.change", json!({"id": id, "notes": "New\r\nlines\u{7}"}));
+    assert_eq!(run(&mut s, "calendar.notes", json!({"id": id}))["untrusted_content"]["notes"], "New\nlines");
+    for bad in [
+        {
+            let mut b = row.clone();
+            b["start"] = json!("soon");
+            b
+        },
+        {
+            let mut b = row.clone();
+            b["start"] = json!("2030-10-10 09:00");
+            b["minutes"] = json!(0);
+            b
+        },
+        {
+            let mut b = row.clone();
+            b["start"] = json!("2030-10-10 09:00");
+            b["minutes"] = json!(1_000_000);
+            b
+        },
+        {
+            let mut b = row.clone();
+            b["start"] = json!("2030-10-10 09:00");
+            b["minutes"] = json!("long");
+            b
+        },
+        {
+            let mut b = row.clone();
+            b.as_object_mut().unwrap().remove("start");
+            b
+        },
+        json!({"id": 999_999, "start": "2030-10-10 09:00"}),
+    ] {
+        assert!(s.run("calendar.fromTask", &bad).is_err(), "{bad} is refused");
+    }
+    assert!(s.run("calendar.notes", &json!({"id": 999_999})).is_err());
+    assert!(s.run("calendar.new", &json!({"start": "2030-10-10 09:00", "notes": 3})).is_err());
+    assert_eq!(crate::cmd::tasks::scheduled_minutes(None, 5).unwrap(), 30, "too little work said: half an hour");
+    assert_eq!(crate::cmd::tasks::scheduled_minutes(None, 100_000).unwrap(), 30, "more than a day: half an hour");
 }

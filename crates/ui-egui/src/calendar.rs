@@ -4,6 +4,7 @@
 
 use crate::icons::{self, Icon};
 use crate::line_edit::LineEdit;
+use crate::todo_bar::{TaskDrag, task_dropped, task_over};
 use crate::{MailUi, bold, clip_text, font, one_line, text_width};
 use egui::{Align2, Color32, Painter, Rect, ScrollArea, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
 use openmailclient_model::calendar::{self, Appointment, Busy, DAY, MINUTE, View};
@@ -218,6 +219,9 @@ pub(crate) struct AppointmentForm {
     pub(crate) asked_was: [String; 3],
     /// Those asked are shown to be typed in: a meeting one organizes, or Invite Attendees.
     pub(crate) inviting: bool,
+    /// Its notes, the series' for one occurrence; and as they were, sent only when changed.
+    pub(crate) notes: String,
+    pub(crate) notes_was: String,
 }
 
 const REMINDERS: &[(Option<i32>, &str)] = &[
@@ -331,7 +335,16 @@ impl AppointmentForm {
             asked: Default::default(),
             asked_was: Default::default(),
             inviting: false,
+            notes: String::new(),
+            notes_was: String::new(),
         }
+    }
+
+    /// The form with the notes it was opened with.
+    pub(crate) fn with_notes(mut self, notes: String) -> Self {
+        self.notes_was = notes.clone();
+        self.notes = notes;
+        self
     }
 
     /// The form made to show `m`, the meeting it is.
@@ -378,6 +391,9 @@ impl AppointmentForm {
         }
         if self.occurrence.is_none() {
             p["zone"] = if self.zone.is_empty() { Value::Null } else { json!(self.zone) };
+        }
+        if self.occurrence.is_none() && self.notes != self.notes_was {
+            p["notes"] = json!(self.notes);
         }
         // Those asked, when they were typed or changed; the whole series' alone.
         if self.occurrence.is_none() && self.inviting && !self.received() && (self.asked != self.asked_was || self.id.is_none()) {
@@ -713,6 +729,17 @@ Kept in step with a calendar server at each Send/Receive"
         p.hline(rect.x_range(), band.bottom() - 0.5, (1.0, t.line));
         let mut band_open: Option<(u64, Option<i64>)> = None;
         let mut band_select: Option<(u64, Option<i64>)> = None;
+        // A task let go on a day's band is an all-day event that day.
+        let mut dropped: Option<(TaskDrag, String)> = None;
+        for (i, day) in days.iter().enumerate() {
+            let column = Rect::from_min_size(pos2(col_x(i), band.top()), vec2(col_w, band_h));
+            if task_over(ui, column).is_some() {
+                p.rect_filled(column.shrink(1.0), 2.0, t.accent.gamma_multiply(0.18));
+            }
+            if let Some((d, _)) = task_dropped(ui, column) {
+                dropped = Some((d, ymd(&date_of(*day))));
+            }
+        }
         for (row, c0, c1, (id, a)) in &placed {
             let r = Rect::from_min_max(
                 pos2(col_x(*c0) + 3.0, band.top() + 3.0 + BAND_ROW * *row as f32),
@@ -809,6 +836,26 @@ Kept in step with a calendar server at each Send/Receive"
                         p.circle_filled(pos2(x, y), 4.0, t.danger);
                     }
                 }
+                // A task let go on the hours is an appointment from that half hour.
+                let shown = canvas.intersect(ui.clip_rect());
+                let slot = |at: egui::Pos2| {
+                    let i = ((at.x - canvas.left() - gutter) / col_w).floor();
+                    let half = ((at.y - canvas.top()) / (HOUR_H / 2.0)).floor().clamp(0.0, 47.0) as i64;
+                    (i >= 0.0).then_some(()).and_then(|()| days.get(i as usize)).map(|day| (i as usize, *day, half))
+                };
+                if let Some((i, _, half)) = task_over(ui, shown).and_then(slot) {
+                    let x = canvas.left() + gutter + col_w * i as f32;
+                    let y = canvas.top() + HOUR_H / 2.0 * half as f32;
+                    p.rect_filled(
+                        Rect::from_min_size(pos2(x + 2.0, y + 1.0), vec2(col_w - 4.0, HOUR_H / 2.0 - 2.0)),
+                        2.0,
+                        t.accent.gamma_multiply(0.3),
+                    );
+                }
+                if let Some((d, (_, day, half))) = task_dropped(ui, shown).and_then(|(d, at)| slot(at).map(|s| (d, s))) {
+                    let start = off.civil(calendar::day_start(day, off).saturating_add(half * 30 * MINUTE));
+                    dropped = Some((d, format!("{} {}", ymd(&start), hm(&start))));
+                }
                 // A double click where nothing is makes an appointment at that half hour.
                 if let Some(at) = resp.interact_pointer_pos().filter(|_| resp.double_clicked() || resp.clicked()) {
                     let i = ((at.x - canvas.left() - gutter) / col_w).floor();
@@ -825,7 +872,9 @@ Kept in step with a calendar server at each Send/Receive"
                 }
             });
         });
-        if let Some((id, occurrence)) = open.or(band_open) {
+        if let Some((d, start)) = dropped {
+            self.schedule_task(&d, &start);
+        } else if let Some((id, occurrence)) = open.or(band_open) {
             self.open_appointment(id, occurrence);
         } else if let Some((id, occurrence)) = select.or(band_select) {
             self.act("calendar.select", select_params(id, occurrence));
@@ -938,6 +987,7 @@ Kept in step with a calendar server at each Send/Receive"
         let mut select: Option<Option<(u64, Option<i64>)>> = None;
         let mut new_on: Option<i64> = None;
         let mut go: Option<i64> = None;
+        let mut dropped: Option<(TaskDrag, String)> = None;
         for (i, day) in days.iter().enumerate() {
             let (row, col) = (i / 7, i % 7);
             let cell = Rect::from_min_size(pos2(rect.left() + w * col as f32, head.bottom() + h * row as f32), vec2(w, h));
@@ -946,6 +996,13 @@ Kept in step with a calendar server at each Send/Receive"
             p.rect_filled(cell, 0.0, if in_month { t.surface } else { t.pane });
             p.rect_stroke(cell, 0.0, (1.0, t.line), egui::StrokeKind::Inside);
             let cell_resp = ui.interact(cell, egui::Id::new(("cal-month-day", *day)), Sense::click());
+            // A task let go on a day of the month is an all-day event that day.
+            if task_over(ui, cell).is_some() {
+                p.rect_stroke(cell.shrink(1.0), 0.0, (2.0, t.accent), egui::StrokeKind::Inside);
+            }
+            if let Some((d, _)) = task_dropped(ui, cell) {
+                dropped = Some((d, ymd(&c)));
+            }
             let label = if c.day == 1 { format!("{} {}", c.month_name().chars().take(3).collect::<String>(), c.day) } else { c.day.to_string() };
             let is_today = *day == today;
             if is_today {
@@ -1029,7 +1086,9 @@ Kept in step with a calendar server at each Send/Receive"
                 select = Some(None);
             }
         }
-        if let Some((id, occurrence)) = open {
+        if let Some((d, start)) = dropped {
+            self.schedule_task(&d, &start);
+        } else if let Some((id, occurrence)) = open {
             self.open_appointment(id, occurrence);
         } else if let Some(day) = go {
             self.act("calendar.view", json!({ "view": "day" }));
@@ -1055,10 +1114,18 @@ Kept in step with a calendar server at each Send/Receive"
         let shown = self.session.calendar.items.iter().chain(&self.session.todo.appointments).find(is).map(|(_, a)| a.clone());
         let Some(a) = shown else { return };
         let m = if a.meeting { self.session.meeting(id).ok().flatten() } else { None };
-        let mut form = AppointmentForm::of(Some(id), &a, off).with_meeting(m.clone());
+        // The notes are the series', for each of its occurrences.
+        let notes = match self.session.appointment_notes(id) {
+            Ok(n) => n,
+            Err(e) => {
+                self.session.status = e.to_string();
+                String::new()
+            }
+        };
+        let mut form = AppointmentForm::of(Some(id), &a, off).with_meeting(m.clone()).with_notes(notes.clone());
         if a.occurrence.is_some() {
             match self.session.appointment(id) {
-                Ok(series) => form.other = Some(Box::new(AppointmentForm::of(Some(id), &series, off).with_meeting(m))),
+                Ok(series) => form.other = Some(Box::new(AppointmentForm::of(Some(id), &series, off).with_meeting(m).with_notes(notes))),
                 Err(e) => self.session.status = e.to_string(),
             }
         }
@@ -1285,6 +1352,14 @@ Kept in step with a calendar server at each Send/Receive"
                     repeat_rows(ui, &t, &mut form.repeat, week_start, preview.as_ref());
                 }
             });
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new("Notes").color(t.text_dim));
+            let alone = form.occurrence.is_some();
+            ui.add_enabled(
+                !alone,
+                egui::TextEdit::multiline(&mut form.notes).id_salt("appt-notes").desired_rows(3).desired_width(f32::INFINITY).char_limit(64_000),
+            )
+            .on_disabled_hover_text("An occurrence has the notes of its series; switch to the whole series to change them");
             if let Some(m) = form.meeting.as_ref().filter(|m| !m.received && m.invited && !m.attendees.is_empty()) {
                 ui.add_space(6.0);
                 egui::CollapsingHeader::new(
