@@ -1,5 +1,6 @@
 //! Import from Outlook Classic: the accounts of its profiles with their servers, and the data
-//! files that hold their mail, calendar, contacts and tasks, and the profile's other data files.
+//! files that hold their mail, calendar, contacts and tasks, and the profile's other data files,
+//! and the signatures, each account with those it chose for new messages and replies.
 //!
 //! What would be imported is shown first (`file.importOutlook` with no `"import"`), and only
 //! what is chosen is done. Nothing of Outlook's is changed: its settings are read, never
@@ -11,6 +12,7 @@
 use super::{CommandSpec, p_bool};
 use crate::accounts::{self, Account, MAX_ACCOUNTS};
 use crate::outlook::{self, Found, MAX_PROFILES, Profile};
+use crate::signatures::Choice;
 use crate::{CmdResult, EngineError, Session};
 use openmailclient_model::Progress;
 use serde_json::{Value, json};
@@ -28,8 +30,8 @@ pub(super) fn commands() -> Vec<CommandSpec> {
         tab: "File",
         group: "Open & Export",
         shortcut: "",
-        params: r#"{} shows what Outlook Classic has set up here: {"profiles": [{"name", "default", "accounts": [{"id", "name", "email", "kind", "user", "incoming", "outgoing", "dataFile": {"path", "size", "state": "ready", "inUse" (Outlook has it open: close Outlook first), "missing" or "unreadable"} or null, "here": an account for its address is here already, "notes"}], "dataFiles": [{"id", "name", "path", "size", "state"}], "skipped": [{"name", "why"}]}], "importTo"}; {"import": [ids], "withData": false to bring an account's settings without its data file, "wait": false to copy on a thread of its own} imports them: each account is added without its password (asked for in Account Settings), each data file copied into the program's own folder and opened; returns {"accounts": [{"id", "name", "email", "dataFile"}], "dataFiles": [{"name", "path"}], "failed": [{"name", "why"}]}; nothing of Outlook's is changed"#,
-        enabled: |s| s.outlook.is_some(),
+        params: r#"{} shows what Outlook Classic has set up here: {"profiles": [{"name", "default", "accounts": [{"id", "name", "email", "kind", "user", "incoming", "outgoing", "dataFile": {"path", "size", "state": "ready", "inUse" (Outlook has it open: close Outlook first), "missing" or "unreadable"} or null, "here": an account for its address is here already, "notes"}], "dataFiles": [{"id", "name", "path", "size", "state"}], "skipped": [{"name", "why"}]}], "signatures": [{"id", "name", "text", "formatted": it has pictures or formatting only its text is brought of, "here": one of that name and text is here already}], "importTo"}; an account's "signatures" are {"new", "replies"} as it chose them, chosen here too when those are brought; {"import": [ids], "withData": false to bring an account's settings without its data file, "wait": false to copy on a thread of its own} imports them: each account is added without its password (asked for in Account Settings), each data file copied into the program's own folder and opened; returns {"accounts": [{"id", "name", "email", "dataFile"}], "dataFiles": [{"name", "path"}], "failed": [{"name", "why"}]}; nothing of Outlook's is changed"#,
+        enabled: |s| s.outlook.is_some() || s.outlook_signatures.is_some(),
         run: import,
     }]
 }
@@ -81,6 +83,9 @@ fn account_json(f: &Found) -> Value {
         "incoming": server_json(&f.incoming),
         "signInToSend": f.sign_in_to_send,
     });
+    if let Some(leave) = f.leave_on_server {
+        v["leaveOnServer"] = json!(leave);
+    }
     if let Some(out) = &f.outgoing {
         v["outgoing"] = server_json(out);
     }
@@ -109,6 +114,7 @@ fn preview(s: &Session, profiles: &[Profile]) -> Value {
                     v["dataFile"] = a.data_file.as_deref().map_or(Value::Null, file_json);
                     v["here"] = json!(here(s, &a.email));
                     v["notes"] = json!(a.notes);
+                    v["signatures"] = json!({ "new": a.new_signature, "replies": a.reply_signature });
                     v
                 })
                 .collect();
@@ -126,7 +132,38 @@ fn preview(s: &Session, profiles: &[Profile]) -> Value {
             json!({ "name": p.name, "default": p.default, "accounts": accounts, "dataFiles": files, "skipped": skipped })
         })
         .collect();
-    json!({ "profiles": shown, "importTo": s.account_dir.as_ref().map(|d| d.display().to_string()) })
+    let sigs: Vec<Value> = found_signatures(s)
+        .iter()
+        .enumerate()
+        .map(|(n, f)| {
+            let here = s.signatures.get(&f.name).is_some_and(|g| g.text == f.text);
+            json!({ "id": format!("s{n}"), "name": f.name, "text": f.text, "formatted": f.formatted, "here": here })
+        })
+        .collect();
+    json!({ "profiles": shown, "signatures": sigs, "importTo": s.account_dir.as_ref().map(|d| d.display().to_string()) })
+}
+
+/// Outlook's signatures, where its folder of them is known.
+fn found_signatures(s: &Session) -> Vec<crate::signatures::Found> {
+    s.outlook_signatures.as_deref().map(crate::signatures::read_outlook).unwrap_or_default()
+}
+
+/// The place among Outlook's signatures an id ("s3") names.
+fn signature_at(id: &str) -> Option<usize> {
+    id.strip_prefix('s').and_then(|n| n.parse::<usize>().ok())
+}
+
+/// Bring Outlook's signature `f` in: as it is where one of its name and text is here already,
+/// under a name of its own where one of its name differs. Gives the name it has here.
+fn bring_signature(s: &mut Session, f: &crate::signatures::Found) -> Result<String, String> {
+    if s.signatures.get(&f.name).is_some_and(|g| g.text == f.text) {
+        return Ok(f.name.clone());
+    }
+    let name = s.signatures.free_name(&f.name).ok_or_else(|| "there are too many signatures of its name".to_string())?;
+    if !s.signatures.put(crate::signatures::Signature { name: name.clone(), text: f.text.clone() }) {
+        return Err(format!("no more than {} signatures are kept", crate::signatures::MAX_SIGNATURES));
+    }
+    Ok(name)
 }
 
 /// One data file to copy.
@@ -154,8 +191,11 @@ fn free_path(dir: &Path, stem: &str) -> Option<PathBuf> {
 }
 
 fn import(s: &mut Session, p: &Value) -> CmdResult {
-    let read = s.outlook.clone().ok_or_else(|| EngineError::BadParams("Outlook's settings are not read in this run".into()))?;
-    let profiles: Vec<Profile> = read().iter().take(MAX_PROFILES).enumerate().map(|(n, r)| outlook::read(r, n)).collect();
+    if s.outlook.is_none() && s.outlook_signatures.is_none() {
+        return Err(EngineError::BadParams("Outlook's settings are not read in this run".into()));
+    }
+    let raw = s.outlook.clone().map(|read| read()).unwrap_or_default();
+    let profiles: Vec<Profile> = raw.iter().take(MAX_PROFILES).enumerate().map(|(n, r)| outlook::read(r, n)).collect();
     let Some(chosen) = p.get("import").filter(|v| !v.is_null()) else { return Ok(preview(s, &profiles)) };
     let ids: Vec<&str> = chosen
         .as_array()
@@ -173,16 +213,43 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
         .ok_or_else(|| EngineError::BadParams("this run keeps no data files of its own, so nothing can be imported into one".into()))?;
     let files_dir = dir.parent().map_or_else(|| dir.join("Imported"), |d| d.join("Imported"));
 
-    let mut adding: Vec<Account> = Vec::new();
+    let mut adding: Vec<(Account, Choice)> = Vec::new();
     let mut copies: Vec<Copy> = Vec::new();
     let mut failed: Vec<Value> = Vec::new();
-    for id in ids {
+    // Signatures first, so the accounts brought with them find them; each by the name it has here.
+    let found = found_signatures(s);
+    let mut brought: Vec<(String, String)> = Vec::new();
+    for id in &ids {
+        let Some(n) = signature_at(id) else { continue };
+        let Some(f) = found.get(n) else {
+            return Err(EngineError::BadParams(format!(
+                "Outlook has no signature {}; read its settings again",
+                id.chars().take(32).collect::<String>()
+            )));
+        };
+        match bring_signature(s, f) {
+            Ok(name) => brought.push((f.name.clone(), name)),
+            Err(why) => failed.push(json!({ "name": f.name, "why": why })),
+        }
+    }
+    let signatures_brought = brought.len();
+    // An account's choice of a signature, by the name it has here: one brought now, else one
+    // of that name here already.
+    let here_as = |s: &Session, name: &Option<String>| -> Option<String> {
+        let name = name.as_deref()?;
+        brought
+            .iter()
+            .find(|(from, _)| from.eq_ignore_ascii_case(name))
+            .map(|(_, to)| to.clone())
+            .or_else(|| s.signatures.get(name).map(|g| g.name.clone()))
+    };
+    for id in ids.into_iter().filter(|id| signature_at(id).is_none()) {
         let account = profiles.iter().flat_map(|p| &p.accounts).find(|a| a.id == id);
         let file = profiles.iter().flat_map(|p| &p.files).find(|f| f.id == id);
         match (account, file) {
             (Some(a), _) => {
                 // An account here already keeps its settings; its data file may still be brought.
-                if here(s, &a.email) || adding.iter().any(|b| b.email.eq_ignore_ascii_case(&a.email)) {
+                if here(s, &a.email) || adding.iter().any(|(b, _)| b.email.eq_ignore_ascii_case(&a.email)) {
                     if let Some(from) = a.data_file.clone().filter(|_| with_data) {
                         copies.push(Copy { name: a.name.clone(), from, dir: files_dir.clone(), stem: file_stem(&a.name), account: None });
                     } else {
@@ -201,7 +268,8 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
                             let stem = accounts::data_file_name(&account).trim_end_matches(".pst").to_string();
                             copies.push(Copy { name: a.name.clone(), from, dir: dir.clone(), stem, account: Some(adding.len()) });
                         }
-                        adding.push(account);
+                        let choice = Choice { new: here_as(s, &a.new_signature), replies: here_as(s, &a.reply_signature) };
+                        adding.push((account, choice));
                     }
                     Err(e) => failed.push(json!({ "name": a.name, "why": e.to_string() })),
                 }
@@ -234,7 +302,7 @@ fn import(s: &mut Session, p: &Value) -> CmdResult {
                 (c.name, c.account, got)
             })
             .collect();
-        Box::new(move |s: &mut Session| finish(s, adding, done, failed))
+        Box::new(move |s: &mut Session| finish(s, adding, done, failed, signatures_brought))
     })
 }
 
@@ -300,13 +368,14 @@ fn copy_alone(from: &Path, to: &Path, progress: &Progress) -> Result<(), String>
 /// files opened.
 fn finish(
     s: &mut Session,
-    adding: Vec<Account>,
+    adding: Vec<(Account, Choice)>,
     done: Vec<(String, Option<usize>, Result<PathBuf, String>)>,
     mut failed: Vec<Value>,
+    signatures: usize,
 ) -> (String, Value) {
     let mut added: Vec<Value> = Vec::new();
     let mut files: Vec<Value> = Vec::new();
-    for (at, mut account) in adding.into_iter().enumerate() {
+    for (at, (mut account, choice)) in adding.into_iter().enumerate() {
         let name = account.name.clone();
         // Added meanwhile, from elsewhere.
         if here(s, &account.email) || s.accounts.len() >= MAX_ACCOUNTS {
@@ -321,6 +390,9 @@ fn finish(
         }
         let (id, email) = (account.id.clone(), account.email.clone());
         s.accounts.push(account);
+        if choice.new.is_some() || choice.replies.is_some() {
+            s.signatures.choose(&id, Some(choice));
+        }
         let opened = super::account::account_store(s, s.accounts.len().saturating_sub(1));
         if let Err(e) = &opened {
             failed.push(json!({ "name": name, "why": format!("its data file could not be opened: {e}") }));
@@ -349,11 +421,15 @@ fn finish(
         (0, f) => format!("Imported {f} data file{} from Outlook", if f == 1 { "" } else { "s" }),
         (a, f) => format!("Imported {a} account{} and {f} data file{} from Outlook", if a == 1 { "" } else { "s" }, if f == 1 { "" } else { "s" }),
     };
+    if signatures > 0 {
+        let these = format!("{signatures} signature{}", if signatures == 1 { "" } else { "s" });
+        said = if added.is_empty() && files.is_empty() { format!("Imported {these} from Outlook") } else { format!("{said} and {these}") };
+    }
     if !added.is_empty() {
         said.push_str("; give each account its password in Account Settings");
     }
     if !failed.is_empty() {
         said.push_str(&format!("; {} could not be", failed.len()));
     }
-    (said, json!({ "accounts": added, "dataFiles": files, "failed": failed }))
+    (said, json!({ "accounts": added, "dataFiles": files, "signatures": signatures, "failed": failed }))
 }

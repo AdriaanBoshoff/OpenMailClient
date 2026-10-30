@@ -830,6 +830,8 @@ impl MailUi {
         let mut body = draft.body.clone();
         let attachments: Vec<(String, usize)> = draft.attachments.iter().map(|a| (a.name(), a.size())).collect();
         let show_bcc = draft.show_bcc;
+        let signed = draft.signature_name.clone();
+        let signature_names: Vec<String> = self.session.signatures.list.iter().map(|g| g.name.clone()).collect();
         let (go_at, expire_at) = (draft.deliver_after, draft.expires);
         let go_shown = (go_at > 0).then(|| self.session.time_shown(go_at));
         let expire_shown = (expire_at > 0).then(|| self.session.time_shown(expire_at));
@@ -845,7 +847,8 @@ impl MailUi {
         let mut took = false;
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(vec2(14.0, 10.0))), |ui| {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-            ui.horizontal(|ui| {
+            // The buttons go on to a second line where the pane is narrow.
+            ui.horizontal_wrapped(|ui| {
                 let send = ui.add(
                     egui::Button::new(
                         egui::RichText::new(if cautions.is_empty() { "Send" } else { "Send Anyway" }).font(bold(13.0)).color(t.on_accent),
@@ -874,6 +877,24 @@ impl MailUi {
                 }
                 ui.menu_button(egui::RichText::new("Delivery…").font(font(12.5)), |ui| {
                     delivery_menu(ui, &t, now, &tz, (&mut go_text, &mut expire_text), (go_at > 0, expire_at > 0), &mut acts);
+                });
+                // Message > Include > Signature: one put in, in place of the one there.
+                ui.menu_button(egui::RichText::new("Signature").font(font(12.5)), |ui| {
+                    for name in &signature_names {
+                        if ui.selectable_label(signed.as_deref() == Some(name.as_str()), name).clicked() {
+                            acts.push(("compose.signature", json!({ "name": name })));
+                            ui.close();
+                        }
+                    }
+                    if ui.selectable_label(signed.is_none(), "(none)").clicked() {
+                        acts.push(("compose.signature", json!({ "name": null })));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Signatures…").clicked() {
+                        acts.push(("ui.options", json!({ "page": "signatures" })));
+                        ui.close();
+                    }
                 });
             });
             // What is set for when it goes and when it expires, each with a way to undo it.

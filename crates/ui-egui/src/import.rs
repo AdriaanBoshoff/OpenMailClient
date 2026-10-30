@@ -55,6 +55,13 @@ impl ImportWindow {
                 }
             }
         }
+        for g in list(&preview, "signatures") {
+            if g["here"] != true
+                && let Some(id) = g["id"].as_str()
+            {
+                chosen.insert(id.to_string());
+            }
+        }
         Self { preview, chosen, with_data: true, ..Self::default() }
     }
 
@@ -204,6 +211,14 @@ impl MailUi {
                     }
                     ui.add_space(8.0);
                 }
+                let sigs: Vec<&Value> = list(&window.preview, "signatures").collect();
+                if !sigs.is_empty() {
+                    any = true;
+                    dialog::heading(ui, &t, "Signatures");
+                    for g in sigs {
+                        signature_card(ui, &t, g, &mut window.chosen, busy);
+                    }
+                }
                 if !any {
                     ui.label(egui::RichText::new("No Outlook profile was found on this computer.").font(font(13.0)).color(t.text));
                 }
@@ -316,11 +331,53 @@ fn account_card(ui: &mut Ui, t: &Tokens, a: &Value, chosen: &mut BTreeSet<String
                 } else if with_data {
                     small_line(ui, t, Icon::Folder, "Outlook keeps no data file of its own for it; its mail comes from the server", false);
                 }
+                let sig = &a["signatures"];
+                let named = |v: &Value| v.as_str().map(str::to_string);
+                match (named(&sig["new"]), named(&sig["replies"])) {
+                    (Some(n), Some(r)) if n == r => small_line(ui, t, Icon::Rename, &format!("Signs with {n}"), false),
+                    (Some(n), Some(r)) => {
+                        small_line(ui, t, Icon::Rename, &format!("Signs new messages with {n}, replies and forwards with {r}"), false)
+                    }
+                    (Some(n), None) => small_line(ui, t, Icon::Rename, &format!("Signs new messages with {n}"), false),
+                    (None, Some(r)) => small_line(ui, t, Icon::Rename, &format!("Signs replies and forwards with {r}"), false),
+                    (None, None) => {}
+                }
                 for note in list(a, "notes") {
                     let note = text(note);
                     let mut chars = note.chars();
                     let note: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
                     small_line(ui, t, Icon::Info, &note, false);
+                }
+            });
+        });
+    });
+    ui.add_space(4.0);
+}
+
+/// One of Outlook's signatures: its name and the first lines of its words.
+fn signature_card(ui: &mut Ui, t: &Tokens, g: &Value, chosen: &mut BTreeSet<String>, busy: bool) {
+    let id = g["id"].as_str().unwrap_or_default().to_string();
+    dialog::card(ui, t, |ui| {
+        ui.horizontal_top(|ui| {
+            let mut on = chosen.contains(&id);
+            if ui.add_enabled(!busy, egui::Checkbox::without_text(&mut on)).changed() {
+                if on {
+                    chosen.insert(id.clone())
+                } else {
+                    chosen.remove(&id)
+                };
+            }
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(text(&g["name"])).font(bold(13.5)).color(t.text));
+                let words = text(&g["text"]);
+                let first: Vec<&str> = words.lines().filter(|l| !l.trim().is_empty()).take(2).collect();
+                if !first.is_empty() {
+                    ui.add(egui::Label::new(egui::RichText::new(one_line(&first.join(" · "))).font(font(12.0)).color(t.text_dim)).truncate());
+                }
+                if g["here"] == true {
+                    small_line(ui, t, Icon::Check, "There is one of this name and these words here already", false);
+                } else if g["formatted"] == true {
+                    small_line(ui, t, Icon::Info, "Its words are brought; its formatting and pictures are not yet", false);
                 }
             });
         });
@@ -366,8 +423,13 @@ fn shown_result(ui: &mut Ui, t: &Tokens, result: &Value) -> bool {
     let accounts: Vec<&Value> = result["accounts"].as_array().into_iter().flatten().collect();
     let files: Vec<&Value> = result["dataFiles"].as_array().into_iter().flatten().collect();
     let failed: Vec<&Value> = result["failed"].as_array().into_iter().flatten().collect();
-    if !accounts.is_empty() || !files.is_empty() {
+    let signatures = result["signatures"].as_u64().unwrap_or(0);
+    if !accounts.is_empty() || !files.is_empty() || signatures > 0 {
         dialog::callout(ui, t, t.ok, |ui| {
+            if signatures > 0 {
+                let what = if signatures == 1 { "1 signature was brought".to_string() } else { format!("{signatures} signatures were brought") };
+                small_line(ui, t, Icon::Check, &what, false);
+            }
             for a in &accounts {
                 small_line(ui, t, Icon::Check, &format!("{} ({}) was added", text(&a["name"]), text(&a["email"])), false);
             }

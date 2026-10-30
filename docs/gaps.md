@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 133 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 134 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 134 · 2026-10-30 — M5.12: signatures chosen for each account and brought from Outlook; POP3 leave-a-copy and Outlook 2010 profiles read.
 - 133 · 2026-10-30 — M5.12: zones whose rules changed over the years, and zones that follow another calendar.
 - 132 · 2026-10-30 — M5.12: a reminder of its own on one occurrence changed alone.
 - 131 · 2026-10-30 — M5.12: Reminders above every other window, and a sound of the owner's.

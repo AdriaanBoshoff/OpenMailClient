@@ -4,7 +4,9 @@
 //!
 //! Outlook keeps a profile in the registry, under
 //! `Software\Microsoft\Office\<version>\Outlook\Profiles\<profile>`. That layout is not in a
-//! public specification: what is read here was seen on a machine of our own (black-box, the
+//! public specification (Outlook 2010 and those before it kept them under
+//! `Software\Microsoft\Windows NT\CurrentVersion\Windows Messaging Subsystem\Profiles`, read
+//! too): what is read here was seen on a machine of our own (black-box, the
 //! names of keys and values only) and is read as hostile input, as anything from outside is.
 //! Each mail account is a key under the subkey `9375CFF0413111d3B88A00104B2A6676`, with values
 //! named in words (`Email`, `IMAP Server`, `SMTP Port`…). Each data file is a section of the
@@ -123,6 +125,13 @@ pub struct Found {
     pub incoming: Server,
     pub outgoing: Option<Server>,
     pub sign_in_to_send: bool,
+    /// POP3: whether Outlook leaves a copy of each message on the server; `None` where it
+    /// does not say.
+    pub leave_on_server: Option<bool>,
+    /// The signatures the account chose for new messages and for replies and forwards, by
+    /// name ("New Signature" and "Reply-Forward Signature").
+    pub new_signature: Option<String>,
+    pub reply_signature: Option<String>,
     /// The data file Outlook keeps the account's mail, calendar, contacts and tasks in.
     pub data_file: Option<PathBuf>,
     /// What differs from what Outlook does, in words.
@@ -209,10 +218,16 @@ pub fn read(raw: &RawProfile, at: usize) -> Profile {
             continue;
         };
         let mut notes = Vec::new();
+        // "Leave on Server": its lowest bit is set where a copy is left.
+        let leave_on_server = a.number("Leave on Server").map(|n| n & 1 != 0);
         let (kind, incoming) = match (server(a, "IMAP", &mut notes), server(a, "POP3", &mut notes)) {
             (Some(s), _) => (Kind::Imap, s),
             (None, Some(s)) => {
-                notes.push("a copy of each message is left on the server, as is safest; this can be changed in Account Settings".into());
+                notes.push(match leave_on_server {
+                    Some(true) => "a copy of each message is left on the server, as Outlook leaves one".into(),
+                    Some(false) => "each message is taken off the server, as Outlook takes it, and only once it is saved here".into(),
+                    None => "a copy of each message is left on the server, as is safest; this can be changed in Account Settings".into(),
+                });
                 (Kind::Pop3, s)
             }
             (None, None) => {
@@ -242,6 +257,9 @@ pub fn read(raw: &RawProfile, at: usize) -> Profile {
             user: a.text(user_key).unwrap_or_else(|| email.clone()),
             outgoing: server(a, "SMTP", &mut notes),
             sign_in_to_send: a.number("SMTP Use Auth").is_none_or(|n| n != 0),
+            leave_on_server: leave_on_server.filter(|_| kind == Kind::Pop3),
+            new_signature: a.text("New Signature").and_then(|n| crate::signatures::clean_name(&n)),
+            reply_signature: a.text("Reply-Forward Signature").and_then(|n| crate::signatures::clean_name(&n)),
             email,
             kind,
             incoming,
@@ -267,11 +285,19 @@ pub fn read(raw: &RawProfile, at: usize) -> Profile {
 pub fn system_profiles() -> Vec<RawProfile> {
     use windows_registry::{CURRENT_USER, Type};
     let mut out = Vec::new();
-    // Outlook 2016, 2019, 2021 and Microsoft 365 keep version 16.0; 2013 kept 15.0.
-    for version in ["16.0", "15.0"] {
-        let outlook = format!(r"Software\Microsoft\Office\{version}\Outlook");
-        let Ok(profiles) = CURRENT_USER.open(format!(r"{outlook}\Profiles")) else { continue };
-        let default = CURRENT_USER.open(&outlook).and_then(|k| k.get_string("DefaultProfile")).unwrap_or_default();
+    // Outlook 2016, 2019, 2021 and Microsoft 365 keep version 16.0; 2013 kept 15.0; 2010 and
+    // those before it kept profiles with the system's mail settings, which name the default.
+    let places = [
+        (r"Software\Microsoft\Office\16.0\Outlook\Profiles".to_string(), r"Software\Microsoft\Office\16.0\Outlook".to_string()),
+        (r"Software\Microsoft\Office\15.0\Outlook\Profiles".to_string(), r"Software\Microsoft\Office\15.0\Outlook".to_string()),
+        (
+            r"Software\Microsoft\Windows NT\CurrentVersion\Windows Messaging Subsystem\Profiles".to_string(),
+            r"Software\Microsoft\Windows NT\CurrentVersion\Windows Messaging Subsystem\Profiles".to_string(),
+        ),
+    ];
+    for (place, named) in places {
+        let Ok(profiles) = CURRENT_USER.open(&place) else { continue };
+        let default = CURRENT_USER.open(&named).and_then(|k| k.get_string("DefaultProfile")).unwrap_or_default();
         let read_section = |key: &windows_registry::Key, name: String| -> Section {
             let mut values = Vec::new();
             if let Ok(all) = key.values() {

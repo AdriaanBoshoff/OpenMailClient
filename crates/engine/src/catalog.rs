@@ -108,6 +108,7 @@ pub const FEATURES: &[Feature] = &[
     f("File", "Print", "", "Page Setup", "file.pageSetup"),
     f("File", "Print", "", "Printer", "file.printers"),
     f("File", "Options", "", "Options", ""),
+    f("File", "Options", "Mail", "Signatures", "signatures.list"),
     f("File", "Info", "", "Close Data File", "file.closeStore"),
     // Message window
     f("Message", "Message", "", "Send", "compose.send"),
@@ -118,7 +119,7 @@ pub const FEATURES: &[Feature] = &[
     f("Message", "Message", "Names", "Address Book", "people.addressBook"),
     f("Message", "Message", "Names", "Check Names", "compose.checkNames"),
     f("Message", "Message", "Include", "Attach File", "compose.attach"),
-    f("Message", "Message", "Include", "Signature", ""),
+    f("Message", "Message", "Include", "Signature", "compose.signature"),
     f("Message", "Message", "Tags", "High Importance", ""),
     f("Message", "Message", "Tags", "Low Importance", ""),
     f("Message", "Insert", "", "Pictures, Tables, Links", ""),

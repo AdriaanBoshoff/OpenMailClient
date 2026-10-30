@@ -23,6 +23,7 @@ pub(crate) mod receive;
 mod reminders;
 mod send;
 pub(crate) mod settings;
+mod signatures;
 pub mod tasks;
 pub mod todo_bar;
 mod update;
@@ -59,6 +60,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(link::commands());
         v.extend(picture::commands());
         v.extend(compose::commands());
+        v.extend(signatures::commands());
         v.extend(folder::commands());
         v.extend(view::commands());
         v.extend(settings::commands());

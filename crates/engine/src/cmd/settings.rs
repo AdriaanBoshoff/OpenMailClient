@@ -80,6 +80,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "updates": { "prereleases": s.update.prereleases, "automatic": s.update.automatic, "lastChecked": s.update.last_checked },
         "newMail": s.alerts.to_json(),
         "reminders": s.reminders.options_json(),
+        "signatures": s.signatures.to_json(),
         "timeZone": s.zone_chosen,
         "secondTimeZone": s.second_zone.as_ref().map(|z| z.name().to_string()),
         "dataFiles": files,
@@ -320,6 +321,16 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         // chime played in its place.
         if let Some(file) = v.get("soundFile").filter(|f| f.is_string() || f.is_null()) {
             s.reminders.sound_file = file.as_str().filter(|f| !f.trim().is_empty() && f.len() <= 4_096).map(str::to_string);
+        }
+    }
+    if let Some(v) = all.get("signatures") {
+        let read = crate::signatures::Signatures::of_json(v);
+        took(read.is_some());
+        if let Some((sigs, left_out)) = read {
+            for _ in 0..left_out.min(1024) {
+                took(false);
+            }
+            s.signatures = sigs;
         }
     }
     if let Some(v) = all.get("accounts") {

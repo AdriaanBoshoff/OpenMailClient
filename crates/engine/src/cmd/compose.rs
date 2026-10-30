@@ -3,7 +3,7 @@
 //! sent by `cmd/send.rs` when there is an account to send it from.
 
 use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_u64};
-use crate::{CmdResult, Draft, EngineError, Filed, Session, outgoing};
+use crate::{CmdResult, Draft, EngineError, Filed, Session, outgoing, signatures};
 use openmailclient_model::zone::Offsets;
 use openmailclient_model::{
     Attachment, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, pid, recipient_email,
@@ -63,6 +63,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             params: r#"{"field": "to" | "cc" | "bcc" | "subject" | "body", "value": text}"#,
             enabled: composing,
             run: set_field,
+        },
+        CommandSpec {
+            id: "compose.signature",
+            label: "Signature",
+            tab: "Message",
+            group: "Include",
+            shortcut: "",
+            params: r#"{"name": a signature's name (signatures.list), or null for none}; takes the place of the signature put in before, above the quoted text of a reply or forward and at the foot of a new message"#,
+            enabled: composing,
+            run: signature,
         },
         CommandSpec {
             id: "compose.showBcc",
@@ -207,7 +217,77 @@ fn set_aside(s: &mut Session) -> bool {
 /// Start a new message to one mailbox, setting aside any that was being written.
 pub(super) fn start_to(s: &mut Session, to: String) {
     set_aside(s);
-    s.compose = Some(Draft { kind: "New", to, ..Draft::default() });
+    let mut draft = Draft { kind: "New", to, ..Draft::default() };
+    sign(s, &mut draft);
+    s.compose = Some(draft);
+}
+
+/// A signature's text for a message from the account `draft` goes from: `{name}` and
+/// `{email}` filled with its.
+fn signed_as(s: &Session, draft: &Draft, text: &str) -> String {
+    let (name, email) = match from_account(s, draft) {
+        Some(a) => (if a.display_name.trim().is_empty() { a.name.as_str() } else { a.display_name.as_str() }, a.email.as_str()),
+        None => (s.user_name.as_str(), s.user_email.as_str()),
+    };
+    signatures::fill(text, name, email)
+}
+
+/// Put the signature `named` (its name and its text) in as the draft's, in place of the one put
+/// in before where it is still there as it was put in: above the quoted text of a reply or
+/// forward, else at the foot.
+fn place_signature(draft: &mut Draft, named: Option<(String, String)>) {
+    if let Some(old) = draft.signature.take() {
+        let block = format!("\n\n{old}");
+        if let Some(at) = draft.body.find(&block) {
+            let after = draft.body.get(at.saturating_add(block.len())..).unwrap_or("");
+            draft.body = format!("{}{after}", draft.body.get(..at).unwrap_or(""));
+        }
+    }
+    draft.signature_name = None;
+    let Some((name, text)) = named.filter(|(_, t)| !t.is_empty()) else { return };
+    let at = draft.body.find(&format!("\n\n{}", outgoing::ORIGINAL)).unwrap_or(draft.body.len());
+    let (before, after) = (draft.body.get(..at).unwrap_or(""), draft.body.get(at..).unwrap_or(""));
+    draft.body = clamp(&format!("{before}\n\n{text}{after}"), MAX_BODY);
+    draft.signature = Some(text);
+    draft.signature_name = Some(name);
+}
+
+/// Put in the signature the account a new message, reply or forward goes from has chosen.
+fn sign(s: &Session, draft: &mut Draft) {
+    let id = from_account(s, draft).map_or("", |a| a.id.as_str());
+    let choice = s.signatures.choice_for(id);
+    let name = match draft.kind {
+        "New" => choice.new.as_deref(),
+        "Reply" | "Reply All" | "Forward" => choice.replies.as_deref(),
+        _ => return,
+    };
+    let named = name.and_then(|n| s.signatures.get(n)).map(|g| (g.name.clone(), signed_as(s, draft, &g.text)));
+    place_signature(draft, named);
+    draft.signature_auto = true;
+}
+
+fn signature(s: &mut Session, p: &Value) -> CmdResult {
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) => Some(n.as_str()),
+        Some(_) => return Err(EngineError::BadParams("\"name\" is a signature's name, or null for none".into())),
+    };
+    let draft = s.compose.as_ref().ok_or_else(|| EngineError::Disabled("Signature".into()))?;
+    let text = match name {
+        None => None,
+        Some(n) => {
+            let g = s.signatures.get(n).ok_or_else(|| {
+                EngineError::BadParams(format!("there is no signature called {}", n.chars().take(signatures::MAX_NAME).collect::<String>()))
+            })?;
+            Some((g.name.clone(), signed_as(s, draft, &g.text)))
+        }
+    };
+    if let Some(d) = s.compose.as_mut() {
+        place_signature(d, text);
+        d.signature_auto = false;
+        d.touched = true;
+    }
+    ok()
 }
 
 /// Start writing `draft`, setting aside any message that was being written.
@@ -218,7 +298,9 @@ pub(super) fn start_with(s: &mut Session, draft: Draft) {
 
 fn new(s: &mut Session, _: &Value) -> CmdResult {
     set_aside(s);
-    s.compose = Some(Draft { kind: "New", ..Draft::default() });
+    let mut draft = Draft { kind: "New", ..Draft::default() };
+    sign(s, &mut draft);
+    s.compose = Some(draft);
     ok()
 }
 
@@ -312,6 +394,7 @@ fn respond(s: &mut Session, kind: &'static str) -> CmdResult {
             }
         }
     }
+    sign(s, &mut draft);
     set_aside(s);
     s.compose = Some(draft);
     ok()
@@ -367,6 +450,14 @@ fn set_field(s: &mut Session, p: &Value) -> CmdResult {
         other => return Err(EngineError::BadParams(format!("\"{other}\" is not to, cc, bcc, subject, body or from"))),
     }
     draft.touched = true;
+    // The signature put in as the account's choice becomes the new account's.
+    if matches!(field.as_str(), "from" | "account")
+        && draft.signature_auto
+        && let Some(mut d) = s.compose.take()
+    {
+        sign(s, &mut d);
+        s.compose = Some(d);
+    }
     ok()
 }
 

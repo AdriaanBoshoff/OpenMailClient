@@ -448,6 +448,7 @@ fn main() -> ExitCode {
     session.update_dir = updates_path();
     // Outlook's profiles are read only when an import from Outlook is asked for.
     session.outlook = Some(std::sync::Arc::new(openmailclient_engine::outlook::system_profiles));
+    session.outlook_signatures = openmailclient_engine::signatures::outlook_dir();
     let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null, written: None, settled: None, started: std::time::Instant::now() };
     if let Some(path) = app.settings.clone() {
         // The data files of last time are opened again unless this run names what to open.

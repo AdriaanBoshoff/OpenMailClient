@@ -24,6 +24,7 @@ pub mod reminders;
 pub mod remote;
 pub mod sample;
 pub mod search;
+pub mod signatures;
 mod svg;
 #[cfg(test)]
 mod tests;
@@ -61,6 +62,8 @@ mod tests_reminders;
 mod tests_remote;
 #[cfg(test)]
 mod tests_send;
+#[cfg(test)]
+mod tests_signatures;
 #[cfg(test)]
 mod tests_sync;
 #[cfg(test)]
@@ -205,6 +208,13 @@ pub struct Draft {
     /// Where it is kept in Drafts, once saved or when it was opened from there: the next save
     /// takes that one's place, and sending it takes it out of Drafts.
     pub filed: Option<Filed>,
+    /// The signature put in it, as it was put in, so another can take its place.
+    pub signature: Option<String>,
+    /// That signature was put in as the account's choice, not by hand: it changes with the
+    /// account the message goes from.
+    pub signature_auto: bool,
+    /// The name of the signature put in, as the signature menu marks it.
+    pub signature_name: Option<String>,
 }
 
 /// A draft kept in a data file's Drafts folder.
@@ -379,6 +389,10 @@ pub struct Session {
     pub arrived: arrival::Arrivals,
     /// Reminders of appointments, tasks and flagged mail, and how they are shown.
     pub reminders: reminders::Reminders,
+    /// Signatures, and those chosen for new messages and for replies (`signatures.*`).
+    pub signatures: signatures::Signatures,
+    /// Outlook Classic's folder of signatures, read to import them; set by the host.
+    pub outlook_signatures: Option<std::path::PathBuf>,
     /// How new mail is told of (`mail.newMailAlerts`).
     pub alerts: arrival::Alerts,
     pub compose: Option<Draft>,
@@ -529,6 +543,8 @@ impl Session {
             journal_dir: None,
             account_dir: None,
             outlook: None,
+            signatures: signatures::Signatures::default(),
+            outlook_signatures: None,
             places: cmd::imap_sync::Places::default(),
             calendar: cmd::calendar::Shown::default(),
             people: cmd::people::Shown::default(),

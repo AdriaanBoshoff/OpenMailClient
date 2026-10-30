@@ -27,6 +27,7 @@ mod pictures;
 mod preview;
 mod progress;
 mod reminders;
+mod signatures;
 pub use reminders::Sound;
 mod ribbon;
 mod tasks;
@@ -427,6 +428,7 @@ pub struct MailUi {
     pub(crate) menu_fresh: bool,
     pub(crate) prompt: Option<Prompt>,
     pub(crate) account_window: Option<accounts::AccountsWindow>,
+    pub(crate) signature_edit: signatures::SignatureEdit,
     pub(crate) link_ask: Option<LinkAsk>,
     pub(crate) attachment_ask: Option<AttachmentAsk>,
     pub(crate) preview: Option<preview::Preview>,
@@ -700,6 +702,7 @@ impl MailUi {
             menu_fresh: false,
             prompt: None,
             account_window: None,
+            signature_edit: signatures::SignatureEdit::default(),
             link_ask: None,
             attachment_ask: None,
             preview: None,
