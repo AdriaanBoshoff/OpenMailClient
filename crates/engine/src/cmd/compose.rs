@@ -807,12 +807,21 @@ fn send(s: &mut Session, p: &Value) -> CmdResult {
     }
     let written_to: Vec<(String, String)> =
         s.compose.as_ref().map(|d| [&d.to, &d.cc, &d.bcc].iter().flat_map(|l| openmailclient_mime::parse_addresses(l)).collect()).unwrap_or_default();
+    let held = super::rules::as_it_goes(s);
     file_draft(s, FolderKind::Outbox, true)?;
     // Those written to are suggested first the next time, as Outlook's AutoComplete list does.
     let now = super::send::clock(s);
     for (name, address) in written_to.iter().take(crate::autocomplete::MAX_NAMES) {
         s.autocomplete.learn(name, address, now);
     }
+    let out = send_on(s, p);
+    if let Some(held) = held {
+        s.status.push_str(&format!(" ({held})"));
+    }
+    out
+}
+
+fn send_on(s: &mut Session, p: &Value) -> CmdResult {
     if s.accounts.is_empty() {
         s.status = "The message is in the Outbox; it goes when an account is added (account.add) and Send All is asked for".to_string();
         return ok();

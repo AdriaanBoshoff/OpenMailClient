@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 137 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 138 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 138 · 2026-10-30 — M5.16: rules on mail as it is sent: deferred, copied, put in categories, flagged.
 - 137 · 2026-10-30 — M5.15: Run Rules Now taken back with Undo; rules on sender and recipient addresses and days received, forwarding, replying and a sound, with loop guards.
 - 136 · 2026-10-30 — M5.14: the AutoComplete list, added to by each send and brought from Outlook.
 - 135 · 2026-10-30 — M5.13: rules, run on mail as it comes and by Run Rules Now, looked at first.

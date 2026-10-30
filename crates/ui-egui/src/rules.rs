@@ -27,6 +27,7 @@ enum Fill {
     Addresses,
     /// Words of mine, on several lines.
     Text,
+    Minutes,
 }
 
 const TESTS: &[(&str, &str, Fill)] = &[
@@ -62,9 +63,16 @@ const ACTS: &[(&str, &str, Fill)] = &[
     ("forward", "Forward it to", Fill::Addresses),
     ("reply", "Reply to the sender with", Fill::Text),
     ("sound", "Play a sound", Fill::Nothing),
+    ("defer", "Defer delivery by minutes", Fill::Minutes),
 ];
 
 const LEVELS: [&str; 3] = ["low", "normal", "high"];
+
+/// Whether an action may be asked of a rule on mail as it is sent (`sent`) or as it arrives:
+/// what went stays in Sent Items and answers no one, and only what is sent is deferred.
+fn allowed(kind: &str, sent: bool) -> bool {
+    if sent { !matches!(kind, "move" | "delete" | "markRead" | "forward" | "reply") } else { kind != "defer" }
+}
 
 /// One condition, exception or action as it is written on.
 #[derive(Clone, Default)]
@@ -84,6 +92,9 @@ impl Part {
         let kind = text(key);
         if kind == "received" {
             return Part { kind, min: text("after"), max: text("before"), level: 1, ..Part::default() };
+        }
+        if kind == "defer" {
+            return Part { kind, min: n("minutes"), level: 1, ..Part::default() };
         }
         let to: Vec<&str> = v.get("to").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
         let filled = match kind.as_str() {
@@ -114,6 +125,7 @@ impl Part {
             }
             Fill::Addresses => v["to"] = json!(self.text.split([';', ',']).map(str::trim).filter(|a| !a.is_empty()).collect::<Vec<_>>()),
             Fill::Text => v["words"] = json!(self.text),
+            Fill::Minutes => v["minutes"] = json!(self.min.trim().parse::<u64>().unwrap_or(0)),
         }
         v
     }
@@ -127,6 +139,8 @@ pub(crate) struct RuleEdit {
     name: String,
     on: bool,
     account: Option<String>,
+    /// On mail as it is sent, not as it arrives.
+    sent: bool,
     when: Vec<Part>,
     except: Vec<Part>,
     then: Vec<Part>,
@@ -145,6 +159,7 @@ impl RuleEdit {
             name: v.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
             on: v.get("on").and_then(Value::as_bool).unwrap_or(true),
             account: v.get("account").and_then(Value::as_str).map(str::to_string),
+            sent: v.get("sent").and_then(Value::as_bool).unwrap_or(false),
             when: list("when", "test"),
             except: list("except", "test"),
             then: list("then", "do"),
@@ -160,6 +175,7 @@ impl RuleEdit {
             "name": self.name,
             "on": self.on,
             "account": self.account,
+            "sent": self.sent,
             "when": parts(&self.when, "test", TESTS),
             "except": parts(&self.except, "test", TESTS),
             "then": parts(&self.then, "do", ACTS),
@@ -202,6 +218,9 @@ fn parts(ui: &mut Ui, t: &crate::theme::Tokens, salt: &str, list: &mut Vec<Part>
                     ui.add(LineEdit::new(&mut p.min, id.with("min")).desired_width(60.0).char_limit(10).hint("at least", None));
                     ui.label(egui::RichText::new("to").color(t.text_dim));
                     ui.add(LineEdit::new(&mut p.max, id.with("max")).desired_width(60.0).char_limit(10).hint("any", None));
+                }
+                Fill::Minutes => {
+                    ui.add(LineEdit::new(&mut p.min, id).desired_width(60.0).char_limit(3).hint("1 to 120", None));
                 }
                 Fill::Days => {
                     ui.add(LineEdit::new(&mut p.min, id.with("after")).desired_width(90.0).char_limit(10).hint("from YYYY-MM-DD", None));
@@ -359,11 +378,27 @@ impl MailUi {
                         }
                     });
                 });
+                ui.horizontal(|ui| {
+                    let was = e.sent;
+                    ui.radio_value(&mut e.sent, false, "After the message arrives");
+                    ui.radio_value(&mut e.sent, true, "After I send the message");
+                    if e.sent != was {
+                        let sent = e.sent;
+                        e.then.retain(|p| allowed(&p.kind, sent));
+                    }
+                });
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new("When a message comes in (every one, where nothing is asked)").font(crate::bold(12.0)).color(t.text));
+                let when = if e.sent {
+                    "When I send a message (every one, where nothing is asked)"
+                } else {
+                    "When a message comes in (every one, where nothing is asked)"
+                };
+                ui.label(egui::RichText::new(when).font(crate::bold(12.0)).color(t.text));
                 parts(ui, &t, "rule-when", &mut e.when, TESTS, &folders);
                 ui.label(egui::RichText::new("Do this").font(crate::bold(12.0)).color(t.text));
-                parts(ui, &t, "rule-then", &mut e.then, ACTS, &folders);
+                let sent = e.sent;
+                let acts: Vec<(&str, &str, Fill)> = ACTS.iter().filter(|(k, _, _)| allowed(k, sent)).copied().collect();
+                parts(ui, &t, "rule-then", &mut e.then, &acts, &folders);
                 ui.label(egui::RichText::new("Except where").font(crate::bold(12.0)).color(t.text));
                 parts(ui, &t, "rule-except", &mut e.except, TESTS, &folders);
             });

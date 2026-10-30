@@ -269,3 +269,53 @@ fn delivery_times_are_read_as_given_on_this_machines_clock() {
         assert_eq!(parse_local(bad, 0), None, "{bad:?}");
     }
 }
+
+#[test]
+fn rules_on_mail_as_it_is_sent_keep_a_copy_mark_it_and_hold_it_back() {
+    let fake = Fake::default();
+    let mut s = session(&fake);
+    s.run("folder.select", &json!({ "folder": "Inbox" })).unwrap();
+    s.run("folder.new", &json!({ "name": "Kept" })).unwrap();
+    // What went stays in Sent Items; only what is sent is held back.
+    for bad in [
+        json!({ "name": "x", "sent": true, "then": [{ "do": "move", "folder": "Inbox/Kept" }] }),
+        json!({ "name": "x", "sent": true, "then": [{ "do": "reply", "words": "Hi" }] }),
+        json!({ "name": "x", "then": [{ "do": "defer", "minutes": 5 }] }),
+        json!({ "name": "x", "sent": true, "then": [{ "do": "defer", "minutes": 500 }] }),
+    ] {
+        assert!(s.run("rules.save", &json!({ "rule": bad })).is_err(), "{bad}");
+    }
+    s.run(
+        "rules.save",
+        &json!({ "rule": { "name": "June", "sent": true, "when": [{ "test": "recipientAddress", "words": ["june@"] }],
+            "then": [{ "do": "copy", "folder": "Inbox/Kept" }, { "do": "category", "name": "To June" }] } }),
+    )
+    .unwrap();
+    s.run(
+        "rules.save",
+        &json!({ "rule": { "name": "Think twice", "sent": true, "when": [{ "test": "subject", "words": ["angry"] }], "then": [{ "do": "defer", "minutes": 5 }] } }),
+    )
+    .unwrap();
+    // One that asks nothing takes everything sent.
+    s.run("rules.save", &json!({ "rule": { "name": "All sent", "sent": true, "then": [{ "do": "category", "name": "Sent" }] } })).unwrap();
+    assert!(s.rules[0].words(None).starts_with("Apply this rule after I send the message"));
+    let sent_before = count(&s, "Sent Items");
+
+    write(&mut s, &[("to", "June Okafor <june@example.test>"), ("subject", "Rota"), ("body", "Thanks.")]);
+    let done = s.run("compose.send", &json!({ "anyway": true })).unwrap();
+    assert_eq!(done["sent"], 1, "{done}");
+    assert_eq!((count(&s, "Sent Items"), count(&s, "Kept")), (sent_before + 1, 1));
+    s.run("folder.select", &json!({ "folder": "Sent Items" })).unwrap();
+    let at = s.rows.iter().position(|r| r.subject == "Rota").unwrap();
+    s.run("mail.select", &json!({ "index": at })).unwrap();
+    assert_eq!(s.open.as_ref().unwrap().categories, ["To June", "Sent"]);
+    // What went did not carry them.
+    assert!(!String::from_utf8_lossy(&fake.state().submitted[0].data).contains("Keywords"));
+
+    write(&mut s, &[("to", "tomas@example.test"), ("subject", "An angry note"), ("body", "No.")]);
+    let held = s.run("compose.send", &json!({ "anyway": true })).unwrap();
+    assert_eq!((held["sent"].as_u64(), held["waiting"].as_array().map(Vec::len)), (Some(0), Some(1)), "{held}");
+    assert!(s.status.contains("held 5 minutes by the rule Think twice"), "{}", s.status);
+    assert_eq!((count(&s, "Outbox"), count(&s, "Kept")), (1, 1));
+    assert_eq!(fake.state().submitted.len(), 1);
+}

@@ -337,6 +337,8 @@ fn ended(
     let mut sent = 0usize;
     let mut refused: Vec<Value> = Vec::new();
     let mut unkept = 0usize;
+    // What went as Sent Items keeps it, for the rules on mail as it is sent.
+    let mut ruled: Vec<(usize, FolderId, u64, String)> = Vec::new();
     for (going, outcome) in done {
         match outcome {
             Ok(said) => {
@@ -371,14 +373,20 @@ fn ended(
                             let place = if a.sent_on_server { Place::Pending { raw: String::new() } } else { Place::Here };
                             place.put(&mut copy);
                         }
-                        let kept = s.stores.get_mut(at).is_some_and(|st| st.add(f, copy).is_ok());
-                        if kept && !touched.contains(&at) {
+                        let kept = s.stores.get_mut(at).and_then(|st| st.add(f, copy).ok()).map(|id| (at, f, id.0));
+                        if kept.is_some() && !touched.contains(&at) {
                             touched.push(at);
                         }
                         kept
                     }
-                    None => sent_folder.is_some_and(|f| s.stores.get_mut(store).is_some_and(|st| st.add(f, going.kept.clone()).is_ok())),
+                    None => {
+                        sent_folder.and_then(|f| s.stores.get_mut(store).and_then(|st| st.add(f, going.kept.clone()).ok()).map(|id| (store, f, id.0)))
+                    }
                 };
+                if let Some((at, f, id)) = kept {
+                    ruled.push((at, f, id, going.account.clone()));
+                }
+                let kept = kept.is_some();
                 let Some(st) = s.stores.get_mut(store) else {
                     unkept += 1;
                     continue;
@@ -393,6 +401,10 @@ fn ended(
             }
             Err(e) => failed.push(json!({ "subject": going.subject, "said": e.to_string() })),
         }
+    }
+    let mut trouble = Vec::new();
+    for (at, f, id, account) in ruled {
+        super::rules::after_sent(s, at, f, id, &account, &mut trouble);
     }
     s.refresh_folders(store);
     for &at in &touched {
@@ -415,6 +427,9 @@ fn ended(
     }
     if unkept > 0 {
         status.push_str("; what went could not be kept in Sent Items and stays in the Outbox, marked as sent");
+    }
+    if let Some(t) = trouble.first() {
+        status.push_str(&format!("; {t}"));
     }
     match waiting.as_slice() {
         [] => {}

@@ -27,7 +27,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "Home",
             group: "Move",
             shortcut: "",
-            params: r#"{}; returns {"rules": [{"name", "on", "account", "when": [conditions], "except": [conditions], "then": [actions], "words": what it does, in words}]}, in the order they are tried. A condition is {"test": "from"|"sentTo"|"subject"|"body"|"subjectOrBody"|"header"|"senderAddress"|"recipientAddress", "words": [..]}, {"test": "received", "after": "YYYY-MM-DD", "before": "YYYY-MM-DD"}, {"test": "toMe"|"ccMe"|"toOrCcMe"|"onlyToMe"|"hasAttachment"|"meeting"}, {"test": "importance", "level": "low"|"normal"|"high"} or {"test": "size", "min": KB, "max": KB}; an action {"do": "move"|"copy", "folder": a path in its data file}, {"do": "delete"|"markRead"|"flag"|"clearFlag"|"stop"}, {"do": "category", "name"}, {"do": "importance", "level"}, {"do": "forward", "to": [addresses]}, {"do": "reply", "words"} or {"do": "sound"}; a forward or reply is filed in the Outbox, never made of mail a machine wrote, and a sender is answered once"#,
+            params: r#"{}; returns {"rules": [{"name", "on", "sent": run on mail as it is sent, not as it arrives, "account", "when": [conditions], "except": [conditions], "then": [actions], "words": what it does, in words}]}, in the order they are tried. A condition is {"test": "from"|"sentTo"|"subject"|"body"|"subjectOrBody"|"header"|"senderAddress"|"recipientAddress", "words": [..]}, {"test": "received", "after": "YYYY-MM-DD", "before": "YYYY-MM-DD"}, {"test": "toMe"|"ccMe"|"toOrCcMe"|"onlyToMe"|"hasAttachment"|"meeting"}, {"test": "importance", "level": "low"|"normal"|"high"} or {"test": "size", "min": KB, "max": KB}; an action {"do": "move"|"copy", "folder": a path in its data file}, {"do": "delete"|"markRead"|"flag"|"clearFlag"|"stop"}, {"do": "category", "name"}, {"do": "importance", "level"}, {"do": "forward", "to": [addresses]}, {"do": "reply", "words"}, {"do": "sound"} or, on mail as it is sent, {"do": "defer", "minutes": 1 to 120}; a rule on mail as it is sent neither moves, deletes nor answers what went; a forward or reply is filed in the Outbox, never made of mail a machine wrote, and a sender is answered once"#,
             enabled: always,
             run: list,
         },
@@ -178,7 +178,7 @@ fn create(s: &mut Session, _: &Value) -> CmdResult {
         when.push(Test::Subject(vec![subject]));
     }
     let name = word(&item.sender_name()).or_else(|| word(&email)).unwrap_or_else(|| "New rule".into());
-    let rule = Rule { name, on: true, account: None, when, except: Vec::new(), then: vec![Act::MarkRead] };
+    let rule = Rule { name, on: true, sent: false, account: None, when, except: Vec::new(), then: vec![Act::MarkRead] };
     Ok(json!({ "rule": rule_json(s, &rule) }))
 }
 
@@ -403,7 +403,11 @@ fn run_now(s: &mut Session, p: &Value) -> CmdResult {
             out
         }
         Some(_) => return Err(EngineError::BadParams("\"rules\" is a list of rules' names".into())),
-        None => s.rules.iter().filter(|r| r.on).cloned().collect(),
+        // Rules on mail as it is sent are run on Sent Items, the others elsewhere, unless named.
+        None => {
+            let sent_items = s.find_folder(store, FolderKind::Sent) == Some(start);
+            s.rules.iter().filter(|r| r.on && r.sent == sent_items).cloned().collect()
+        }
     };
     let preview = p_bool(p, "preview").unwrap_or(false);
     let unread_only = p_bool(p, "unread").unwrap_or(false);
@@ -490,12 +494,13 @@ pub(crate) fn on_arrival(
     account: &str,
     trouble: &mut Vec<String>,
 ) -> (FolderId, u64, bool) {
-    if s.rules.iter().all(|r| !r.on) {
+    if s.rules.iter().all(|r| !r.on || r.sent) {
         return (folder, id, true);
     }
     let Some(item) = s.stores.get_mut(store).and_then(|st| st.load(folder, ItemId(id)).ok()) else { return (folder, id, true) };
     let me = me(s);
-    let plan = rules::plan(&s.rules, &item, Some(account), &me, &s.zone);
+    let arriving: Vec<Rule> = s.rules.iter().filter(|r| !r.sent).cloned().collect();
+    let plan = rules::plan(&arriving, &item, Some(account), &me, &s.zone);
     if plan.rules.is_empty() {
         return (folder, id, true);
     }
@@ -511,5 +516,48 @@ pub(crate) fn on_arrival(
             trouble.push(format!("the rules could not be run on a message: {e}"));
             (folder, id, true)
         }
+    }
+}
+
+/// The rules on mail as it is sent, as the message being written goes into the Outbox: held
+/// back where one defers it and its writer has not held it already. What holds it is said.
+pub(crate) fn as_it_goes(s: &mut Session) -> Option<String> {
+    if s.rules.iter().all(|r| !r.on || !r.sent) {
+        return None;
+    }
+    let draft = s.compose.as_ref()?;
+    if draft.deliver_after > 0 {
+        return None;
+    }
+    let item = super::compose::build(s, draft, true);
+    let account = if draft.account.is_empty() { s.accounts.first().map(|a| a.id.clone()) } else { Some(draft.account.clone()) };
+    let sending: Vec<Rule> = s.rules.iter().filter(|r| r.sent).cloned().collect();
+    let plan = rules::plan(&sending, &item, account.as_deref(), &me(s), &s.zone);
+    let minutes = plan.defer?;
+    let at = clock(s).saturating_add(i64::from(minutes).saturating_mul(600_000_000));
+    if let Some(d) = s.compose.as_mut() {
+        d.deliver_after = at;
+    }
+    Some(format!("held {minutes} minute{} by the rule {}", if minutes == 1 { "" } else { "s" }, plan.rules.join(", ")))
+}
+
+/// The rules on mail as it is sent, on what went as Sent Items keeps it, at `id` in `folder`
+/// of `store`: it stays there, and is copied, put in categories, flagged or marked.
+pub(crate) fn after_sent(s: &mut Session, store: usize, folder: FolderId, id: u64, account: &str, trouble: &mut Vec<String>) {
+    if s.rules.iter().all(|r| !r.on || !r.sent) {
+        return;
+    }
+    let Some(item) = s.stores.get_mut(store).and_then(|st| st.load(folder, ItemId(id)).ok()) else { return };
+    let sending: Vec<Rule> = s.rules.iter().filter(|r| r.sent).cloned().collect();
+    let mut plan = rules::plan(&sending, &item, Some(account), &me(s), &s.zone);
+    // Nothing is moved away from Sent Items, and nothing is answered.
+    plan.copies.extend(plan.move_to.take());
+    (plan.delete, plan.read, plan.forward, plan.reply) = (false, false, Vec::new(), None);
+    if plan.sound {
+        s.arrived.sounds = s.arrived.sounds.saturating_add(1);
+    }
+    let mut answered = rules::Answered::default();
+    if let Err(e) = apply(s, store, folder, id, &plan, trouble, None, &mut answered) {
+        trouble.push(format!("the rules could not be run on what was sent: {e}"));
     }
 }

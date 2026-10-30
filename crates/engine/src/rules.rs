@@ -109,12 +109,20 @@ pub enum Act {
     Reply(String),
     /// The new-mail sound played, whatever the new-mail options say.
     Sound,
+    /// Held in the Outbox this many minutes before it goes (on mail as it is sent).
+    Defer(u32),
 }
+
+/// The longest a rule holds a message back, in minutes, as Outlook's.
+pub const MAX_DEFER: u32 = 120;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Rule {
     pub name: String,
     pub on: bool,
+    /// Run on mail as it is sent, not as it arrives: held back as it goes into the Outbox,
+    /// and its copy in Sent Items copied, put in categories, flagged or marked once kept.
+    pub sent: bool,
     /// Only mail that comes through this account, by its id; every account's where `None`.
     pub account: Option<String>,
     /// Every one of these is met; a rule with none takes every message.
@@ -214,6 +222,8 @@ pub struct Plan {
     /// Answered with these words.
     pub reply: Option<String>,
     pub sound: bool,
+    /// Held back this many minutes.
+    pub defer: Option<u32>,
 }
 
 /// What a message is and who it went to, lowered once for every rule.
@@ -357,6 +367,7 @@ pub fn plan(rules: &[Rule], item: &Item, account: Option<&str>, me: &[String], z
                     }
                 }
                 Act::Sound => plan.sound = true,
+                Act::Defer(m) => plan.defer = Some(plan.defer.map_or(*m, |d| d.max(*m))),
             }
         }
         if stop {
@@ -557,6 +568,10 @@ impl Act {
                 Act::Reply(words.replace("\r\n", "\n"))
             }
             "sound" => Act::Sound,
+            "defer" => {
+                let m = v.get("minutes").and_then(Value::as_u64).filter(|m| (1..=u64::from(MAX_DEFER)).contains(m));
+                Act::Defer(m.and_then(|m| u32::try_from(m).ok()).ok_or(format!("a delay's \"minutes\" are 1 to {MAX_DEFER}"))?)
+            }
             other => return Err(format!("\"{}\" is not an action rules know", other.chars().take(32).collect::<String>())),
         })
     }
@@ -575,6 +590,7 @@ impl Act {
             Act::Forward(to) => json!({ "do": "forward", "to": to }),
             Act::Reply(w) => json!({ "do": "reply", "words": w }),
             Act::Sound => json!({ "do": "sound" }),
+            Act::Defer(m) => json!({ "do": "defer", "minutes": m }),
         }
     }
 
@@ -592,6 +608,7 @@ impl Act {
             Act::Forward(to) => format!("forward it to {}", to.join(", ")),
             Act::Reply(_) => "reply to the sender with words of mine".into(),
             Act::Sound => "play a sound".into(),
+            Act::Defer(m) => format!("defer delivery by {m} minute{}", if *m == 1 { "" } else { "s" }),
         }
     }
 }
@@ -629,9 +646,25 @@ impl Rule {
         if then.iter().all(|a| *a == Act::Stop) {
             return Err("a rule does something: \"then\" has an action".into());
         }
+        let sent = v.get("sent").and_then(Value::as_bool).unwrap_or(false);
+        // What went stays in Sent Items: a rule on mail as it is sent keeps a copy elsewhere,
+        // as Outlook's "move a copy", and answers no one.
+        for a in &then {
+            let refused = match a {
+                Act::Move(_) | Act::Delete | Act::Forward(_) | Act::Reply(_) | Act::MarkRead if sent => {
+                    Some("a rule on mail as it is sent copies, puts in a category, flags, marks importance, defers or plays a sound")
+                }
+                Act::Defer(_) if !sent => Some("only a rule on mail as it is sent defers delivery"),
+                _ => None,
+            };
+            if let Some(why) = refused {
+                return Err(why.into());
+            }
+        }
         Ok(Rule {
             name,
             on: v.get("on").and_then(Value::as_bool).unwrap_or(true),
+            sent,
             account,
             when: list_of(v, "when", Test::of_json)?,
             except: list_of(v, "except", Test::of_json)?,
@@ -643,6 +676,7 @@ impl Rule {
         json!({
             "name": self.name,
             "on": self.on,
+            "sent": self.sent,
             "account": self.account,
             "when": self.when.iter().map(Test::to_json).collect::<Vec<_>>(),
             "except": self.except.iter().map(Test::to_json).collect::<Vec<_>>(),
@@ -652,7 +686,7 @@ impl Rule {
 
     /// What the rule does, in words, as the Rules and Alerts window describes it.
     pub fn words(&self, account: Option<&str>) -> String {
-        let mut out = String::from("Apply this rule after the message arrives");
+        let mut out = String::from(if self.sent { "Apply this rule after I send the message" } else { "Apply this rule after the message arrives" });
         if let Some(a) = account {
             out.push_str(&format!(" through the {a} account"));
         }
