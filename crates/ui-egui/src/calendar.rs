@@ -108,10 +108,21 @@ pub(crate) struct RepeatForm {
     pub(crate) until: String,
 }
 
+impl Default for RepeatForm {
+    fn default() -> Self {
+        Self::of_pattern(None, &date_of(0))
+    }
+}
+
 impl RepeatForm {
     /// How `a` repeats, or how it would by default from its start.
     fn of(a: &Appointment, zone: &Zone) -> Self {
-        let c = zone.civil(a.start);
+        Self::of_pattern(a.recurrence.as_ref(), &zone.civil(a.start))
+    }
+
+    /// How a series `r` repeats, or how one would by default from the day of `c`. A task's
+    /// window shows its pattern so too.
+    pub(crate) fn of_pattern(r: Option<&recur::Recurrence>, c: &Civil) -> Self {
         let weekday = 1u8 << (c.weekday % 7);
         let mut f = Self {
             repeats: Repeats::Never,
@@ -123,9 +134,9 @@ impl RepeatForm {
             nth_days: weekday,
             ends: Ends::Never,
             count: 10,
-            until: ymd(&c),
+            until: ymd(c),
         };
-        let Some(r) = &a.recurrence else { return f };
+        let Some(r) = r else { return f };
         f.interval = r.period.max(1);
         f.repeats = match (r.freq, &r.rule) {
             (_, Rule::Day) => Repeats::Daily,
@@ -1645,8 +1656,9 @@ fn zone_choice(ui: &mut Ui, zone: &mut String, zones: &[(String, String)], here:
     });
 }
 
-/// The rows of the appointment window's grid that say how it repeats.
-fn repeat_rows(ui: &mut Ui, t: &crate::theme::Tokens, f: &mut RepeatForm, week_start: u32, preview: Option<&Preview>) {
+/// The rows of the appointment window's grid that say how it repeats; a task's window has them
+/// too.
+pub(crate) fn repeat_rows(ui: &mut Ui, t: &crate::theme::Tokens, f: &mut RepeatForm, week_start: u32, preview: Option<&Preview>) {
     let label = |ui: &mut Ui, text: &str| {
         ui.label(egui::RichText::new(text).color(t.text_dim));
     };

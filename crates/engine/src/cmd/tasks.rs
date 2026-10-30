@@ -147,7 +147,7 @@ impl Shown {
     }
 }
 
-const TASK_PARAMS: &str = r#"{"subject", "start": "YYYY-MM-DD" or null, "due": "YYYY-MM-DD" or null (a start after it is moved back to it), "status": "notStarted" | "inProgress" | "complete" | "waiting" | "deferred", "percent": 0 to 100 (100 is done, and done is 100), "importance": "low" | "normal" | "high", "reminder": "YYYY-MM-DD HH:MM" local time, or null for none (put away once it is done), "completed": "YYYY-MM-DD", the day it was done (default: today), "categories": [names], "notes", "owner", "private": bool, "totalWork" and "actualWork": minutes, "mileage", "billing", "companies": [names]}; text given as "" takes it away. A message on the To-Do List takes "subject" (its to-do title; its own subject stays), the days, "status", "percent", "completed" and "reminder""#;
+const TASK_PARAMS: &str = r#"{"subject", "start": "YYYY-MM-DD" or null, "due": "YYYY-MM-DD" or null (a start after it is moved back to it), "status": "notStarted" | "inProgress" | "complete" | "waiting" | "deferred", "percent": 0 to 100 (100 is done, and done is 100), "importance": "low" | "normal" | "high", "reminder": "YYYY-MM-DD HH:MM" local time, or null for none (put away once it is done), "completed": "YYYY-MM-DD", the day it was done (default: today), "categories": [names], "notes", "owner", "private": bool, "totalWork" and "actualWork": minutes, "mileage", "billing", "companies": [names], "repeat" and "regenerate" as tasks.recurrence takes them}; text given as "" takes it away. A message on the To-Do List takes "subject" (its to-do title; its own subject stays), the days, "status", "percent", "completed" and "reminder""#;
 const ROW_PARAMS: &str =
     r#"{"id", "folder" and "store" of a row tasks.items gives (default: the one chosen; "folder" and "store" default to the Tasks folder shown)}"#;
 const FOLLOW_UP_PARAMS: &str = r#"{"when": "today" | "tomorrow" | "thisWeek" | "nextWeek" | "noDate", or "start" and "due": "YYYY-MM-DD" (a custom flag), "reminder": "YYYY-MM-DD HH:MM" or null}"#;
@@ -243,6 +243,26 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             params: ROW_PARAMS,
             enabled: has_rows,
             run: mark_complete,
+        },
+        CommandSpec {
+            id: "tasks.recurrence",
+            label: "Recurrence",
+            tab: "Task",
+            group: "Recurrence",
+            shortcut: "",
+            params: r#"the row (as tasks.markComplete takes it), "repeat": as calendar.new takes it ({"every": "day" | "weekday" | "week" | "month" | "year", "interval", "on": [weekday names], "nth": 1 to 4 or "last", "day", "lastDay", "count", "until"}), or null to stop it recurring, "regenerate": true for a new task a period after each one is completed rather than on the pattern's days; the series starts on the task's due day (else its start, else today), and the task is due on its first occurrence; returns {"pattern": in words, "due"}"#,
+            enabled: has_rows,
+            run: recurrence,
+        },
+        CommandSpec {
+            id: "tasks.skipOccurrence",
+            label: "Skip Occurrence",
+            tab: "Task",
+            group: "Manage Task",
+            shortcut: "",
+            params: r#"the row (as tasks.markComplete takes it); a recurring task moves on to its next occurrence without this one being kept as done; returns {"due"}"#,
+            enabled: has_rows,
+            run: skip_occurrence,
         },
         CommandSpec {
             id: "tasks.followUp",
@@ -523,6 +543,7 @@ pub fn row_json(s: &Session, r: &Row) -> Value {
         "reminder": t.reminder.map(|r| super::calendar::stamp(s, r)),
         "overdue": t.is_overdue(s.today()),
         "recurring": t.recurring,
+        "pattern": t.recurrence.as_ref().map(task::recurrence_words),
         "private": t.private,
         "categories": t.categories,
         "totalWork": t.total_work,
@@ -741,8 +762,15 @@ fn new(s: &mut Session, p: &Value) -> CmdResult {
     if t.subject.trim().is_empty() {
         return Err(EngineError::BadParams("a task needs a \"subject\"".into()));
     }
+    let pattern = recurrence_param(s, p, &t)?;
     let (store, folder) = writable_folder(s)?;
-    let item = t.item(s.today(), clock(s), &s.zone);
+    let mut item = t.item(s.today(), clock(s), &s.zone);
+    if let Some(Some((r, start, due))) = pattern {
+        let mut moved = Task::of(&item, &s.zone);
+        (moved.start, moved.due) = (start, Some(due));
+        moved.write(&mut item, s.today(), clock(s), &s.zone);
+        task::set_recurrence(&mut item, Some(&r));
+    }
     let id = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.add(folder, item)?.0;
     s.did(Step::Imported { what: "New Task", store, folder, added: vec![id], updated: Vec::new() });
     s.refresh_folders(store);
@@ -836,21 +864,163 @@ fn edit_row(
 
 fn change(s: &mut Session, p: &Value) -> CmdResult {
     let key = row_key(s, p)?;
+    let before = Task::of(&load_row(s, key)?, &s.zone);
+    let after = changed_task(s, p, before.clone())?;
+    // A recurring task made complete moves on to its next occurrence, as Mark Complete does;
+    // what else was changed goes with the occurrence done.
+    if after.is_complete() && !before.is_complete() && before.recurrence.is_some() && p.get("repeat").is_none() {
+        let mut rest = p.clone();
+        if let Some(o) = rest.as_object_mut() {
+            for k in ["status", "percent", "completed"] {
+                o.remove(k);
+            }
+        }
+        if rest.as_object().is_some_and(|o| o.keys().any(|k| !matches!(k.as_str(), "id" | "folder" | "store"))) {
+            edit_row(s, key, "Edit Task", |s, item| {
+                let t = changed_task(s, &rest, Task::of(item, &s.zone))?;
+                t.write(item, s.today(), clock(s), &s.zone);
+                Ok(())
+            })?;
+        }
+        return complete_row(s, key, "Edit Task");
+    }
     edit_row(s, key, "Edit Task", |s, item| {
         let t = changed_task(s, p, Task::of(item, &s.zone))?;
         t.write(item, s.today(), clock(s), &s.zone);
+        if let Some(pattern) = recurrence_param(s, p, &Task::of(item, &s.zone))? {
+            set_pattern(s, item, pattern);
+        }
         Ok(())
     })
 }
 
 fn mark_complete(s: &mut Session, p: &Value) -> CmdResult {
     let key = row_key(s, p)?;
-    edit_row(s, key, "Mark Complete", |s, item| {
-        task::mark_complete(item, s.today(), clock(s));
+    complete_row(s, key, "Mark Complete")
+}
+
+/// Marks the row complete. A recurring task's occurrence done is kept as a completed copy
+/// beside it and the task moves on to its next occurrence, both taken back as one step.
+fn complete_row(s: &mut Session, key: (usize, FolderId, u64), what: &'static str) -> CmdResult {
+    let (store, folder, id) = key;
+    if !writable(s, store) {
+        return Err(EngineError::BadParams("that data file cannot be written".into()));
+    }
+    let mut item = load_row(s, key)?;
+    let before = Box::new(item.clone());
+    let Some(next) = task::complete_occurrence(&mut item, s.today(), clock(s), &s.zone) else {
+        edit_row(s, key, what, |s, item| {
+            task::mark_complete(item, s.today(), clock(s));
+            Ok(())
+        })?;
+        s.status = "Marked complete".into();
+        return ok();
+    };
+    let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
+    st.update(folder, ItemId(id), item)?;
+    let done = match st.add(folder, next.done) {
+        Ok(done) => done.0,
+        Err(e) => {
+            // Nothing is half done: the task is put back as it was.
+            let _ = st.update(folder, ItemId(id), *before);
+            return Err(e.into());
+        }
+    };
+    s.did(Step::Imported { what, store, folder, added: vec![done], updated: vec![(id, before)] });
+    s.refresh_folders(store);
+    s.tasks.selected = Some(key);
+    s.reload_tasks()?;
+    let due = super::calendar::day_text(next.due);
+    s.status = format!("Marked complete; the next one is due {due}");
+    Ok(json!({ "done": done, "due": due }))
+}
+
+/// The pattern `p` asks a task to recur by, with the days the task then starts and is due on:
+/// `None` when "repeat" is not given, `Some(None)` to stop it recurring.
+type Pattern = Option<(openmailclient_model::recur::Recurrence, Option<i64>, i64)>;
+
+fn recurrence_param(s: &Session, p: &Value, t: &Task) -> Result<Option<Pattern>, EngineError> {
+    let regenerate = match p.get("regenerate") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| EngineError::BadParams("\"regenerate\" is true or false".into()))?),
+    };
+    if t.flagged_mail && p.get("repeat").is_some_and(|v| !v.is_null()) {
+        return Err(EngineError::BadParams("a message flagged for follow-up does not recur; make a task of it".into()));
+    }
+    let from = t.due.or(t.start).unwrap_or_else(|| s.today());
+    let made = match super::calendar::pattern_param(s, p, from, 0, 0)? {
+        None if regenerate.is_some() => match t.recurrence.clone() {
+            // Only "regenerate" given: the pattern there is kept, made to regenerate or not.
+            Some(r) => Some(r),
+            None => return Err(EngineError::BadParams("give \"repeat\" too; the task does not recur".into())),
+        },
+        None => return Ok(None),
+        Some(None) => return Ok(Some(None)),
+        Some(Some(r)) => Some(r),
+    };
+    let Some(mut r) = made else { return Ok(Some(None)) };
+    if let Some(regenerate) = regenerate {
+        r.sliding = u32::from(regenerate);
+    }
+    // A task that regenerates is due on its own day; one on a pattern on the pattern's first.
+    let due = if r.sliding != 0 { from } else { r.start_day };
+    if r.sliding != 0 {
+        r.start_day = from;
+        r.settle();
+        r.start_day = from;
+    }
+    let start = t.start.map(|st| due.saturating_sub(t.due.map_or(0, |d| d.saturating_sub(st).max(0))));
+    Ok(Some(Some((r, start, due))))
+}
+
+/// Writes a pattern `recurrence_param` gave into the task.
+fn set_pattern(s: &Session, item: &mut Item, pattern: Pattern) {
+    match pattern {
+        Some((r, start, due)) => {
+            let mut t = Task::of(item, &s.zone);
+            (t.start, t.due) = (start, Some(due));
+            t.write(item, s.today(), clock(s), &s.zone);
+            task::set_recurrence(item, Some(&r));
+        }
+        None => task::set_recurrence(item, None),
+    }
+}
+
+fn skip_occurrence(s: &mut Session, p: &Value) -> CmdResult {
+    let key = row_key(s, p)?;
+    let mut due = None;
+    edit_row(s, key, "Skip Occurrence", |s, item| {
+        let next = task::complete_occurrence(item, s.today(), clock(s), &s.zone)
+            .ok_or_else(|| EngineError::BadParams("that task does not recur, is done, or this is the last of its series".into()))?;
+        due = Some(next.due);
         Ok(())
     })?;
-    s.status = "Marked complete".into();
-    ok()
+    let due = due.map(super::calendar::day_text);
+    s.status = format!("Skipped; the next one is due {}", due.as_deref().unwrap_or(""));
+    Ok(json!({ "due": due }))
+}
+
+fn recurrence(s: &mut Session, p: &Value) -> CmdResult {
+    let key = row_key(s, p)?;
+    let item = load_row(s, key)?;
+    let t = Task::of(&item, &s.zone);
+    if p.get("repeat").is_none() && p.get("regenerate").is_none() {
+        return Err(EngineError::BadParams("give \"repeat\", an object or null".into()));
+    }
+    let Some(pattern) = recurrence_param(s, p, &t)? else {
+        return Err(EngineError::BadParams("give \"repeat\", an object or null".into()));
+    };
+    let words = pattern.as_ref().map(|(r, _, _)| task::recurrence_words(r));
+    let due = pattern.as_ref().map(|(_, _, d)| super::calendar::day_text(*d));
+    edit_row(s, key, "Recurrence", |s, item| {
+        set_pattern(s, item, pattern);
+        Ok(())
+    })?;
+    s.status = match &words {
+        Some(w) => format!("Recurs {w}"),
+        None => "No longer recurs".into(),
+    };
+    Ok(json!({ "pattern": words, "due": due }))
 }
 
 /// The start, due day and reminder a follow-up asks for: one of the menu's, or days of one's

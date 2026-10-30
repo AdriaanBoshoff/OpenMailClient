@@ -15,6 +15,7 @@
 
 use crate::calendar::{bool_of, i32_of, named, remove_named, set_named, time_of};
 use crate::props::{PropValue, pid, pset};
+use crate::recur::{End, Freq, Recurrence};
 use crate::zone::Offsets;
 use crate::{Flag, Item, time};
 
@@ -42,9 +43,11 @@ mod lid {
     pub const DUE_DATE: u32 = 0x8105;
     pub const RESET_REMINDER: u32 = 0x8107;
     pub const DATE_COMPLETED: u32 = 0x810F;
+    pub const DEAD_OCCURRENCE: u32 = 0x8109;
     pub const ACTUAL_EFFORT: u32 = 0x8110;
     pub const ESTIMATED_EFFORT: u32 = 0x8111;
     pub const STATE: u32 = 0x8113;
+    pub const RECURRENCE: u32 = 0x8116;
     pub const COMPLETE: u32 = 0x811C;
     pub const OWNER: u32 = 0x811F;
     pub const ORDINAL: u32 = 0x8123;
@@ -234,8 +237,12 @@ pub struct Task {
     pub mileage: String,
     pub billing: String,
     pub companies: Vec<String>,
-    /// It recurs; its pattern is kept as it is.
+    /// It recurs.
     pub recurring: bool,
+    /// How it recurs, when its pattern could be read (PidLidTaskRecurrence, [MS-OXOTASK]
+    /// 2.2.2.2.15). A task that recurs keeps its pattern as it is unless `set_recurrence`
+    /// changes it; `write` leaves it alone.
+    pub recurrence: Option<Recurrence>,
     /// It is a message flagged for follow-up, not a task.
     pub flagged_mail: bool,
 }
@@ -363,6 +370,113 @@ pub fn mark_complete(item: &mut Item, today: i64, now: i64) {
     }
 }
 
+/// The pattern a recurring task keeps, if it can be read.
+pub fn recurrence_of(item: &Item) -> Option<Recurrence> {
+    if !is_task(item) || bool_of(named(item, PSETID_TASK, lid::RECURRING)) != Some(true) {
+        return None;
+    }
+    match named(item, PSETID_TASK, lid::RECURRENCE) {
+        Some(PropValue::Binary(b)) => Recurrence::read_pattern(b),
+        _ => None,
+    }
+}
+
+/// Makes a task recur as `r` says, or stop recurring with `None` ([MS-OXOTASK] 2.2.2.2.15,
+/// 2.2.2.2.16). A flagged message does not recur.
+pub fn set_recurrence(item: &mut Item, r: Option<&Recurrence>) {
+    if !is_task(item) {
+        return;
+    }
+    let t = PSETID_TASK;
+    match r {
+        Some(r) => {
+            set_named(item, t, lid::RECURRENCE, PropValue::Binary(r.write_pattern()));
+            set_named(item, t, lid::RECURRING, PropValue::Bool(true));
+        }
+        None => {
+            remove_named(item, t, lid::RECURRENCE);
+            set_named(item, t, lid::RECURRING, PropValue::Bool(false));
+        }
+    }
+    remove_named(item, t, lid::DEAD_OCCURRENCE);
+}
+
+/// How a task recurs, in words: "every week on Monday", or "regenerates 2 weeks after each
+/// one is completed".
+pub fn recurrence_words(r: &Recurrence) -> String {
+    if r.sliding != 0 {
+        let unit = match r.freq {
+            Freq::Daily => "day",
+            Freq::Weekly => "week",
+            Freq::Monthly => "month",
+            Freq::Yearly => "year",
+        };
+        let n = if r.freq == Freq::Yearly { 1 } else { r.period.max(1) };
+        let s = if n == 1 { "" } else { "s" };
+        return format!("regenerates {n} {unit}{s} after each one is completed");
+    }
+    r.words()
+}
+
+/// What completing one occurrence of a recurring task does: the task moved on to its next
+/// occurrence, and a completed copy of the one done.
+pub struct Occurrence {
+    /// The occurrence done, complete, a copy that no longer recurs (PidLidTaskDeadOccurrence).
+    pub done: Item,
+    /// The days the task now starts and is due on.
+    pub start: Option<i64>,
+    pub due: i64,
+}
+
+/// Completes the occurrence of a recurring task that is due, as Outlook does
+/// ([MS-OXOTASK] 3.1.4.2.2, 3.1.4.2.3): a copy is kept complete and no longer recurring, and the
+/// task itself moves on to its next occurrence, its start as far before its due day as it was,
+/// with as many occurrences left as there were less one. A task that regenerates comes again
+/// a period after `today`. `None` when it does not recur, its pattern cannot be read, or its
+/// series has ended with this one; it is then completed as any task is.
+pub fn complete_occurrence(item: &mut Item, today: i64, now: i64, here: impl Offsets + Copy) -> Option<Occurrence> {
+    let mut r = recurrence_of(item)?;
+    let task = Task::of(item, here);
+    if task.is_complete() {
+        return None;
+    }
+    let due = task.due.or(task.start).unwrap_or(today);
+    let next = if r.sliding != 0 { r.period_after(today) } else { r.next_after(due)? };
+    let mut series = r.clone();
+    series.start_day = next;
+    match r.end {
+        End::After(n) if n <= 1 => return None,
+        End::After(n) => series.end = End::After(n - 1),
+        End::On(last) if next > last => return None,
+        _ => {}
+    }
+    series.settle();
+    series.start_day = next;
+    r = series;
+    let mut done = item.clone();
+    mark_complete(&mut done, today, now);
+    set_named(&mut done, PSETID_TASK, lid::RECURRING, PropValue::Bool(false));
+    remove_named(&mut done, PSETID_TASK, lid::RECURRENCE);
+    set_named(&mut done, PSETID_TASK, lid::DEAD_OCCURRENCE, PropValue::Bool(true));
+    let start = task.start.zip(task.due).map(|(s, d)| next.saturating_sub(d.saturating_sub(s).max(0)));
+    let start = start.or(task.start.filter(|_| task.due.is_none()).map(|_| next));
+    write_days(item, start, Some(next), here);
+    set_recurrence(item, Some(&r));
+    // The next one starts afresh, its reminder as far before it as the last one's was.
+    let (t, c) = (PSETID_TASK, pset::PSETID_COMMON);
+    set_named(item, t, lid::STATUS, PropValue::Int32(Status::NotStarted.code()));
+    set_named(item, t, lid::PERCENT_COMPLETE, PropValue::Float64(0.0));
+    set_named(item, t, lid::COMPLETE, PropValue::Bool(false));
+    remove_named(item, t, lid::DATE_COMPLETED);
+    if let Some(at) = task.reminder {
+        let moved = at.saturating_add(next.saturating_sub(due).saturating_mul(864_000_000_000));
+        set_named(item, c, common::REMINDER_SET, PropValue::Bool(true));
+        set_named(item, c, common::REMINDER_TIME, PropValue::Time(moved));
+        set_named(item, c, common::REMINDER_SIGNAL_TIME, PropValue::Time(moved));
+    }
+    Some(Occurrence { done, start, due: next })
+}
+
 /// Takes a message's follow-up flag away, and with it everything that put it on the to-do
 /// list ([MS-OXOFLAG] 3.1.4.1.3). A task is not a flag, and is left as it is.
 pub fn clear_flag(item: &mut Item) {
@@ -446,6 +560,7 @@ impl Task {
             billing: named_text(item, c, common::BILLING),
             companies,
             recurring: bool_of(named(item, t, lid::RECURRING)) == Some(true),
+            recurrence: recurrence_of(item),
             flagged_mail,
         }
     }
@@ -591,6 +706,44 @@ mod tests {
     use super::*;
 
     /// 2026-10-22, a Thursday.
+
+    #[test]
+    fn a_task_pattern_is_kept_alone_and_completing_moves_the_task_on() {
+        let mut item = Task { subject: "Pay the rent".into(), start: Some(TODAY - 3), due: Some(TODAY), ..Task::default() }.item(TODAY, NOW, 0i32);
+        // Monthly on the 22nd, ending after two.
+        let r = Recurrence::new(Freq::Monthly, crate::recur::Rule::Month { day: 22 }, 1, End::After(2), TODAY, 0, 0, 0);
+        set_recurrence(&mut item, Some(&r));
+        let bytes = match named(&item, PSETID_TASK, lid::RECURRENCE) {
+            Some(PropValue::Binary(b)) => b.clone(),
+            other => panic!("{other:?}"),
+        };
+        // A RecurrencePattern alone, not an appointment's.
+        assert!(Recurrence::read(&bytes).is_none());
+        assert_eq!(Recurrence::read_pattern(&bytes).unwrap().write_pattern(), bytes);
+        let t = Task::of(&item, 0i32);
+        assert!(t.recurring);
+        assert_eq!(t.recurrence.as_ref().map(recurrence_words).as_deref(), Some("day 22 of every month"));
+        let next = complete_occurrence(&mut item, TODAY, NOW, 0i32).unwrap();
+        assert_eq!(next.due, TODAY + 31);
+        assert_eq!(next.start, Some(TODAY + 28));
+        assert!(Task::of(&next.done, 0i32).is_complete());
+        assert!(!Task::of(&next.done, 0i32).recurring);
+        assert_eq!(named(&next.done, PSETID_TASK, lid::DEAD_OCCURRENCE), Some(&PropValue::Bool(true)));
+        assert_eq!(recurrence_of(&item).unwrap().end, End::After(1));
+        // The last of the series is completed as any task is.
+        assert!(complete_occurrence(&mut item, TODAY, NOW, 0i32).is_none());
+        // Unreadable patterns are kept as they are and do not move the task.
+        set_named(&mut item, PSETID_TASK, lid::RECURRENCE, PropValue::Binary(vec![0xFF; 9]));
+        assert!(Task::of(&item, 0i32).recurring);
+        assert!(Task::of(&item, 0i32).recurrence.is_none());
+        Task::of(&item, 0i32).write(&mut item, TODAY, NOW, 0i32);
+        assert_eq!(named(&item, PSETID_TASK, lid::RECURRENCE), Some(&PropValue::Binary(vec![0xFF; 9])));
+        assert!(complete_occurrence(&mut item, TODAY, NOW, 0i32).is_none());
+        // Every cut of a pattern is read or refused, never a panic.
+        for n in 0..bytes.len() {
+            let _ = Recurrence::read_pattern(&bytes[..n]);
+        }
+    }
     const TODAY: i64 = 20_748;
     const NOW: i64 = 134_000_000_000_000_000;
 

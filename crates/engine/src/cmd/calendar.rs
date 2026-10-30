@@ -696,6 +696,18 @@ fn weekdays(v: &Value) -> Result<u8, EngineError> {
 /// The pattern `p`'s "repeat" asks for, for an appointment that starts as `a` does, in a time
 /// `zone`: `None` when it is not given, `Some(None)` for once only.
 fn repeat_param(s: &Session, p: &Value, a: &Appointment, zone: &Zone) -> Result<Option<Option<Recurrence>>, EngineError> {
+    let local = local_minutes(a.start, zone);
+    let day = recur::day_of_minutes(local);
+    let start_offset = u32::try_from(local.saturating_sub(recur::minutes_of_day(day))).unwrap_or(0);
+    let length = u32::try_from(a.minutes().max(0)).unwrap_or(u32::MAX);
+    pattern_param(s, p, day, start_offset, start_offset.saturating_add(length))
+}
+
+/// The pattern `p`'s "repeat" asks for ({"every", "interval", "on", "nth", "day", "lastDay",
+/// "count", "until"}), for a series from local day `day`, each occurrence from `start_offset`
+/// to `end_offset` minutes after its midnight: `None` when it is not given, `Some(None)` for
+/// once only. Tasks' patterns are made by it too.
+pub(crate) fn pattern_param(s: &Session, p: &Value, day: i64, start_offset: u32, end_offset: u32) -> Result<Option<Option<Recurrence>>, EngineError> {
     let r = match p.get("repeat") {
         None => return Ok(None),
         Some(Value::Null) => return Ok(Some(None)),
@@ -703,11 +715,6 @@ fn repeat_param(s: &Session, p: &Value, a: &Appointment, zone: &Zone) -> Result<
         Some(r @ Value::Object(_)) => r,
         Some(_) => return Err(EngineError::BadParams("\"repeat\" is null, \"none\" or an object such as {\"every\": \"week\"}".into())),
     };
-    let local = local_minutes(a.start, zone);
-    let day = recur::day_of_minutes(local);
-    let start_offset = u32::try_from(local.saturating_sub(recur::minutes_of_day(day))).unwrap_or(0);
-    let length = u32::try_from(a.minutes().max(0)).unwrap_or(u32::MAX);
-    let end_offset = start_offset.saturating_add(length);
     let n = |key: &str, most: u64| -> Result<Option<u32>, EngineError> {
         match r.get(key) {
             None | Some(Value::Null) => Ok(None),

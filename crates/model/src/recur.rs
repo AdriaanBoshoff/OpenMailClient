@@ -305,6 +305,46 @@ impl Recurrence {
     /// claim more than they hold.
     pub fn read(bytes: &[u8]) -> Option<Self> {
         let mut r = Reader { b: bytes, at: 0 };
+        let mut s = Self::head(&mut r)?;
+        let _reader2 = r.u32()?;
+        let writer2 = r.u32()?;
+        let start_offset = r.u32()?;
+        let end_offset = r.u32()?;
+        let n = usize::from(r.u16()?);
+        // Each ExceptionInfo is at least 14 bytes.
+        if n > r.left() / 14 {
+            return None;
+        }
+        let mut exceptions = Vec::with_capacity(n);
+        for _ in 0..n {
+            exceptions.push(read_exception(&mut r)?);
+        }
+        // What follows is newer writers' own; a pattern cut short there is read without it.
+        if let Some(size) = r.u32()
+            && r.take(size as usize).is_some()
+        {
+            for e in &mut exceptions {
+                if read_extended(&mut r, e, writer2).is_none() {
+                    break;
+                }
+            }
+        }
+        s.writer2 = writer2;
+        s.start_offset = start_offset.min(DAY_MIN as u32 - 1);
+        s.end_offset = end_offset.min(DAY_MIN as u32 * 2 + 5 * 366 * DAY_MIN as u32);
+        s.exceptions = exceptions;
+        Some(s)
+    }
+
+    /// Reads a RecurrencePattern alone, as a recurring task keeps it in PidLidTaskRecurrence
+    /// ([MS-OXOTASK] 2.2.2.2.15, [MS-OXOCAL] 2.2.1.44.1). `None` for bytes that are not one.
+    pub fn read_pattern(bytes: &[u8]) -> Option<Self> {
+        Self::head(&mut Reader { b: bytes, at: 0 })
+    }
+
+    /// The RecurrencePattern at the front of `r` ([MS-OXOCAL] 2.2.1.44.1), the appointment's
+    /// own part left as a new series has it.
+    fn head(r: &mut Reader) -> Option<Self> {
         let (_reader, _writer) = (r.u16()?, r.u16()?);
         let freq = Freq::of(r.u16()?)?;
         let kind = r.u16()?;
@@ -348,29 +388,6 @@ impl Recurrence {
             Freq::Yearly => 12,
             _ => period.max(1),
         };
-        let _reader2 = r.u32()?;
-        let writer2 = r.u32()?;
-        let start_offset = r.u32()?;
-        let end_offset = r.u32()?;
-        let n = usize::from(r.u16()?);
-        // Each ExceptionInfo is at least 14 bytes.
-        if n > r.left() / 14 {
-            return None;
-        }
-        let mut exceptions = Vec::with_capacity(n);
-        for _ in 0..n {
-            exceptions.push(read_exception(&mut r)?);
-        }
-        // What follows is newer writers' own; a pattern cut short there is read without it.
-        if let Some(size) = r.u32()
-            && r.take(size as usize).is_some()
-        {
-            for e in &mut exceptions {
-                if read_extended(&mut r, e, writer2).is_none() {
-                    break;
-                }
-            }
-        }
         Some(Self {
             freq,
             rule,
@@ -384,16 +401,42 @@ impl Recurrence {
             modified,
             start_day,
             end_day,
-            start_offset: start_offset.min(DAY_MIN as u32 - 1),
-            end_offset: end_offset.min(DAY_MIN as u32 * 2 + 5 * 366 * DAY_MIN as u32),
-            writer2,
-            exceptions,
+            start_offset: 0,
+            end_offset: 0,
+            writer2: 0x3009,
+            exceptions: Vec::new(),
         })
     }
 
     /// The bytes of PidLidAppointmentRecur, written as [MS-OXOCAL] 2.2.1.44.5 gives them with
     /// WriterVersion2 0x3009.
     pub fn write(&self) -> Vec<u8> {
+        let mut w = self.write_head();
+        w.u32(0x3006);
+        w.u32(0x3009);
+        w.u32(self.start_offset);
+        w.u32(self.end_offset);
+        let exceptions: Vec<&Exception> = self.exceptions.iter().take(usize::from(u16::MAX)).collect();
+        w.u16(u16::try_from(exceptions.len()).unwrap_or(0));
+        for e in &exceptions {
+            write_exception(&mut w, e);
+        }
+        w.u32(0);
+        for e in &exceptions {
+            write_extended(&mut w, e);
+        }
+        w.u32(0);
+        w.0
+    }
+
+    /// The bytes of a RecurrencePattern alone, as PidLidTaskRecurrence holds them
+    /// ([MS-OXOTASK] 2.2.2.2.15).
+    pub fn write_pattern(&self) -> Vec<u8> {
+        self.write_head().0
+    }
+
+    /// The RecurrencePattern ([MS-OXOCAL] 2.2.1.44.1).
+    fn write_head(&self) -> Writer {
         let mut w = Writer::default();
         w.u16(0x3004);
         w.u16(0x3004);
@@ -442,21 +485,32 @@ impl Recurrence {
             End::Never => NO_END,
             _ => u32::try_from(minutes_of_day(self.end_day).max(0)).unwrap_or(NO_END),
         });
-        w.u32(0x3006);
-        w.u32(0x3009);
-        w.u32(self.start_offset);
-        w.u32(self.end_offset);
-        let exceptions: Vec<&Exception> = self.exceptions.iter().take(usize::from(u16::MAX)).collect();
-        w.u16(u16::try_from(exceptions.len()).unwrap_or(0));
-        for e in &exceptions {
-            write_exception(&mut w, e);
+        w
+    }
+
+    /// The day one period after `day`, as a task that regenerates comes again once it is done
+    /// ([MS-OXOTASK] 2.2.2.2.15, SlidingFlag): days, weeks, months or years on; a day of the
+    /// month the next month lacks is its last.
+    pub fn period_after(&self, day: i64) -> i64 {
+        let n = i64::from(self.period.max(1));
+        match self.freq {
+            Freq::Daily => day.saturating_add(n),
+            Freq::Weekly => day.saturating_add(n.saturating_mul(7)),
+            Freq::Monthly | Freq::Yearly => {
+                let months = if self.freq == Freq::Yearly { 12 } else { n };
+                let (_, _, dd) = ymd(day);
+                let (y, m) = of_month_index(month_index(day).saturating_add(months));
+                day_at(y, m, dd.min(crate::calendar::days_in(y, m)))
+            }
         }
-        w.u32(0);
-        for e in &exceptions {
-            write_extended(&mut w, e);
-        }
-        w.u32(0);
-        w.0
+    }
+
+    /// The first day after `day` the series falls on, as planned and with deleted
+    /// occurrences left out; `None` once it has ended.
+    pub fn next_after(&self, day: i64) -> Option<i64> {
+        self.walk_days(day.saturating_add(1), day.saturating_add(366 * 100), MAX_WALK.min(4_000), true)
+            .into_iter()
+            .find(|d| !self.deleted.contains(d))
     }
 
     /// FirstDateTime ([MS-OXOCAL] 2.2.1.44.1.1).

@@ -8,6 +8,7 @@
 //! shows as a bar; the search looks in notes, owners and companies too as it is typed; and the
 //! task window says how long there is left, or how late it is.
 
+use crate::calendar::{RepeatForm, Repeats, repeat_rows};
 use crate::dialog::{self, Dialog};
 use crate::icons::{self, Icon};
 use crate::line_edit::LineEdit;
@@ -151,6 +152,15 @@ pub(crate) struct TaskForm {
     pub billing: String,
     pub companies: String,
     pub private: bool,
+    /// How it recurs, and how it did when the window opened: the pattern is sent only when it
+    /// was changed, so one this program cannot show is kept.
+    pub repeat: RepeatForm,
+    repeat_was: RepeatForm,
+    /// A new task a period after each one is completed, not on the pattern's days.
+    pub regenerate: bool,
+    regenerate_was: bool,
+    /// It recurs now, as saved.
+    recurring: bool,
     /// What the window says of when it is due, worked out when it was opened.
     due_words: String,
     pub said: Option<String>,
@@ -159,7 +169,8 @@ pub(crate) struct TaskForm {
 
 impl TaskForm {
     pub(crate) fn new(today: i64) -> Self {
-        Self { importance: 1, focus: true, reminder: format!("{} 08:00", iso(Some(today))), ..Self::default() }
+        let repeat = RepeatForm::of_pattern(None, &time::civil(time::from_unix(today.saturating_mul(86_400)), 0));
+        Self { importance: 1, focus: true, reminder: format!("{} 08:00", iso(Some(today))), repeat_was: repeat.clone(), repeat, ..Self::default() }
     }
 
     pub(crate) fn of(key: Key, t: &Task, reminder: String, today: i64) -> Self {
@@ -184,6 +195,17 @@ impl TaskForm {
             billing: t.billing.clone(),
             companies: t.companies.join(", "),
             private: t.private,
+            repeat: RepeatForm::of_pattern(
+                t.recurrence.as_ref(),
+                &time::civil(time::from_unix(t.due.or(t.start).unwrap_or(today).saturating_mul(86_400)), 0),
+            ),
+            repeat_was: RepeatForm::of_pattern(
+                t.recurrence.as_ref(),
+                &time::civil(time::from_unix(t.due.or(t.start).unwrap_or(today).saturating_mul(86_400)), 0),
+            ),
+            regenerate: t.recurrence.as_ref().is_some_and(|r| r.sliding != 0),
+            regenerate_was: t.recurrence.as_ref().is_some_and(|r| r.sliding != 0),
+            recurring: t.recurring,
             due_words: due_words(t, today),
             said: None,
             focus: true,
@@ -213,6 +235,12 @@ impl TaskForm {
             p["billing"] = json!(self.billing);
             p["companies"] = json!(list(&self.companies));
             p["private"] = json!(self.private);
+            if self.repeat != self.repeat_was || (self.regenerate != self.regenerate_was && self.repeat.repeats != Repeats::Never) {
+                p["repeat"] = self.repeat.param();
+                if self.repeat.repeats != Repeats::Never {
+                    p["regenerate"] = json!(self.regenerate);
+                }
+            }
         }
         if let Some(key) = self.key {
             for (k, v) in key_json(key).as_object().into_iter().flatten() {
@@ -244,6 +272,7 @@ enum Ask {
     Close,
     Save,
     Complete,
+    Skip,
     Delete,
 }
 
@@ -743,7 +772,7 @@ impl MailUi {
             (Some(_), false) if !form.subject_was.trim().is_empty() => format!("{} - Task", one_line(&form.subject_was)),
             _ => "Untitled - Task".to_string(),
         };
-        let room = (ctx.content_rect().height() - 320.0).clamp(160.0, 560.0);
+        let room = (ctx.content_rect().height() - 400.0).clamp(160.0, 560.0);
         let shown = Dialog::new("task", &title, Icon::Tasks).width(640.0).show(ctx, &t, |ui| {
             if !form.due_words.is_empty() {
                 ui.label(egui::RichText::new(&form.due_words).font(font(12.5)).color(t.text_dim));
@@ -819,6 +848,23 @@ impl MailUi {
                     }
                 });
                 if !form.flagged_mail {
+                    ui.add_space(6.0);
+                    // Recurrence, as the task window's Recurrence button gives it in Outlook.
+                    let head = if form.repeat.repeats == Repeats::Never { "Recurrence".to_string() } else { "Recurrence (recurs)".to_string() };
+                    egui::CollapsingHeader::new(egui::RichText::new(head).font(bold(12.5)).color(t.text))
+                        .id_salt("task-recurrence")
+                        .default_open(form.recurring)
+                        .show(ui, |ui| {
+                            egui::Grid::new("task-recurrence-grid").num_columns(2).spacing(vec2(10.0, 7.0)).show(ui, |ui| {
+                                repeat_rows(ui, &t, &mut form.repeat, self.session.region.week_start, None);
+                                if form.repeat.repeats != Repeats::Never {
+                                    ui.label("");
+                                    ui.checkbox(&mut form.regenerate, "Regenerate a new task after each one is completed")
+                                        .on_hover_text("The next one is due a period after the day this one is done, not on the pattern's days");
+                                    ui.end_row();
+                                }
+                            });
+                        });
                     ui.add_space(8.0);
                     ui.add(
                         egui::TextEdit::multiline(&mut form.notes)
@@ -876,6 +922,13 @@ impl MailUi {
                 if form.key.is_some() && form.status != Status::Complete && ui.add(dialog::plain("Mark Complete")).clicked() {
                     ask = Some(Ask::Complete);
                 }
+                if form.key.is_some()
+                    && form.recurring
+                    && form.status != Status::Complete
+                    && ui.add(dialog::plain("Skip Occurrence")).on_hover_text("Moves it on to its next occurrence").clicked()
+                {
+                    ask = Some(Ask::Skip);
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(dialog::plain("Cancel")).clicked() {
                         ask = Some(Ask::Close);
@@ -901,6 +954,10 @@ impl MailUi {
             },
             Some(Ask::Complete) => match form.params() {
                 Ok(p) => self.execute("tasks.change", &p).and_then(|_| self.execute("tasks.markComplete", &form.key.map_or(Value::Null, key_json))),
+                Err(e) => Err(e),
+            },
+            Some(Ask::Skip) => match form.params() {
+                Ok(p) => self.execute("tasks.change", &p).and_then(|_| self.execute("tasks.skipOccurrence", &form.key.map_or(Value::Null, key_json))),
                 Err(e) => Err(e),
             },
             Some(Ask::Delete) => self.execute("tasks.delete", &form.key.map_or(Value::Null, key_json)),

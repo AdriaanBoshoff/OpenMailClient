@@ -343,3 +343,92 @@ fn hostile_task_parameters_are_turned_away() {
     // Nothing turned away was added.
     assert_eq!(run(&mut s, "tasks.items", json!({"view": "simpleList", "query": ""}))["total"], 6);
 }
+
+#[test]
+fn a_recurring_task_moves_on_to_its_next_occurrence_when_it_is_done() {
+    let mut s = session();
+    run(&mut s, "nav.module", json!({"module": "tasks"}));
+    run(&mut s, "tasks.view", json!({"view": "simpleList"}));
+    let made = run(
+        &mut s,
+        "tasks.new",
+        json!({"subject": "Water the plants", "start": "2030-10-12", "due": "2030-10-14", "reminder": "2030-10-14 08:00",
+               "repeat": {"every": "week", "on": ["monday"], "count": 3}}),
+    );
+    let key = json!({"id": made["id"], "store": made["store"], "folder": made["folder"]});
+    let all = |s: &mut Session| -> Vec<Value> {
+        let listed = run(s, "tasks.items", json!({"view": "simpleList", "query": "plants"}));
+        listed["items"].as_array().unwrap().clone()
+    };
+    let one = all(&mut s);
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0]["recurring"], true);
+    assert_eq!(one[0]["pattern"], "every week on Monday");
+    assert_eq!(one[0]["due"], "2030-10-14");
+    // Kept as Outlook keeps it: PidLidTaskRecurring and a RecurrencePattern alone.
+    let (store, folder, id) = s.tasks.selected.unwrap();
+    let item = s.stores[store].load(folder, openmailclient_model::ItemId(id)).unwrap();
+    let r = task::recurrence_of(&item).unwrap();
+    assert_eq!(r.end, openmailclient_model::recur::End::After(3));
+
+    let done = run(&mut s, "tasks.markComplete", key.clone());
+    assert_eq!(done["due"], "2030-10-21");
+    let two = all(&mut s);
+    assert_eq!(two.len(), 2, "the one done is kept beside it");
+    let copy = two.iter().find(|i| i["status"] == "complete").unwrap();
+    assert_eq!((copy["recurring"].clone(), copy["due"].clone()), (json!(false), json!("2030-10-14")));
+    let next = two.iter().find(|i| i["status"] != "complete").unwrap();
+    // The start as far before, and the reminder as far before, as they were.
+    assert_eq!((next["start"].clone(), next["due"].clone()), (json!("2030-10-19"), json!("2030-10-21")));
+    assert!(next["reminder"].as_str().unwrap().contains("2030-10-21"), "{next}");
+
+    // Taken back as one step: the copy is gone and the task is as it was.
+    run(&mut s, "edit.undo", json!({}));
+    let back = all(&mut s);
+    assert_eq!(back.len(), 1);
+    assert_eq!((back[0]["due"].clone(), back[0]["status"].clone()), (json!("2030-10-14"), json!("notStarted")));
+
+    // Skipped once, done once: the third is the last, and done as any task is.
+    assert_eq!(run(&mut s, "tasks.skipOccurrence", key.clone())["due"], "2030-10-21");
+    let mut status = key.clone();
+    status["status"] = json!("complete");
+    run(&mut s, "tasks.change", status);
+    assert_eq!(all(&mut s).len(), 2);
+    run(&mut s, "tasks.markComplete", key.clone());
+    let end = all(&mut s);
+    assert_eq!(end.len(), 2);
+    assert!(end.iter().all(|i| i["status"] == "complete"), "{end:?}");
+    assert!(s.run("tasks.skipOccurrence", &key).is_err());
+}
+
+#[test]
+fn a_task_regenerates_and_stops_recurring_when_asked() {
+    let mut s = session();
+    run(&mut s, "nav.module", json!({"module": "tasks"}));
+    run(&mut s, "tasks.view", json!({"view": "simpleList"}));
+    let made = run(&mut s, "tasks.new", json!({"subject": "Haircut", "due": "2030-10-01"}));
+    let key = json!({"id": made["id"], "store": made["store"], "folder": made["folder"]});
+    let mut ask = key.clone();
+    ask["repeat"] = json!({"every": "week", "interval": 2});
+    ask["regenerate"] = json!(true);
+    let set = run(&mut s, "tasks.recurrence", ask);
+    assert_eq!(set["pattern"], "regenerates 2 weeks after each one is completed");
+    assert_eq!(set["due"], "2030-10-01", "a task that regenerates keeps its own day");
+    // Done late: the next one is two weeks after the day it was done, not after it was due.
+    assert_eq!(run(&mut s, "tasks.markComplete", key.clone())["due"], "2030-10-23");
+    let mut stop = key.clone();
+    stop["repeat"] = Value::Null;
+    assert_eq!(run(&mut s, "tasks.recurrence", stop)["pattern"], Value::Null);
+    let listed = run(&mut s, "tasks.items", json!({"view": "simpleList", "query": "Haircut"}));
+    let still = listed["items"].as_array().unwrap().iter().find(|i| i["status"] != "complete").unwrap().clone();
+    assert_eq!(still["recurring"], false);
+    run(&mut s, "tasks.markComplete", key.clone());
+    let listed = run(&mut s, "tasks.items", json!({"view": "simpleList", "query": "Haircut"}));
+    assert_eq!(listed["items"].as_array().unwrap().len(), 2, "no new one once it no longer recurs");
+    // Turned away: a pattern that is not one, and a flagged message given one.
+    for bad in [json!({"repeat": {"every": "fortnight"}}), json!({"repeat": 5}), json!({"regenerate": "yes"}), json!({})] {
+        let mut p = key.clone();
+        p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(s.run("tasks.recurrence", &p).is_err(), "{p}");
+    }
+}
