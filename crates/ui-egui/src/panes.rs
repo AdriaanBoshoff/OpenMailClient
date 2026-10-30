@@ -4,12 +4,21 @@
 use crate::icons::{self, Icon};
 use crate::{MailUi, body, bold, clip_text, font, one_line, text_width, theme};
 use egui::{Align2, Rect, ScrollArea, Sense, Ui, UiBuilder, pos2, vec2};
+use openmailclient_engine::print::Field;
 use openmailclient_engine::{Module, ReadingPane, SortKey};
 use openmailclient_model::zone::Zone;
 use openmailclient_model::{Flag, FolderId, FolderInfo, FolderKind, RECIP_CC, RECIP_TO, Summary, time};
 use serde_json::{Value, json};
 
 const ROW_H: f32 = 64.0;
+/// A row of the single-line view, and the strip of column headings over it.
+const LINE_H: f32 = 24.0;
+const HEADINGS_H: f32 = 24.0;
+/// From this width the list is shown in single lines with its columns, as Outlook leaves its
+/// compact layout when the list is wide enough.
+const SINGLE_W: f32 = 640.0;
+/// The width of a column that holds an icon alone.
+const ICON_COL: f32 = 24.0;
 /// Half the width of the strip at a pane's edge that takes hold of it.
 const GRIP: f32 = 3.0;
 
@@ -359,7 +368,17 @@ impl MailUi {
             self.act("ui.menu", json!({ "menu": "arrange", "x": sort_rect.left(), "y": sort_rect.bottom() }));
         }
 
-        let body = Rect::from_min_max(header.left_bottom(), rect.max);
+        // Wide enough, the list is in single lines under headings of its columns.
+        let single = rect.width() >= SINGLE_W;
+        let outgoing = self.session.current_folder().is_some_and(|f| matches!(f.kind, FolderKind::Sent | FolderKind::Drafts | FolderKind::Outbox));
+        let spans = if single { spans(&self.session.list_columns, rect.left() + 8.0, rect.width() - 16.0) } else { Vec::new() };
+        let mut top = header.bottom();
+        if single {
+            let strip = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), HEADINGS_H));
+            self.headings(ui, &p, strip, &spans, outgoing);
+            top = strip.bottom();
+        }
+        let body = Rect::from_min_max(pos2(rect.left(), top), rect.max);
         let s = &self.session;
         if s.rows.is_empty() {
             let message = if s.stores.is_empty() {
@@ -378,6 +397,7 @@ impl MailUi {
         let now = s.now;
         let now_day = s.zone.civil(now).day_number;
         let mut entries: Vec<(f32, Entry)> = Vec::with_capacity(s.rows.len() + groups.len());
+        let row_h = if single { LINE_H } else { ROW_H };
         let mut y = 0.0;
         let mut next = 0;
         for i in 0..s.rows.len() {
@@ -387,14 +407,13 @@ impl MailUi {
                 next += 1;
             }
             entries.push((y, Entry::Row(i)));
-            y += ROW_H;
+            y += row_h;
         }
         let total = y;
         let selected = s.selected;
         let also = &s.also;
         let scroll_to = std::mem::take(&mut self.scroll_to_selected);
         // In a folder of mail going out, a row says whom it went to, as Outlook's do.
-        let outgoing = s.current_folder().is_some_and(|f| matches!(f.kind, FolderKind::Sent | FolderKind::Drafts | FolderKind::Outbox));
         let shown = Shown { now, now_day, tz: &s.zone, region: &s.region, outgoing };
         let rows = &s.rows;
         let mut unread_previews: Vec<u64> = Vec::new();
@@ -405,7 +424,7 @@ impl MailUi {
             ScrollArea::vertical().id_salt("messages").auto_shrink(false).show_viewport(ui, |ui, viewport| {
                 let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), total), Sense::hover());
                 let p = ui.painter().clone();
-                let first = entries.partition_point(|(y, _)| *y + ROW_H < viewport.top());
+                let first = entries.partition_point(|(y, _)| *y + row_h < viewport.top());
                 for (y, entry) in entries.iter().skip(first) {
                     if *y > viewport.bottom() && !scroll_to {
                         break;
@@ -437,7 +456,7 @@ impl MailUi {
                         }
                         Entry::Row(i) => {
                             let Some(row) = rows.get(*i) else { continue };
-                            let r = Rect::from_min_size(pos2(area.left(), area.top() + y), vec2(area.width(), ROW_H));
+                            let r = Rect::from_min_size(pos2(area.left(), area.top() + y), vec2(area.width(), row_h));
                             let focused = selected == Some(row.id);
                             let is_selected = focused || also.contains(&row.id);
                             if focused && scroll_to {
@@ -452,7 +471,13 @@ impl MailUi {
                             } else if resp.hovered() {
                                 p.rect_filled(r, 0.0, t.hover);
                             }
-                            draw_row(&p, r, row, &shown, &t);
+                            if single {
+                                // The columns were laid out over the pane; the rows are as wide.
+                                let spans: Vec<(Field, f32, f32)> = spans.iter().map(|(f, x, w)| (*f, x - rect.left() + r.left(), *w)).collect();
+                                draw_line(&p, r, row, &shown, &t, &spans);
+                            } else {
+                                draw_row(&p, r, row, &shown, &t);
+                            }
                             if row.preview.is_empty() {
                                 unread_previews.push(row.id);
                             }
@@ -490,6 +515,85 @@ impl MailUi {
             if opened {
                 self.act("ui.openSelected", Value::Null);
             }
+        }
+    }
+
+    /// The headings of the list's columns: a click arranges the list by one, a second click
+    /// the other way; a right-click chooses, moves and takes away columns.
+    fn headings(&mut self, ui: &mut Ui, p: &egui::Painter, strip: Rect, spans: &[(Field, f32, f32)], outgoing: bool) {
+        let t = self.tokens.clone();
+        p.rect_filled(strip, 0.0, t.pane);
+        p.hline(strip.x_range(), strip.bottom() - 0.5, (1.0, t.line));
+        let (sort, desc) = (self.session.sort, self.session.sort_desc);
+        let shown: Vec<Field> = self.session.list_columns.clone();
+        let mut acts: Vec<Value> = Vec::new();
+        let mut arrange: Option<&'static str> = None;
+        for (at, (field, x, w)) in spans.iter().enumerate() {
+            let cell = Rect::from_min_size(pos2(*x, strip.top()), vec2(*w, strip.height()));
+            let resp = ui.interact(cell, egui::Id::new(("list-heading", field.name())), Sense::click());
+            if resp.hovered() {
+                p.rect_filled(cell, 0.0, t.hover);
+            }
+            if at > 0 {
+                p.vline(cell.left(), strip.y_range().shrink(5.0), (1.0, t.line));
+            }
+            let key = field.sort_key(outgoing);
+            let sorted = key.and_then(SortKey::parse) == Some(sort);
+            let room = (w - if sorted { 22.0 } else { 10.0 }).max(0.0);
+            match field {
+                Field::Importance | Field::Attachment | Field::Flag => {
+                    let icon = match field {
+                        Field::Importance => Icon::Importance,
+                        Field::Attachment => Icon::Clip,
+                        _ => Icon::Flag,
+                    };
+                    icons::paint(p, Rect::from_center_size(cell.center(), vec2(11.0, 11.0)), icon, t.text_dim);
+                }
+                _ => {
+                    let label = field.label(outgoing).to_uppercase();
+                    clip_text(p, pos2(cell.left() + 6.0, cell.top() + 5.0), room, &label, bold(10.5), t.text_dim);
+                }
+            }
+            if sorted && *w > ICON_COL {
+                p.text(pos2(cell.right() - 6.0, cell.center().y), Align2::RIGHT_CENTER, if desc { "↓" } else { "↑" }, font(11.0), t.text_dim);
+            }
+            if resp.clicked()
+                && let Some(key) = key
+            {
+                arrange = Some(key);
+            }
+            let resp = resp.on_hover_text(match key {
+                Some(_) => format!("Arrange by {}. Right-click to choose the columns.", field.label(outgoing)),
+                None => format!("{}. Right-click to choose the columns.", field.label(outgoing)),
+            });
+            resp.context_menu(|ui| {
+                for f in Field::ALL {
+                    let mut on = shown.contains(&f);
+                    let only = on && shown.len() == 1;
+                    if ui.add_enabled(!only, egui::Checkbox::new(&mut on, f.label(outgoing))).changed() {
+                        acts.push(if on { json!({ "show": f.name() }) } else { json!({ "hide": f.name() }) });
+                    }
+                }
+                ui.separator();
+                if ui.add_enabled(at > 0, egui::Button::new("Move Left")).clicked() {
+                    acts.push(json!({ "move": field.name(), "at": at.saturating_sub(1) }));
+                    ui.close();
+                }
+                if ui.add_enabled(at + 1 < spans.len(), egui::Button::new("Move Right")).clicked() {
+                    acts.push(json!({ "move": field.name(), "at": at + 1 }));
+                    ui.close();
+                }
+                if ui.button("Reset Columns").clicked() {
+                    acts.push(json!({ "columns": "default" }));
+                    ui.close();
+                }
+            });
+        }
+        if let Some(key) = arrange {
+            self.act("view.sortBy", json!({ "key": key }));
+        }
+        for params in acts {
+            self.act("view.columns", params);
         }
     }
 
@@ -1168,6 +1272,90 @@ struct Shown<'a> {
     region: &'a time::Region,
     /// The folder holds mail going out: a row says whom it went to.
     outgoing: bool,
+}
+
+/// Where each column stands across `width` from `left`: a column of an icon is as narrow as
+/// its icon, and the others share what is left as Table Style shares a page.
+fn spans(columns: &[Field], left: f32, width: f32) -> Vec<(Field, f32, f32)> {
+    let narrow = |f: &Field| matches!(f, Field::Importance | Field::Attachment | Field::Flag);
+    let fixed = columns.iter().filter(|f| narrow(f)).count() as f32 * ICON_COL;
+    let shares: f32 = columns.iter().filter(|f| !narrow(f)).map(|f| f32::from(f.share())).sum();
+    let room = (width - fixed).max(0.0);
+    let mut x = left;
+    columns
+        .iter()
+        .map(|f| {
+            let w = if narrow(f) {
+                ICON_COL
+            } else if shares > 0.0 {
+                room * f32::from(f.share()) / shares
+            } else {
+                0.0
+            };
+            let at = x;
+            x += w;
+            (*f, at, w)
+        })
+        .collect()
+}
+
+/// A row of the single-line view: what the message says under each column.
+fn draw_line(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme::Tokens, spans: &[(Field, f32, f32)]) {
+    let Shown { now, tz, region, outgoing, .. } = *shown;
+    let expired = row.expires > 0 && row.expires <= now;
+    p.hline(r.x_range(), r.bottom() - 0.5, (1.0, t.line.gamma_multiply(0.6)));
+    if !row.read {
+        p.rect_filled(Rect::from_min_size(r.min + vec2(0.0, 1.0), vec2(3.0, r.height() - 2.0)), 0.0, t.accent);
+    }
+    let icon_at = |x: f32| Rect::from_center_size(pos2(x + ICON_COL / 2.0, r.center().y), vec2(12.0, 12.0));
+    for (field, x, w) in spans {
+        match field {
+            Field::Importance => match row.importance {
+                2 => icons::paint(p, icon_at(*x), Icon::Importance, t.danger),
+                0 => {
+                    p.text(icon_at(*x).center(), Align2::CENTER_CENTER, "↓", font(12.0), t.text_faint);
+                }
+                _ => {}
+            },
+            Field::Attachment if row.has_attachments => icons::paint(p, icon_at(*x), Icon::Clip, t.text_dim),
+            Field::Flag if row.flag != Flag::None => {
+                let done = row.flag == Flag::Complete;
+                icons::paint(p, icon_at(*x), if done { Icon::Check } else { Icon::Flag }, if done { t.ok } else { t.flag });
+            }
+            Field::Attachment | Field::Flag => {}
+            Field::Categories => {
+                let mut cx = x + 6.0;
+                for category in &row.categories {
+                    if cx + 9.0 > x + w - 4.0 {
+                        break;
+                    }
+                    p.rect_filled(Rect::from_min_size(pos2(cx, r.center().y - 4.5), vec2(9.0, 9.0)), 2.0, theme::category_color(category));
+                    cx += 12.0;
+                }
+                // One category is named beside its colour, as there is room for it.
+                if let [one] = row.categories.as_slice() {
+                    clip_text(p, pos2(cx + 2.0, r.top() + 5.0), (x + w - cx - 8.0).max(0.0), one, font(12.0), t.text_dim);
+                }
+            }
+            _ => {
+                let mut text = field.of(row, outgoing, tz, region);
+                if *field == Field::Subject && text.trim().is_empty() {
+                    text = "(no subject)".to_string();
+                }
+                let unread = !row.read && matches!(field, Field::Who | Field::From | Field::To | Field::Subject | Field::Date);
+                let colour = match field {
+                    Field::Preview | Field::Notes => t.text_faint,
+                    Field::Subject | Field::Date if !row.read => t.accent,
+                    _ => t.text,
+                };
+                let room = (w - 12.0).max(0.0);
+                let wrote = clip_text(p, pos2(x + 6.0, r.top() + 5.0), room, &text, if unread { bold(12.5) } else { font(12.5) }, colour);
+                if expired && wrote > 0.0 {
+                    p.hline(x + 6.0..=x + 6.0 + wrote, r.center().y, (1.0, t.text_dim));
+                }
+            }
+        }
+    }
 }
 
 fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme::Tokens) {

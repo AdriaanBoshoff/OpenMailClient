@@ -47,6 +47,8 @@ mod tests_calendar_file;
 #[cfg(test)]
 mod tests_carddav;
 #[cfg(test)]
+mod tests_columns;
+#[cfg(test)]
 mod tests_import;
 #[cfg(test)]
 mod tests_meeting;
@@ -442,6 +444,9 @@ pub struct Session {
     pub print_style: print::Style,
     /// What Table Style prints of a list: its columns, its headings, which rows.
     pub print_list: print::Listing,
+    /// The columns of the message list's single-line view, from the left; never none.
+    /// `view.columns` changes them, and Table Style's columns with them.
+    pub list_columns: Vec<print::Field>,
     /// How printers are found and printed on; none until the host gives this system's.
     pub spooler: std::sync::Arc<dyn printers::Spooler>,
     /// The printers as `file.printers` last found them.
@@ -581,6 +586,7 @@ impl Session {
             certificates: accounts::Shown::default(),
             print_style: print::Style::default(),
             print_list: print::Listing::default(),
+            list_columns: print::Field::LIST.to_vec(),
         }
     }
 

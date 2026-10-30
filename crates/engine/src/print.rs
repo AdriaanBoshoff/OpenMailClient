@@ -176,8 +176,28 @@ impl Field {
         }
     }
 
+    /// The columns of the message list as Outlook's single-line view first has them.
+    pub const LIST: [Field; 8] = [Self::Importance, Self::Attachment, Self::Who, Self::Subject, Self::Date, Self::Size, Self::Categories, Self::Flag];
+
+    /// The arrangement (`view.sortBy`'s key) a click on its column heading asks for; none for
+    /// a column the list is not arranged by.
+    pub fn sort_key(self, outgoing: bool) -> Option<&'static str> {
+        Some(match self {
+            Self::Who if outgoing => "to",
+            Self::Who | Self::From => "from",
+            Self::To => "to",
+            Self::Subject => "subject",
+            Self::Date => "date",
+            Self::Size => "size",
+            Self::Importance => "importance",
+            Self::Flag => "flag",
+            Self::Attachment => "attachments",
+            Self::Notes | Self::Categories | Self::Preview => return None,
+        })
+    }
+
     /// Its part of the page beside the others, before they are fitted to it.
-    fn share(self) -> u8 {
+    pub fn share(self) -> u8 {
         match self {
             Self::Who | Self::From | Self::To => 22,
             Self::Subject => 38,
@@ -191,7 +211,8 @@ impl Field {
         }
     }
 
-    fn of(self, row: &openmailclient_model::Summary, outgoing: bool, zone: &Zone, region: &time::Region) -> String {
+    /// What it says of `row`, as it is printed and shown in the list's column.
+    pub fn of(self, row: &openmailclient_model::Summary, outgoing: bool, zone: &Zone, region: &time::Region) -> String {
         match self {
             Self::Who if outgoing || row.from.is_empty() => row.to.clone(),
             Self::Who | Self::From => row.from.clone(),

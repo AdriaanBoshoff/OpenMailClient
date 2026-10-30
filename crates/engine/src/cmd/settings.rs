@@ -69,6 +69,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
             ReadingPane::Off => "off",
         },
         "folderPane": s.folder_pane,
+        "listColumns": s.list_columns.iter().map(|f| f.name()).collect::<Vec<_>>(),
         "toDoBar": crate::cmd::todo_bar::MODULES.iter().zip(&s.todo_bar).map(|(m, p)| (m.name().to_ascii_lowercase(), p.to_json())).collect::<serde_json::Map<_, _>>(),
         "favorites": s.favorites,
         "animations": s.animate,
@@ -180,6 +181,13 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(pane.is_some());
         if let Some(pane) = pane {
             s.reading_pane = pane;
+        }
+    }
+    if let Some(v) = all.get("listColumns") {
+        let columns = crate::print::listing_with(&crate::print::Listing::default(), &json!({ "columns": v })).ok().map(|l| l.columns);
+        took(columns.is_some());
+        if let Some(columns) = columns {
+            s.list_columns = columns;
         }
     }
     if let Some(v) = all.get("folderPane") {

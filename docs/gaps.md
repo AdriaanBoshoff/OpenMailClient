@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 142 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 143 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 143 · 2026-10-30 — M5.21: the message list's columns chosen in the window and kept between runs, and Table Style printing them.
 - 142 · 2026-10-30 — M5.20: search folders worked out again after a save, through the Search Management Queue Outlook reads.
 - 141 · 2026-10-30 — M5.19: several messages selected at once, by Ctrl, Shift and Select All, changed, moved and deleted together as one step of Undo.
 - 140 · 2026-10-30 — M5.18: Assign Task, task requests, accepted and declined, updates and completion reports by mail, Send Status Report, TNEF winmail.dat read and written.
