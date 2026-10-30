@@ -1182,7 +1182,8 @@ pub fn local_zone() -> openmailclient_model::zone::Zone {
     match system_zone_name() {
         // One known by that name, where it keeps the rules the system does.
         Some(name) => match Zone::named(&name) {
-            Some(known) if known.bias == found.bias && known.daylight == found.daylight => known,
+            // Its rules this year are what the system says; those of other years, the tz database's.
+            Some(known) if known.bias == found.bias && known.same_in(&found, time::civil(now, found.offset_at(now)).year) => known,
             // Else what the system keeps, by the name it gives it.
             _ => Zone { id: name, ..found },
         },

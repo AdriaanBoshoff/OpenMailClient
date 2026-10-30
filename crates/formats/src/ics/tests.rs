@@ -606,3 +606,46 @@ fn hostile_to_dos_are_bounded() {
         assert!(t.task.percent <= 100 && t.task.total_work >= 0);
     }
 }
+
+/// A zone as written and read again, through its VTIMEZONE alone.
+fn zone_through_a_file(zone: &Zone) -> (FileZone, Option<Zone>, String) {
+    let mut text = String::from("BEGIN:VCALENDAR\r\n");
+    write_zone(&mut text, zone);
+    text.push_str("END:VCALENDAR\r\n");
+    let (roots, _) = components(text.as_bytes());
+    let file = roots[0].children.iter().find(|c| c.name == "VTIMEZONE").and_then(FileZone::of).unwrap();
+    let model = file.model();
+    (file, model, text)
+}
+
+#[test]
+fn a_zone_whose_rules_changed_is_written_with_each_era_and_read_back() {
+    for id in ["Europe/Moscow", "America/New_York", "Asia/Jerusalem", "Africa/Casablanca", "Europe/Berlin"] {
+        let zone = Zone::named(id).unwrap();
+        let (file, model, text) = zone_through_a_file(&zone);
+        assert_eq!(model.as_ref(), Some(&zone), "{id}:\n{text}");
+        // The file's own offsets are the zone's, year by year.
+        for y in (1990..=2035).filter(|y| zone.one_rule_in(*y)) {
+            for m in 1..=12u32 {
+                let local = time::to_unix(at(&format!("{y}-{m:02}-10 12:00"), 0));
+                let utc = zone.utc_of(time::from_unix(local));
+                assert_eq!(file.offset_at(local), i64::from(zone.offset_at(utc)), "{id} {y}-{m}");
+            }
+        }
+    }
+    // Moscow's eras: summer time ending in 2010, four hours to 2014, three since.
+    let (_, _, text) = zone_through_a_file(&Zone::named("Europe/Moscow").unwrap());
+    assert!(text.contains("UNTIL=20101231T235959Z"), "{text}");
+    assert!(text.contains("TZOFFSETTO:+0400"), "{text}");
+    // Morocco's moving days as the days they fell on.
+    let (_, _, text) = zone_through_a_file(&Zone::named("Africa/Casablanca").unwrap());
+    assert!(text.contains("RDATE:") && text.contains("20250223T030000"), "{text}");
+    // Under a name not known, the eras that ended are kept as the file gives them.
+    let mut own = Zone::named("America/Chicago").unwrap();
+    own.id = "Somewhere/Plains".into();
+    own.key.clear();
+    let (_, model, _) = zone_through_a_file(&own);
+    let model = model.unwrap();
+    assert_eq!((model.bias, model.daylight, model.earlier.len()), (own.bias, own.daylight, 1));
+    assert!(model.keeps_as(&own));
+}

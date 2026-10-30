@@ -11,7 +11,7 @@
 use openmailclient_model::calendar::{self, Appointment, Busy, DAY, MAX_DAYS, MINUTE};
 use openmailclient_model::meeting::{self, Attendee, Meeting, Response, Role};
 use openmailclient_model::recur::{self, End, Freq, Recurrence, Rule};
-use openmailclient_model::zone::{Daylight, Rule as ZoneRule, Zone};
+use openmailclient_model::zone::{Daylight, Era, Rule as ZoneRule, Zone};
 use openmailclient_model::{Item, time};
 
 mod todo;
@@ -420,6 +420,8 @@ struct Onset {
 struct FileZone {
     id: String,
     onsets: Vec<Onset>,
+    /// The zone as one this program keeps, once worked out (each event in it asks).
+    modelled: std::cell::OnceCell<Option<Zone>>,
 }
 
 fn ymd(day: i64) -> (i64, u32, u32) {
@@ -472,7 +474,7 @@ impl FileZone {
                 .collect();
             onsets.push(Onset { day: start.day, secs: start.secs, from, to, yearly, more, daylight: o.name == "DAYLIGHT" });
         }
-        (!onsets.is_empty()).then_some(Self { id, onsets })
+        (!onsets.is_empty()).then_some(Self { id, onsets, modelled: std::cell::OnceCell::new() })
     }
 
     /// Minutes east of UTC the zone is at the local second `local` (seconds since 1970 on the
@@ -512,8 +514,60 @@ impl FileZone {
     /// repeating, where a zone gives its past ones too). Known by name when it is one of those
     /// known; `None` when its rules are of another kind.
     fn model(&self) -> Option<Zone> {
+        self.modelled.get_or_init(|| self.model_now()).clone()
+    }
+
+    fn model_now(&self) -> Option<Zone> {
+        // A zone known by its TZID, where the file's offsets are its own in the years the file
+        // speaks of: from 1970 where it gives rules that ended, else those of its rules today.
+        if let Some(known) = Zone::named(self.id.trim().trim_start_matches('/')) {
+            let history = self.onsets.iter().any(|o| o.yearly.is_some_and(|(.., until)| until.is_some()) || !o.more.is_empty());
+            let first = if history { 1970 } else { known.since().max(1970) };
+            let agrees = (first..=2040).filter(|y| known.one_rule_in(*y)).all(|y| {
+                (1..=12u32).all(|m| {
+                    [1u32, 15].iter().all(|d| {
+                        let Some(day) = day_number(y, m, *d) else { return true };
+                        let local = day.saturating_mul(86_400).saturating_add(43_200);
+                        let at = known.utc_of(time::from_unix(local));
+                        i64::from(known.offset_at(at)) == self.offset_at(local)
+                    })
+                })
+            });
+            if agrees {
+                return Some(known);
+            }
+        }
         let in_range = |o: i64| o.abs() <= 18 * 60;
         let current: Vec<&Onset> = self.onsets.iter().filter(|o| o.yearly.is_some_and(|(.., until)| until.is_none())).collect();
+        let rule = |o: &Onset| -> Option<ZoneRule> {
+            let (month, nth, month_day, _) = o.yearly?;
+            let (n, weekday) = nth?;
+            if month_day.is_some() {
+                return None;
+            }
+            let week = match n {
+                -1 | 5 => 5,
+                1..=4 => u8::try_from(n).ok()?,
+                _ => return None,
+            };
+            let minute = u16::try_from(o.secs.div_euclid(60)).ok().filter(|m| *m < 24 * 60)?;
+            Some(ZoneRule { month: u8::try_from(month).ok()?, week, weekday: u8::try_from(weekday).ok()?, minute, day: 0 })
+        };
+        // Rules that ended: a STANDARD and a DAYLIGHT observance ending the same year.
+        let mut earlier: Vec<Era> = Vec::new();
+        for o in self.onsets.iter().filter(|o| !o.daylight) {
+            let Some((.., Some(until))) = o.yearly else { continue };
+            let Some(d) = self.onsets.iter().find(|d| d.daylight && d.yearly.is_some_and(|(.., u)| u == Some(until))) else { continue };
+            let save = d.to.saturating_sub(o.to);
+            let (Ok(bias), Ok(save)) = (i32::try_from(o.to), i32::try_from(save)) else { continue };
+            if !in_range(o.to) || !in_range(d.to) || save == 0 || earlier.iter().any(|e| e.until == until) {
+                continue;
+            }
+            let (Some(begins), Some(ends)) = (rule(d), rule(o)) else { continue };
+            earlier.push(Era { until, bias, daylight: Some(Daylight::new(save, begins, ends)) });
+        }
+        earlier.sort_by_key(|e| e.until);
+        earlier.truncate(64);
         let zone = match current.as_slice() {
             [] => {
                 // One offset all along: the observance begun last.
@@ -525,33 +579,20 @@ impl FileZone {
             }
             [a, b] if a.daylight != b.daylight => {
                 let (standard, daylight) = if a.daylight { (*b, *a) } else { (*a, *b) };
-                let rule = |o: &Onset| -> Option<ZoneRule> {
-                    let (month, nth, month_day, _) = o.yearly?;
-                    let (n, weekday) = nth?;
-                    if month_day.is_some() {
-                        return None;
-                    }
-                    let week = match n {
-                        -1 | 5 => 5,
-                        1..=4 => u8::try_from(n).ok()?,
-                        _ => return None,
-                    };
-                    let minute = u16::try_from(o.secs.div_euclid(60)).ok().filter(|m| *m < 24 * 60)?;
-                    Some(ZoneRule { month: u8::try_from(month).ok()?, week, weekday: u8::try_from(weekday).ok()?, minute })
-                };
                 let save = daylight.to.saturating_sub(standard.to);
                 if !in_range(standard.to) || !in_range(daylight.to) || save == 0 {
                     return None;
                 }
                 Zone {
                     bias: i32::try_from(standard.to).ok()?,
-                    daylight: Some(Daylight { save: i32::try_from(save).ok()?, begins: rule(daylight)?, ends: rule(standard)? }),
+                    daylight: Some(Daylight::new(i32::try_from(save).ok()?, rule(daylight)?, rule(standard)?)),
                     ..Zone::default()
                 }
             }
             _ => return None,
         };
-        Some(named_as(&self.id, zone))
+        let earlier: Vec<Era> = earlier.into_iter().filter(|e| e.bias != zone.bias || e.daylight != zone.daylight).collect();
+        Some(named_as(&self.id, Zone { earlier, ..zone }))
     }
 }
 
@@ -1307,10 +1348,17 @@ fn is_utc(zone: &Zone) -> bool {
 }
 
 /// A zone as a VTIMEZONE (RFC 5545 3.6.5): one STANDARD observance, and a DAYLIGHT one
-/// beside it repeating each year where it saves daylight.
+/// beside it repeating each year where it saves daylight. A zone whose rules changed over the
+/// years gives those of each era, ending in its last year (UNTIL), and rules that move from year
+/// to year give the days they fell on (RDATE).
 fn write_zone(out: &mut String, zone: &Zone) {
     line(out, "BEGIN:VTIMEZONE");
     line(out, &format!("TZID:{}", zone_id(zone)));
+    if !zone.earlier.is_empty() || zone.daylight.is_some_and(|d| !d.yearly()) {
+        write_eras(out, zone);
+        line(out, "END:VTIMEZONE");
+        return;
+    }
     let bias = i64::from(zone.bias);
     match zone.daylight {
         None => {
@@ -1340,6 +1388,90 @@ fn write_zone(out: &mut String, zone: &Zone) {
         }
     }
     line(out, "END:VTIMEZONE");
+}
+
+/// The observances of a zone whose rules changed: an era of rules said the same way each year as
+/// a STANDARD and a DAYLIGHT observance repeating to its last year, one of a single offset as a
+/// STANDARD one from its first, and years of rules that move as the days they fell on.
+fn write_eras(out: &mut String, zone: &Zone) {
+    let rules = zone.yearly_rules();
+    // The offset kept before each era begins, for its first observance's TZOFFSETFROM.
+    let mut before = i64::from(rules.first().map_or(zone.bias, |r| r.1));
+    // Days that moving rules fell on, gathered while the offsets stay the same.
+    let mut moving: Vec<(i64, i64, i64, Vec<(i64, u16)>, Vec<(i64, u16)>)> = Vec::new();
+    let flush = |out: &mut String, moving: &mut Vec<(i64, i64, i64, Vec<(i64, u16)>, Vec<(i64, u16)>)>| {
+        for (bias, saving, _, ends, begins) in moving.drain(..) {
+            for (name, days, from, to) in [("STANDARD", ends, saving, bias), ("DAYLIGHT", begins, bias, saving)] {
+                let Some((first, minute)) = days.first().copied() else { continue };
+                line(out, &format!("BEGIN:{name}"));
+                line(out, &format!("DTSTART:{}T{:02}{:02}00", date_text(first), minute / 60, minute % 60));
+                line(out, &format!("TZOFFSETFROM:{}", offset_text(from)));
+                line(out, &format!("TZOFFSETTO:{}", offset_text(to)));
+                for chunk in days.get(1..).unwrap_or_default().chunks(8) {
+                    let list: Vec<String> = chunk.iter().map(|(d, m)| format!("{}T{:02}{:02}00", date_text(*d), m / 60, m % 60)).collect();
+                    line(out, &format!("RDATE:{}", list.join(",")));
+                }
+                line(out, &format!("END:{name}"));
+            }
+        }
+    };
+    for (n, (from, bias, daylight)) in rules.iter().enumerate() {
+        let next = rules.get(n + 1).map(|r| r.0);
+        let bias = i64::from(*bias);
+        // Out of 1601, a rule in force since then is written from 1970.
+        let first = (*from).max(1970);
+        match daylight {
+            None => {
+                flush(out, &mut moving);
+                line(out, "BEGIN:STANDARD");
+                line(out, &format!("DTSTART:{}T000000", date_text(day_number(first, 1, 1).unwrap_or(0))));
+                line(out, &format!("TZOFFSETFROM:{}", offset_text(before)));
+                line(out, &format!("TZOFFSETTO:{}", offset_text(bias)));
+                line(out, "END:STANDARD");
+                before = bias;
+            }
+            Some(d) => {
+                let saving = bias.saturating_add(i64::from(d.save));
+                if next == Some(from.saturating_add(1)) && *from >= 1970 {
+                    // One year of rules that move: the days they fell on.
+                    match moving.last_mut() {
+                        Some((b, s, _, ends, begins)) if *b == bias && *s == saving => {
+                            ends.push((d.ends.day_in(*from), d.ends.minute));
+                            begins.push((d.begins.day_in(*from), d.begins.minute));
+                        }
+                        _ => {
+                            flush(out, &mut moving);
+                            moving.push((
+                                bias,
+                                saving,
+                                *from,
+                                vec![(d.ends.day_in(*from), d.ends.minute)],
+                                vec![(d.begins.day_in(*from), d.begins.minute)],
+                            ));
+                        }
+                    }
+                } else {
+                    flush(out, &mut moving);
+                    let until = next.map(|y| y.saturating_sub(1));
+                    let observance = |out: &mut String, name: &str, rule: ZoneRule, from_off: i64, to_off: i64| {
+                        line(out, &format!("BEGIN:{name}"));
+                        line(out, &format!("DTSTART:{}T{:02}{:02}00", date_text(rule.day_in(first)), rule.minute / 60, rule.minute % 60));
+                        line(out, &format!("TZOFFSETFROM:{}", offset_text(from_off)));
+                        line(out, &format!("TZOFFSETTO:{}", offset_text(to_off)));
+                        let nth = if rule.week >= 5 { -1 } else { i32::from(rule.week) };
+                        let weekday = WEEKDAYS.get(usize::from(rule.weekday) % 7).copied().unwrap_or("SU");
+                        let end = until.map_or(String::new(), |u| format!(";UNTIL={u:04}1231T235959Z"));
+                        line(out, &format!("RRULE:FREQ=YEARLY;BYMONTH={};BYDAY={nth}{weekday}{end}", rule.month));
+                        line(out, &format!("END:{name}"));
+                    };
+                    observance(out, "STANDARD", d.ends, saving, bias);
+                    observance(out, "DAYLIGHT", d.begins, bias, saving);
+                }
+                before = bias;
+            }
+        }
+    }
+    flush(out, &mut moving);
 }
 
 /// How a series' times are written: in its zone, or in UTC.
