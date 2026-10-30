@@ -889,3 +889,34 @@ pub fn pdf(item: &Item, job: &Job) -> Result<Print, EngineError> {
     let Laid { links, printed, pictures } = layout(item, job, library())?;
     Ok(Print { file: write(&printed, &pictures, &item.subject())?, pages: printed.pages.len(), truncated: printed.truncated, links })
 }
+
+/// Letters at most one print lays out: each takes a page at least.
+pub const MAX_LETTERS: usize = openmailclient_layout::MAX_PAGES;
+
+/// Letters laid out one after another, each starting on a page of its own, as Mail Merge
+/// prints them: the text alone, without the owner's name, fields, header or footer. All of
+/// them are laid out with one set of fonts, so the faces their pages count into are the same.
+pub fn letters(texts: &[String], setup: &Setup) -> Result<Laid, EngineError> {
+    let mut setup = setup.clone();
+    setup.details = false;
+    setup.edges = false;
+    let mut fonts = Fonts::new(library());
+    let mut pages = Vec::new();
+    let mut truncated = texts.len() > MAX_LETTERS;
+    let nothing = |_: &Picture| None;
+    for text in texts.iter().take(MAX_LETTERS) {
+        let doc = Doc::plain(text);
+        let memo = Memo { owner: "", fields: &[], body: &doc, plain: true, sizes: &nothing };
+        let printed = openmailclient_layout::memo(&memo, setup.clone(), &mut fonts).map_err(|e| match e {
+            LayoutError::NoFont => EngineError::Format(e.to_string()),
+        })?;
+        truncated |= printed.truncated;
+        if pages.len().saturating_add(printed.pages.len()) > openmailclient_layout::MAX_PAGES {
+            truncated = true;
+            break;
+        }
+        pages.extend(printed.pages);
+    }
+    let printed = Printed { pages, faces: fonts.faces().to_vec(), truncated };
+    Ok(Laid { links: 0, printed, pictures: Pictures::default() })
+}

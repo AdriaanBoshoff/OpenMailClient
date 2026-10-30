@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 128 · 2026-10-28 · ranked: the top of the list is what hurts most.
+**Status:** revision 129 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 129 · 2026-10-30 — M5.12: Mail Merge printed as letters and saved as one document, and contacts chosen by a filter.
 - 128 · 2026-10-28 — M5.12: a contact's picture and details in the contact window.
 - 127 · 2026-10-28 — M5.12: themes saved to a file and opened from one.
 - 126 · 2026-10-28 — M1.9: every setting in one Options window, the File tab in pages.

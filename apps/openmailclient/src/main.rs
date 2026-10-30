@@ -216,6 +216,16 @@ impl App {
                         self.run("ui.contactPicture", json!({ "path": path }));
                     }
                 }
+                UiRequest::SaveMergeLetters => {
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Save letters")
+                        .set_file_name("Letters.pdf")
+                        .add_filter("PDF document", &["pdf"])
+                        .save_file();
+                    if let Some(path) = picked {
+                        self.run("ui.mergeLetters", json!({ "path": path }));
+                    }
+                }
                 UiRequest::OpenTheme => {
                     let ext = openmailclient_ui_egui::THEME_FILE_EXT;
                     let picked = rfd::FileDialog::new()

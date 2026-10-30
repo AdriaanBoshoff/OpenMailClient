@@ -3726,3 +3726,48 @@ fn a_contacts_picture_and_details_are_chosen_in_its_window_and_kept() {
     assert_eq!(ui.contact.as_ref().unwrap().picture, crate::people::PictureEdit::Remove, "a refused file changes nothing");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Mail Merge chooses its contacts by a filter in the window, and prints letters to a PDF
+/// document chosen in a dialog, everyone counted, those without an address too.
+#[test]
+fn mail_merge_filters_in_its_window_and_saves_letters_as_a_document() {
+    let mut ui = MailUi::new(Session::with_sample());
+    assert!(ui.execute("ui.mergeLettersDialog", &Value::Null).is_err(), "no merge is open");
+    assert!(ui.execute("ui.mergeLetters", &json!({ "path": "x.pdf" })).is_err());
+    ui.execute("ui.mailMerge", &Value::Null).unwrap();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let draw = |ui: &mut MailUi| ctx.run_ui(egui::RawInput::default(), |u| ui.mail_merge_window(u.ctx())).textures_delta.clear();
+    draw(&mut ui);
+    {
+        let m = ui.merge.as_mut().unwrap();
+        m.filter.push(crate::merge::Condition { field: "City".into(), op: "is", value: "Port Ellis".into() });
+    }
+    draw(&mut ui);
+    let m = ui.merge.as_ref().unwrap();
+    assert_eq!((m.count, m.filtered), (2, 2), "{}", m.error);
+    ui.merge.as_mut().unwrap().filter.clear();
+    ui.merge.as_mut().unwrap().deliver = "letters";
+    draw(&mut ui);
+    let m = ui.merge.as_ref().unwrap();
+    assert_eq!((m.count, m.no_address), (4, 2), "letters go to everyone chosen: {}", m.error);
+
+    ui.execute("ui.mergeLettersDialog", &Value::Null).unwrap();
+    assert_eq!(ui.requests.last(), Some(&UiRequest::SaveMergeLetters));
+    let dir = std::env::temp_dir().join(format!("omc-ui-letters-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pdf = dir.join("letters.pdf");
+    let got = ui.execute("ui.mergeLetters", &json!({ "path": pdf })).unwrap();
+    assert_eq!(got["letters"], json!(4));
+    assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+    assert!(ui.merge.is_none(), "the window closes once they are saved");
+
+    // A path the engine refuses keeps the window open and says why.
+    ui.execute("ui.mailMerge", &Value::Null).unwrap();
+    ui.merge.as_mut().unwrap().deliver = "letters";
+    assert!(ui.execute("ui.mergeLetters", &json!({ "path": dir.join("letters.doc") })).is_err());
+    assert!(ui.merge.as_ref().is_some_and(|m| m.error.contains(".pdf")));
+    assert!(ui.execute("ui.mergeLetters", &json!({})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

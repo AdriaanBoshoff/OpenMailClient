@@ -173,3 +173,70 @@ fn mail_merge_writes_one_message_to_each_with_their_fields_and_no_one_twice() {
     let e = s.run("people.mailMerge", &json!({ "body": "Hi «Frist Name»" })).unwrap_err().to_string();
     assert!(e.contains("First Name"), "the fields are named: {e}");
 }
+
+#[test]
+fn mail_merge_chooses_by_a_filter_and_prints_letters_a_page_each_to_one_document() {
+    let mut s = Session::with_sample();
+    // A filter: only those in Port Ellis, compared without regard to case.
+    let p = json!({ "body": "x", "deliver": "preview", "filter": [{ "field": "City", "op": "is", "value": "port ellis" }] });
+    let got = s.run("people.mailMerge", &p).unwrap();
+    assert_eq!(got["to"], json!(["Priya Raman <priya.raman@example.org>", "Sam Patel <sam.patel@example.org>"]), "{got}");
+    assert_eq!(got["filtered"], json!(2));
+    let p = json!({ "body": "x", "deliver": "preview", "filterAny": true, "filter": [
+        { "field": "First Name", "op": "startsWith", "value": "T" },
+        { "field": "company", "op": "contains", "value": "PRINT" },
+    ] });
+    let got = s.run("people.mailMerge", &p).unwrap();
+    assert_eq!(got["to"], json!(["Tomás Lindqvist <tomas.lindqvist@example.org>", "June Okafor <june.okafor@example.org>"]), "{got}");
+    let got = s.run("people.mailMerge", &json!({ "body": "x", "deliver": "preview", "filter": [{ "field": "Company", "op": "empty" }] })).unwrap();
+    assert!(got["to"].as_array().unwrap().iter().all(|t| !t.as_str().unwrap().contains("June")), "{got}");
+
+    // Letters: one each, someone without an e-mail address too, each on a page of its own.
+    let ola = s.run("people.new", &json!({ "given": "Ola", "surname": "Nowak", "prefix": "Ms." })).unwrap()["id"].as_u64().unwrap();
+    let dir = std::env::temp_dir().join(format!("omc-merge-letters-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pdf = dir.join("letters.pdf");
+    let body = "«Address Block»\n\n«Greeting Line»\n\nOur shop opens on Monday.";
+    let got = s.run("people.mailMerge", &json!({ "body": body, "deliver": "letters", "path": pdf })).unwrap();
+    assert_eq!(got["letters"], json!(5), "{got}");
+    assert_eq!(got["pages"], json!(5), "a page each");
+    assert_eq!(got["noAddress"], json!(["Tomás Lindqvist", "Ms. Ola Nowak", "June Okafor"]), "named, still written to");
+    let bytes = std::fs::read(&pdf).unwrap();
+    assert!(bytes.starts_with(b"%PDF"));
+    let previews = got["untrusted_content"]["previews"].as_array().unwrap();
+    assert_eq!(
+        previews[0]["body"],
+        json!("Priya Raman\nNorthwind Studio\n12 Harbour Road\nPort Ellis 40112\nExample\n\nDear Priya,\n\nOur shop opens on Monday."),
+        "{got}"
+    );
+    let got = s.run("people.mailMerge", &json!({ "body": "«Greeting Line»", "deliver": "letters", "path": pdf, "contacts": [ola] })).unwrap();
+    assert_eq!(got["untrusted_content"]["previews"][0]["body"], json!("Dear Ms. Nowak,"));
+    assert!(s.status.contains("1 letter on 1 page"), "{}", s.status);
+    let got = s
+        .run(
+            "people.mailMerge",
+            &json!({ "body": "«Greeting Line»", "deliver": "letters", "preview": true, "filter": [{ "field": "City", "op": "notEmpty" }] }),
+        )
+        .unwrap();
+    assert_eq!((got["letters"].clone(), got.get("pages").is_none()), (json!(2), true), "looked at, nothing laid out: {got}");
+    // In a message's subject an address block is one line.
+    let got = s.run("people.mailMerge", &json!({ "subject": "«Address Block»", "body": "x", "deliver": "preview", "contacts": "shown" })).unwrap();
+    assert!(!got["untrusted_content"]["previews"][0]["subject"].as_str().unwrap().contains('\n'));
+
+    for bad in [
+        json!({ "body": "x", "deliver": "letters" }),
+        json!({ "body": "x", "deliver": "letters", "path": dir.join("letters.txt") }),
+        json!({ "body": "x", "deliver": "letters", "printer": "No Such Printer Here" }),
+        json!({ "body": "x", "deliver": "letters", "path": pdf, "filter": [{ "field": "City", "value": "Nowhere" }] }),
+        json!({ "body": "x", "filter": "City" }),
+        json!({ "body": "x", "filter": [{ "field": "Shoe Size", "value": "9" }] }),
+        json!({ "body": "x", "filter": [{ "field": "City", "op": "like", "value": "a" }] }),
+        json!({ "body": "x", "filter": [{ "field": "City", "op": "is" }] }),
+        json!({ "body": "x", "filter": [{ "field": "City", "value": ["a"] }] }),
+        json!({ "body": "x", "filter": vec![json!({ "field": "City", "op": "empty" }); 21] }),
+    ] {
+        assert!(s.run("people.mailMerge", &bad).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

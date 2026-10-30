@@ -103,6 +103,8 @@ pub enum UiRequest {
     ContactPicture,
     /// Pick a theme file to open (`ui.openTheme`).
     OpenTheme,
+    /// Pick where the letters of the open Mail Merge are saved as one PDF (`ui.mergeLetters`).
+    SaveMergeLetters,
     /// Pick where the theme of this name is saved as a theme file (`ui.saveTheme`).
     SaveTheme(String),
     /// Hand a web address to the system's browser. Queued only when the person presses Open in
@@ -287,6 +289,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     },
     UiCommand { id: "ui.searchPeople", label: "Search People", params: "" },
     UiCommand { id: "ui.mailMerge", label: "Mail Merge", params: "" },
+    UiCommand {
+        id: "ui.mergeLetters",
+        label: "Mail Merge Letters",
+        params: r#"{"path": a .pdf file} | {"printer": a printer's name}; the letters of the merge open in its window, saved as one document or printed, and the window closed"#,
+    },
+    UiCommand { id: "ui.mergeLettersDialog", label: "Save Letters as PDF…", params: "" },
     UiCommand {
         id: "ui.task",
         label: "New Task",
@@ -981,6 +989,8 @@ impl MailUi {
                 }
                 self.merge = Some(merge::Merge::default());
             }
+            "ui.mergeLetters" => return self.merge_letters(params),
+            "ui.mergeLettersDialog" => self.merge_letters_dialog()?,
             "ui.searchPeople" => {
                 self.execute("nav.module", &json!({ "module": "people" }))?;
                 self.people_search_focus = true;

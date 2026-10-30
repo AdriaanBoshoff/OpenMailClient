@@ -729,13 +729,31 @@ fn page_param(p: &Value, key: &str) -> Result<Option<usize>, EngineError> {
 
 /// Print what the session shows on a printer of this system.
 fn print_on(s: &mut Session, p: &Value) -> CmdResult {
+    let setup = crate::print::setup_with(&s.page_setup, p)?;
+    let style = crate::print::style_with(s.print_style, p)?;
+    let listing = crate::print::listing_with(&s.print_list, p)?;
+    let links = print_links(p)?;
+    // The printer is known to be one before anything is laid out.
+    printer_named(s, p)?;
+    let laid = crate::print::laid_as(s, style, &setup, &listing, links)?;
+    let title = crate::print::title(s, style);
+    print_laid(s, p, laid, title, style.name())
+}
+
+/// The printer `"printer"` names, when the system lists it: nothing else reaches its commands.
+pub(super) fn printer_named(s: &mut Session, p: &Value) -> Result<String, EngineError> {
     let name = p.get("printer").and_then(Value::as_str).ok_or_else(|| EngineError::BadParams("\"printer\" is a printer's name".into()))?;
-    // Only a printer the system lists is printed on: nothing else reaches its commands.
     if !s.printers.iter().any(|known| known.name == name) {
         find_printers(s)?;
     }
     let printer = s.printers.iter().find(|known| known.name == name).map(|known| known.name.clone());
-    let printer = printer.ok_or_else(|| EngineError::BadParams(format!("there is no printer {name:?} here")))?;
+    printer.ok_or_else(|| EngineError::BadParams(format!("there is no printer {name:?} here")))
+}
+
+/// Send what was laid out to the printer `"printer"` names, with the `"copies"`, `"from"`,
+/// `"to"` and `"wait"` the parameters ask for; `kind` is said back as `"style"`.
+pub(super) fn print_laid(s: &mut Session, p: &Value, laid: crate::print::Laid, title: String, kind: &'static str) -> CmdResult {
+    let printer = printer_named(s, p)?;
     let copies = match p.get("copies") {
         None | Some(Value::Null) => 1,
         Some(v) => v
@@ -745,11 +763,6 @@ fn print_on(s: &mut Session, p: &Value) -> CmdResult {
     };
     let (from, to) = (page_param(p, "from")?, page_param(p, "to")?);
     let wait = p_bool(p, "wait") != Some(false);
-    let setup = crate::print::setup_with(&s.page_setup, p)?;
-    let style = crate::print::style_with(s.print_style, p)?;
-    let listing = crate::print::listing_with(&s.print_list, p)?;
-    let links = print_links(p)?;
-    let laid = crate::print::laid_as(s, style, &setup, &listing, links)?;
     let pages = laid.printed.pages.len();
     let last = pages.checked_sub(1).ok_or_else(|| EngineError::Format("there is nothing to print".into()))?;
     let (from, to) = (from.unwrap_or(0), to.unwrap_or(last).min(last));
@@ -760,7 +773,6 @@ fn print_on(s: &mut Session, p: &Value) -> CmdResult {
             if pages == 1 { "" } else { "s" }
         )));
     }
-    let title = crate::print::title(s, style);
     let pdf = crate::print::write(&laid.printed, &laid.pictures, &title)?;
     let truncated = laid.printed.truncated;
     s.printer = Some(printer.clone());
@@ -777,7 +789,7 @@ fn print_on(s: &mut Session, p: &Value) -> CmdResult {
                     if count == 1 { "" } else { "s" },
                     if copies > 1 { format!(", {copies} copies") } else { String::new() }
                 ),
-                json!({"printer": printer, "pages": count, "copies": copies, "truncated": truncated, "style": style.name()}),
+                json!({"printer": printer, "pages": count, "copies": copies, "truncated": truncated, "style": kind}),
             ),
             Err(why) => (format!("{printer} did not take the print: {why}"), json!({"ok": false, "printer": printer, "error": why})),
         })
