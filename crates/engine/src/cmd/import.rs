@@ -375,6 +375,7 @@ fn finish(
 ) -> (String, Value) {
     let mut added: Vec<Value> = Vec::new();
     let mut files: Vec<Value> = Vec::new();
+    let opened_from = s.stores.len();
     for (at, (mut account, choice)) in adding.into_iter().enumerate() {
         let name = account.name.clone();
         // Added meanwhile, from elsewhere.
@@ -415,6 +416,11 @@ fn finish(
             Err(why) => failed.push(json!({ "name": name, "why": why })),
         }
     }
+    // Each data file brought gives the AutoComplete list Outlook kept in it.
+    let mut names = 0;
+    for store in s.stores.iter_mut().skip(opened_from) {
+        names += s.autocomplete.bring(crate::autocomplete::from_store(store.as_mut()));
+    }
     let mut said = match (added.len(), files.len()) {
         (0, 0) => "Nothing was imported from Outlook".to_string(),
         (a, 0) => format!("Imported {a} account{} from Outlook", if a == 1 { "" } else { "s" }),
@@ -428,8 +434,11 @@ fn finish(
     if !added.is_empty() {
         said.push_str("; give each account its password in Account Settings");
     }
+    if names > 0 {
+        said.push_str(&format!("; {names} name{} were added to the AutoComplete list", if names == 1 { "" } else { "s" }));
+    }
     if !failed.is_empty() {
         said.push_str(&format!("; {} could not be", failed.len()));
     }
-    (said, json!({ "accounts": added, "dataFiles": files, "signatures": signatures, "failed": failed }))
+    (said, json!({ "accounts": added, "dataFiles": files, "signatures": signatures, "autoComplete": names, "failed": failed }))
 }

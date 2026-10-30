@@ -845,6 +845,8 @@ impl MailUi {
         // A line typed in, whose names are looked for; a suggestion taken.
         let mut typed: Option<(&str, String)> = None;
         let mut took = false;
+        // A name taken off the AutoComplete list, by its × or the Delete key.
+        let mut forget: Option<String> = None;
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(vec2(14.0, 10.0))), |ui| {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
             // The buttons go on to a second line where the pane is narrow.
@@ -942,6 +944,11 @@ impl MailUi {
                         if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
                             take = true;
                         }
+                        if let Some(row) = s.rows.get(pick).filter(|r| r.recent)
+                            && i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                        {
+                            forget = Some(row.address.clone());
+                        }
                     });
                 }
                 ui.horizontal(|ui| {
@@ -973,17 +980,26 @@ impl MailUi {
                                         let words =
                                             if row.group { format!("{} (group)", row.name) } else { format!("{}  {}", row.name, row.address) };
                                         let chosen = i == pick;
-                                        let r = ui.add(egui::Button::selectable(chosen, crate::seen_line(&words, font(12.5), t.text)));
-                                        if r.clicked() {
-                                            pick = i;
-                                            take = true;
-                                        }
+                                        ui.horizontal(|ui| {
+                                            let r = ui.add(egui::Button::selectable(chosen, crate::seen_line(&words, font(12.5), t.text)));
+                                            if r.clicked() {
+                                                pick = i;
+                                                take = true;
+                                            }
+                                            if row.recent
+                                                && ui.small_button("×").on_hover_text("Take it off the AutoComplete list (or press Delete)").clicked()
+                                            {
+                                                forget = Some(row.address.clone());
+                                            }
+                                        });
                                     }
                                 });
                             },
                         );
                     });
-                    if take && let Some(row) = s.rows.get(pick) {
+                    if forget.is_some() {
+                        typed = Some((*key, value.clone()));
+                    } else if take && let Some(row) = s.rows.get(pick) {
                         let now = crate::address_book::completed(value, &row.as_);
                         acts.push(("compose.setField", json!({ "field": key, "value": now })));
                         took = true;
@@ -1026,6 +1042,12 @@ impl MailUi {
                 continue;
             }
             self.act(id, params);
+        }
+        if let Some(address) = forget {
+            if let Err(e) = self.execute("people.forgetName", &json!({ "address": address })) {
+                self.session.status = e;
+            }
+            self.suggest = None;
         }
         if took {
             self.suggest = None;

@@ -82,6 +82,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "reminders": s.reminders.options_json(),
         "signatures": s.signatures.to_json(),
         "rules": crate::rules::to_json(&s.rules),
+        "autoComplete": s.autocomplete.to_json(),
         "timeZone": s.zone_chosen,
         "secondTimeZone": s.second_zone.as_ref().map(|z| z.name().to_string()),
         "dataFiles": files,
@@ -342,6 +343,16 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         }
         if v.is_array() {
             s.rules = rules;
+        }
+    }
+    if let Some(v) = all.get("autoComplete") {
+        let (list, left_out) = crate::autocomplete::AutoComplete::of_json(v);
+        took(v.is_array());
+        for _ in 0..left_out.min(1024) {
+            took(false);
+        }
+        if v.is_array() {
+            s.autocomplete = list;
         }
     }
     if let Some(v) = all.get("accounts") {

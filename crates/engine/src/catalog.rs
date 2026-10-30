@@ -110,6 +110,7 @@ pub const FEATURES: &[Feature] = &[
     f("File", "Print", "", "Printer", "file.printers"),
     f("File", "Options", "", "Options", ""),
     f("File", "Options", "Mail", "Signatures", "signatures.list"),
+    f("File", "Options", "Mail", "Empty Auto-Complete List", "people.emptyAutoComplete"),
     f("File", "Info", "", "Close Data File", "file.closeStore"),
     // Message window
     f("Message", "Message", "", "Send", "compose.send"),

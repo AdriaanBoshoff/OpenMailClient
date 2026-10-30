@@ -7,7 +7,7 @@
 //! members, so the writer sees who the message goes to.
 
 use super::people::card_of;
-use super::{CommandSpec, always, p_bool, p_str, p_u64};
+use super::{CommandSpec, always, need_str, ok, p_bool, p_str, p_u64};
 use crate::{CmdResult, EngineError, Session};
 use openmailclient_formats::vcf::Card;
 use openmailclient_model::{FolderKind, ItemId};
@@ -40,9 +40,49 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{"text": an address line as typed; what follows its last comma or semicolon is looked for, "limit" (default 10, at most 50)}; returns {"for": what was looked for, "untrusted_content": {"suggestions": [{"name", "address", "kind", "as": what goes in the line}]}}, those whose name begins with it first"#,
+            params: r#"{"text": an address line as typed; what follows its last comma or semicolon is looked for, "limit" (default 10, at most 50)}; returns {"for": what was looked for, "untrusted_content": {"suggestions": [{"name", "address", "kind": "recent" (on the AutoComplete list) | "contact" | "group", "as": what goes in the line}]}}, those written to before first, then those whose name begins with it"#,
             enabled: always,
             run: suggest,
+        },
+        CommandSpec {
+            id: "people.autoComplete",
+            label: "Auto-Complete List",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"query": words each of which begins a word of the name or the address (default: all), "limit" (default 500, at most 5000)}; returns {"total", "untrusted_content": {"names": [{"name", "address", "uses", "last": seconds since 1970, 0 when not known}]}}, the most used first; each message sent adds those it went to"#,
+            enabled: always,
+            run: auto_complete,
+        },
+        CommandSpec {
+            id: "people.forgetName",
+            label: "Remove From Auto-Complete List",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"address"}; it is no longer suggested, until a message is sent to it again"#,
+            enabled: |s| !s.autocomplete.list.is_empty(),
+            run: forget_name,
+        },
+        CommandSpec {
+            id: "people.emptyAutoComplete",
+            label: "Empty Auto-Complete List",
+            tab: "File",
+            group: "Options",
+            shortcut: "",
+            params: r#"{}; every name written to before is taken off it; returns {"removed"}"#,
+            enabled: |s| !s.autocomplete.list.is_empty(),
+            run: empty_auto_complete,
+        },
+        CommandSpec {
+            id: "people.bringAutoComplete",
+            label: "Import Auto-Complete List",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"store": an open data file (default: every one open)}; the AutoComplete list Outlook kept in a data file's Inbox ([MS-OXOCFG] 2.2.4) is added to ours, the data file left as it is (Import from Outlook does this for each file it brings); returns {"found", "added"}"#,
+            enabled: |s| !s.stores.is_empty(),
+            run: bring_auto_complete,
         },
         CommandSpec {
             id: "compose.checkNames",
@@ -285,13 +325,93 @@ fn suggest(s: &mut Session, p: &Value) -> CmdResult {
     if piece.is_empty() || piece.contains('<') {
         return Ok(json!({ "for": piece, "untrusted_content": { "suggestions": [] } }));
     }
+    let most = limit(p, 10, 50);
+    // Those written to before come first, as on Outlook's AutoComplete list.
+    let recent = recent_entries(s);
+    let mut shown: Vec<Value> = Vec::new();
+    let mut had: Vec<String> = Vec::new();
+    for (_, e) in found(&recent, &piece).into_iter().take(most) {
+        had.push(e.address.to_lowercase());
+        shown.push(json!({ "name": e.name, "address": e.address, "kind": "recent", "as": e.mailbox() }));
+    }
     let entries = s.address_entries(None);
-    let shown: Vec<Value> = found(&entries, &piece)
-        .into_iter()
-        .take(limit(p, 10, 50))
-        .map(|(_, e)| json!({ "name": e.name, "address": e.address, "kind": if e.is_group() { "group" } else { "contact" }, "as": e.mailbox() }))
-        .collect();
+    for (_, e) in found(&entries, &piece) {
+        if shown.len() >= most {
+            break;
+        }
+        if !e.is_group() && had.contains(&e.address.to_lowercase()) {
+            continue;
+        }
+        shown.push(json!({ "name": e.name, "address": e.address, "kind": if e.is_group() { "group" } else { "contact" }, "as": e.mailbox() }));
+    }
     Ok(json!({ "for": piece, "untrusted_content": { "suggestions": shown } }))
+}
+
+/// The AutoComplete list as entries, the most used first.
+fn recent_entries(s: &Session) -> Vec<Entry> {
+    s.autocomplete
+        .list
+        .iter()
+        .map(|n| Entry {
+            name: if n.name.is_empty() { n.address.clone() } else { n.name.clone() },
+            address: n.address.clone(),
+            company: String::new(),
+            store: 0,
+            folder: 0,
+            id: 0,
+            members: Vec::new(),
+        })
+        .collect()
+}
+
+fn auto_complete(s: &mut Session, p: &Value) -> CmdResult {
+    let query = p_str(p, "query").unwrap_or("");
+    let query: String = query.chars().take(MAX_TEXT).collect();
+    let recent = recent_entries(s);
+    let names: Vec<Value> = found(&recent, &query)
+        .into_iter()
+        .take(limit(p, 500, 5000))
+        .filter_map(|(_, e)| s.autocomplete.list.iter().find(|n| n.address == e.address))
+        .map(|n| json!({ "name": n.name, "address": n.address, "uses": n.uses, "last": n.last }))
+        .collect();
+    Ok(json!({ "total": s.autocomplete.list.len(), "untrusted_content": { "names": names } }))
+}
+
+fn forget_name(s: &mut Session, p: &Value) -> CmdResult {
+    let address = need_str(p, "address")?;
+    if !s.autocomplete.forget(address) {
+        return Err(EngineError::BadParams("that address is not on the AutoComplete list".into()));
+    }
+    ok()
+}
+
+fn empty_auto_complete(s: &mut Session, _: &Value) -> CmdResult {
+    let removed = s.autocomplete.list.len();
+    s.autocomplete.list.clear();
+    s.status = format!("{removed} name{} taken off the AutoComplete list", if removed == 1 { "" } else { "s" });
+    Ok(json!({ "removed": removed }))
+}
+
+fn bring_auto_complete(s: &mut Session, p: &Value) -> CmdResult {
+    let only = match p_u64(p, "store") {
+        Some(n) => Some(
+            usize::try_from(n)
+                .ok()
+                .filter(|n| *n < s.stores.len())
+                .ok_or_else(|| EngineError::BadParams("there is no such data file open".into()))?,
+        ),
+        None => None,
+    };
+    let mut names = Vec::new();
+    for (i, store) in s.stores.iter_mut().enumerate() {
+        if only.is_none_or(|o| o == i) {
+            names.extend(crate::autocomplete::from_store(store.as_mut()));
+        }
+    }
+    let found = names.len();
+    let added = s.autocomplete.bring(names);
+    s.status = format!("{added} name{} added to the AutoComplete list", if added == 1 { "" } else { "s" });
+    Ok(json!({ "found": found, "added": added }))
 }
 
 /// What became of one piece of an address line.

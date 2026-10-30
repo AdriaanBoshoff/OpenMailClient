@@ -23,6 +23,8 @@ pub(crate) struct Row {
     pub address: String,
     pub company: String,
     pub group: bool,
+    /// On the AutoComplete list, written to before: it can be taken off it.
+    pub recent: bool,
     /// A group's members, as mailboxes.
     pub members: Vec<String>,
     /// What it is put in an address line as.
@@ -40,7 +42,8 @@ impl Row {
             None if group => members.join("; "),
             None => mailbox(&text("name"), &text("address")),
         };
-        Self { name: text("name"), address: text("address"), company: text("company"), group, members, as_ }
+        let recent = v.get("kind").and_then(Value::as_str) == Some("recent");
+        Self { name: text("name"), address: text("address"), company: text("company"), group, recent, members, as_ }
     }
 }
 

@@ -320,6 +320,29 @@ impl MailUi {
             self.act("mail.newMailAlerts", json!({ "alert": a.alert, "sound": a.sound, "flash": a.flash }));
         }
         ui.add_space(8.0);
+        crate::dialog::heading(ui, &t, "Send messages");
+        let names = self.session.autocomplete.list.len();
+        ui.horizontal(|ui| {
+            let words = match names {
+                0 => "No one written to is on the AutoComplete list yet".to_string(),
+                1 => "One name written to before is suggested first as an address is typed".to_string(),
+                n => format!("{n} names written to before are suggested first as an address is typed"),
+            };
+            ui.label(egui::RichText::new(words).font(font(12.5)).color(t.text_dim));
+        });
+        ui.horizontal(|ui| {
+            if ui.add_enabled(names > 0, egui::Button::new("Empty Auto-Complete List")).clicked() {
+                self.act("people.emptyAutoComplete", Value::Null);
+            }
+            if ui
+                .add_enabled(!self.session.stores.is_empty(), egui::Button::new("Import From Data Files"))
+                .on_hover_text("Add the AutoComplete list Outlook kept in each open data file")
+                .clicked()
+            {
+                self.act("people.bringAutoComplete", Value::Null);
+            }
+        });
+        ui.add_space(8.0);
         crate::dialog::heading(ui, &t, "Accounts");
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Servers, addresses and passwords are on").font(font(12.5)).color(t.text_dim));

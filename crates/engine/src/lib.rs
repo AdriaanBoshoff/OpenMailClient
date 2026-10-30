@@ -10,6 +10,7 @@ pub mod accounts;
 pub mod arrange;
 pub mod arrival;
 pub mod attachments;
+pub mod autocomplete;
 pub mod catalog;
 pub mod cmd;
 pub mod io;
@@ -33,6 +34,8 @@ mod tests;
 mod tests_accounts;
 #[cfg(test)]
 mod tests_arrival;
+#[cfg(test)]
+mod tests_autocomplete;
 #[cfg(test)]
 mod tests_caldav;
 #[cfg(test)]
@@ -396,6 +399,8 @@ pub struct Session {
     pub signatures: signatures::Signatures,
     /// Rules, tried in turn on mail as it comes and on Run Rules Now (`rules.*`).
     pub rules: Vec<rules::Rule>,
+    /// The names and addresses written to before, suggested first (`people.autoComplete`).
+    pub autocomplete: autocomplete::AutoComplete,
     /// Outlook Classic's folder of signatures, read to import them; set by the host.
     pub outlook_signatures: Option<std::path::PathBuf>,
     /// How new mail is told of (`mail.newMailAlerts`).
@@ -550,6 +555,7 @@ impl Session {
             outlook: None,
             signatures: signatures::Signatures::default(),
             rules: Vec::new(),
+            autocomplete: autocomplete::AutoComplete::default(),
             outlook_signatures: None,
             places: cmd::imap_sync::Places::default(),
             calendar: cmd::calendar::Shown::default(),
