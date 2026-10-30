@@ -3827,3 +3827,46 @@ fn a_task_let_go_on_the_calendar_is_an_appointment_with_its_notes() {
     drop_at(&mut ui, egui::pos2(30.0, 650.0));
     assert_eq!(mine(&ui).len(), before);
 }
+
+/// The reminder sound is chosen in Options, heard there with Play, and handed to the host as
+/// the owner's file or our own chime; the Reminders window stands apart from a main window that
+/// is minimized or behind another until it is in front again.
+#[test]
+fn the_reminder_sound_is_chosen_and_heard_and_the_window_stands_apart() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::builder()
+        .with_size((1280.0, 800.0))
+        .build_ui_state(|ui, app: &mut MailUi| app.ui(ui), MailUi::new(Session::with_sample()));
+    h.run_steps(3);
+    h.state_mut().execute("ui.options", &json!({ "page": "reminders" })).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state_mut().take_reminder_sound(), None, "nothing until asked");
+    h.get_by_label("Play").click();
+    h.run_steps(3);
+    assert_eq!(h.state_mut().take_reminder_sound(), Some(crate::Sound::Chime));
+    assert_eq!(h.state_mut().take_reminder_sound(), None, "taken once");
+    h.get_by_label("Browse...").click();
+    h.run_steps(3);
+    assert_eq!(h.state().requests, vec![UiRequest::ReminderSound]);
+    let path = std::env::temp_dir().join(format!("omc-ui-reminder-{}.wav", std::process::id()));
+    let sound = openmailclient_formats::wav::Wav { rate: 8_000, channels: 1, samples: vec![0.1; 400] };
+    std::fs::write(&path, openmailclient_formats::wav::write(&sound)).unwrap();
+    let p = path.display().to_string();
+    h.state_mut().execute("reminders.options", &json!({ "soundFile": p })).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Play").click();
+    h.run_steps(3);
+    assert_eq!(h.state_mut().take_reminder_sound(), Some(crate::Sound::File(p.clone())));
+    h.get_by_label("Use our own chime").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.reminders.sound_file, None);
+    let _ = std::fs::remove_file(&path);
+
+    use crate::reminders::stands_apart;
+    assert!(stands_apart(false, true, true, false), "come due while minimized");
+    assert!(stands_apart(false, true, false, false), "come due behind another window");
+    assert!(!stands_apart(false, true, false, true), "the main window in front: in it");
+    assert!(stands_apart(true, false, false, false), "stays apart while its own window is used");
+    assert!(!stands_apart(true, false, false, true), "back in the main window once it is in front");
+    assert!(!stands_apart(false, false, true, false), "opened by hand, never apart");
+}

@@ -306,12 +306,20 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some(v) = all.get("reminders") {
         let part = |key: &str| v.get(key).and_then(Value::as_bool);
-        took(v.is_object() && v.as_object().is_some_and(|o| o.values().all(Value::is_boolean)));
+        took(
+            v.is_object()
+                && v.as_object().is_some_and(|o| o.iter().all(|(k, v)| v.is_boolean() || (k == "soundFile" && (v.is_string() || v.is_null())))),
+        );
         if let Some(on) = part("show") {
             s.reminders.show = on;
         }
         if let Some(on) = part("sound") {
             s.reminders.sound = on;
+        }
+        // Kept as it was chosen: a file gone since is told of when the time comes, by the
+        // chime played in its place.
+        if let Some(file) = v.get("soundFile").filter(|f| f.is_string() || f.is_null()) {
+            s.reminders.sound_file = file.as_str().filter(|f| !f.trim().is_empty() && f.len() <= 4_096).map(str::to_string);
         }
     }
     if let Some(v) = all.get("accounts") {

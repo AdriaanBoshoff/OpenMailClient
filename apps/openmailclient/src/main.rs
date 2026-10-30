@@ -237,6 +237,16 @@ impl App {
                         self.run("ui.openTheme", json!({ "path": path }));
                     }
                 }
+                UiRequest::ReminderSound => {
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Reminder sound")
+                        .add_filter("WAVE sound", &["wav", "wave"])
+                        .add_filter("All files", &["*"])
+                        .pick_file();
+                    if let Some(path) = picked {
+                        self.run("reminders.options", json!({ "soundFile": path }));
+                    }
+                }
                 UiRequest::SaveTheme(name) => {
                     let ext = openmailclient_ui_egui::THEME_FILE_EXT;
                     let stem: String = name.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).take(80).collect();
@@ -363,7 +373,9 @@ impl eframe::App for App {
         if let Some(left) = self.ui.session.reminders_due(ms) {
             ctx.request_repaint_after(std::time::Duration::from_millis(left));
         }
-        if self.ui.take_chimes() > 0 {
+        if let Some(sound) = self.ui.take_reminder_sound() {
+            chime::play_sound(sound);
+        } else if self.ui.take_chimes() > 0 {
             chime::play();
         }
         if self.ui.session.unsaved() {

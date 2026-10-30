@@ -27,6 +27,7 @@ mod pictures;
 mod preview;
 mod progress;
 mod reminders;
+pub use reminders::Sound;
 mod ribbon;
 mod tasks;
 pub mod theme;
@@ -103,6 +104,8 @@ pub enum UiRequest {
     ContactPicture,
     /// Pick a theme file to open (`ui.openTheme`).
     OpenTheme,
+    /// Pick a WAVE file to be played when a reminder is due (`reminders.options` "soundFile").
+    ReminderSound,
     /// Pick where the letters of the open Mail Merge are saved as one PDF (`ui.mergeLetters`).
     SaveMergeLetters,
     /// Pick where the theme of this name is saved as a theme file (`ui.saveTheme`).
@@ -452,6 +455,11 @@ pub struct MailUi {
     reminders_told: u64,
     reminder_pick: Option<openmailclient_engine::reminders::Key>,
     snooze_pick: reminders::Choice,
+    /// Times the host is to play the reminder sound (`take_reminder_sound`).
+    reminder_sounds: u32,
+    /// The Reminders window stands in a window of its own above every other: one came due
+    /// while the main window was minimized or behind another.
+    pub(crate) reminders_apart: bool,
     /// What the Address Book window shows, and the names suggested under an address line.
     pub(crate) book: address_book::Book,
     pub(crate) suggest: Option<address_book::Suggest>,
@@ -710,6 +718,8 @@ impl MailUi {
             reminders_told: 0,
             reminder_pick: None,
             snooze_pick: reminders::Choice::default(),
+            reminder_sounds: 0,
+            reminders_apart: false,
             book: address_book::Book::default(),
             suggest: None,
             merge: None,

@@ -197,9 +197,27 @@ fn the_host_is_asked_back_when_the_next_one_comes() {
 #[test]
 fn the_options_are_kept_with_the_settings_and_bad_ones_refused() {
     let mut s = session();
-    assert_eq!(run(&mut s, "reminders.options", json!({})), json!({"show": true, "sound": true}));
-    assert_eq!(run(&mut s, "reminders.options", json!({"sound": false})), json!({"show": true, "sound": false}));
+    assert_eq!(run(&mut s, "reminders.options", json!({})), json!({"show": true, "sound": true, "soundFile": null}));
+    assert_eq!(run(&mut s, "reminders.options", json!({"sound": false})), json!({"show": true, "sound": false, "soundFile": null}));
     assert!(s.run("reminders.options", &json!({"show": "yes"})).is_err());
+    // A sound of the owner's: made sure of as it is chosen, kept with the settings.
+    let dir = std::env::temp_dir();
+    let wav = dir.join(format!("omc-reminder-{}.wav", std::process::id()));
+    let sound = openmailclient_formats::wav::Wav { rate: 8_000, channels: 1, samples: vec![0.25; 800] };
+    std::fs::write(&wav, openmailclient_formats::wav::write(&sound)).unwrap();
+    let not = dir.join(format!("omc-reminder-{}.txt", std::process::id()));
+    std::fs::write(&not, "not a sound").unwrap();
+    let w = wav.display().to_string();
+    assert_eq!(run(&mut s, "reminders.options", json!({"soundFile": w}))["soundFile"], json!(w));
+    for bad in [
+        json!({"soundFile": not.display().to_string()}),
+        json!({"soundFile": dir.join("nowhere.wav").display().to_string()}),
+        json!({"soundFile": 3}),
+    ] {
+        assert!(s.run("reminders.options", &bad).is_err(), "{bad} is refused");
+    }
+    assert_eq!(s.reminders.sound_file.as_deref(), Some(w.as_str()), "a refused one changes nothing");
+    let _ = std::fs::remove_file(&not);
     let path = std::env::temp_dir().join(format!("omc-reminders-{}.json", std::process::id()));
     let p = path.display().to_string();
     run(&mut s, "settings.save", json!({"path": p}));
@@ -208,6 +226,9 @@ fn the_options_are_kept_with_the_settings_and_bad_ones_refused() {
     let _ = std::fs::remove_file(&path);
     assert!(!again.reminders.sound);
     assert!(again.reminders.show);
+    assert_eq!(again.reminders.sound_file.as_deref(), Some(w.as_str()));
+    let _ = std::fs::remove_file(&wav);
+    assert_eq!(run(&mut again, "reminders.options", json!({"soundFile": ""}))["soundFile"], json!(null), "back to our own chime");
     run(&mut s, "view.reminders", json!({}));
     assert!(s.reminders.window);
     run(&mut s, "view.reminders", json!({"open": false}));

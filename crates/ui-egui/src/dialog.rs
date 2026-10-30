@@ -68,6 +68,25 @@ impl<'a> Dialog<'a> {
     }
 }
 
+impl Dialog<'_> {
+    /// The dialog filling a window of its own, as one standing apart from the main window.
+    pub(crate) fn fill(self, ui: &mut Ui, t: &Tokens, add: impl FnOnce(&mut Ui)) -> Shown {
+        let (title, icon, id, width) = (self.title, self.icon, self.id, self.width);
+        ui.painter().rect_filled(ui.max_rect(), 0.0, t.surface);
+        ui.spacing_mut().item_spacing.y = ui.spacing().item_spacing.y.max(4.0);
+        let top = ui.max_rect().min;
+        let _ = ui.allocate_exact_size(vec2(1.0, HEAD_H), Sense::hover());
+        Frame::new().inner_margin(Margin { left: PAD, right: PAD, top: PAD - 4, bottom: PAD }).show(ui, |ui| {
+            if let Some(w) = width {
+                ui.set_width(w);
+            }
+            add(ui);
+        });
+        let head = Rect::from_min_size(top, vec2(ui.max_rect().width(), HEAD_H));
+        Shown { closed: draw_head(ui, t, head, title, icon, id) }
+    }
+}
+
 /// The head: the mark in a ring, the name, and a close button that lights under the pointer.
 fn draw_head(ui: &mut Ui, t: &Tokens, head: Rect, title: &str, icon: Icon, id: egui::Id) -> bool {
     let p = ui.painter();

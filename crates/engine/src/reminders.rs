@@ -96,6 +96,9 @@ pub struct Reminders {
     pub show: bool,
     /// Whether a sound is played when one comes up.
     pub sound: bool,
+    /// A WAVE file of the owner's played then instead of our own chime (`reminders.options`);
+    /// one that cannot be played when the time comes falls back to the chime.
+    pub sound_file: Option<String>,
     /// Whether the Reminders window is open (`view.reminders` opens it).
     pub window: bool,
     /// Those due now, the earliest first.
@@ -122,6 +125,7 @@ impl Default for Reminders {
         Self {
             show: true,
             sound: true,
+            sound_file: None,
             window: false,
             due: Vec::new(),
             fresh: 0,
@@ -149,7 +153,7 @@ impl Reminders {
     }
 
     pub fn options_json(&self) -> Value {
-        json!({ "show": self.show, "sound": self.sound })
+        json!({ "show": self.show, "sound": self.sound, "soundFile": self.sound_file })
     }
 }
 

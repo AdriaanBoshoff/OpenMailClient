@@ -96,7 +96,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{"show": the Reminders window comes up when one is due, "sound": a sound is played then}, each true or false, those not given as they are. Kept with the settings; returns {"show", "sound"}"#,
+            params: r#"{"show": the Reminders window comes up when one is due, "sound": a sound is played then}, each true or false, and "soundFile": the path of a WAVE file played then instead of our own chime (made sure of as it is chosen: PCM or floating point, at most 32 MB, cut at 30 seconds), or null or "" for the chime; those not given as they are. Kept with the settings; returns {"show", "sound", "soundFile"}"#,
             enabled: always,
             run: options,
         },
@@ -257,7 +257,28 @@ fn options(s: &mut Session, p: &Value) -> CmdResult {
         Some(_) => Err(EngineError::BadParams(format!("\"{key}\" is true or false"))),
     };
     let (show, sound) = (part("show", s.reminders.show)?, part("sound", s.reminders.sound)?);
+    let file = match p.get("soundFile") {
+        None => s.reminders.sound_file.clone(),
+        Some(Value::Null) => None,
+        Some(Value::String(path)) if path.trim().is_empty() => None,
+        Some(Value::String(path)) => Some(playable(path)?),
+        Some(_) => return Err(EngineError::BadParams("\"soundFile\" is the path of a WAVE file, or null".into())),
+    };
     s.reminders.show = show;
     s.reminders.sound = sound;
+    s.reminders.sound_file = file;
     Ok(s.reminders.options_json())
+}
+
+/// `path` if it is a sound that can be played, read as it would be when a reminder comes.
+pub(crate) fn playable(path: &str) -> Result<String, EngineError> {
+    use openmailclient_formats::wav;
+    let bad = |why: String| EngineError::BadParams(format!("{path} cannot be played: {why}"));
+    let size = std::fs::metadata(path).map_err(|e| bad(e.to_string()))?.len();
+    if size > wav::MAX_BYTES as u64 {
+        return Err(bad(format!("it is larger than {} MB", wav::MAX_BYTES >> 20)));
+    }
+    let bytes = std::fs::read(path).map_err(|e| bad(e.to_string()))?;
+    wav::read(&bytes).map_err(bad)?;
+    Ok(path.to_string())
 }

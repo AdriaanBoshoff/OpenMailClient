@@ -312,6 +312,32 @@ impl MailUi {
         if changed {
             self.act("reminders.options", json!({ "show": show, "sound": sound }));
         }
+        // The sound: our own chime, or a WAVE file of the owner's.
+        ui.add_space(6.0);
+        let file = self.session.reminders.sound_file.clone();
+        let name = file
+            .as_deref()
+            .map_or("Our own chime".to_string(), |f| std::path::Path::new(f).file_name().map_or(f.to_string(), |n| n.to_string_lossy().into_owned()));
+        ui.add_enabled_ui(sound, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Sound:").color(t.text_dim));
+                let shown = ui.add(egui::Label::new(egui::RichText::new(&name).color(t.text)).truncate());
+                if let Some(f) = &file {
+                    shown.on_hover_text(f);
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.add(crate::dialog::plain("Browse...")).on_hover_text("Choose a WAVE (.wav) file").clicked() {
+                    self.requests.push(crate::UiRequest::ReminderSound);
+                }
+                if file.is_some() && ui.add(crate::dialog::plain("Use our own chime")).clicked() {
+                    self.act("reminders.options", json!({ "soundFile": null }));
+                }
+                if ui.add(crate::dialog::plain("Play")).on_hover_text("Hear it now").clicked() {
+                    self.try_reminder_sound();
+                }
+            });
+        });
     }
 
     fn saving_page(&mut self, ui: &mut Ui) {

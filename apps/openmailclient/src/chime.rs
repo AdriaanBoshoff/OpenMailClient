@@ -1,7 +1,10 @@
-//! The sound new mail is told of with: two soft bell notes made here in code, our own, so no
-//! sound file is shipped. Played on a thread of its own, one at a time; a system with no sound
-//! device, or none to play it with, stays quiet.
+//! The sound new mail and reminders are told of with: two soft bell notes made here in code,
+//! our own, so no sound file is shipped; or, for a reminder, a WAVE file the owner chose, read
+//! on the playing thread and the chime played instead if it cannot be. Played on a thread of
+//! its own, one at a time; a system with no sound device, or none to play it with, stays quiet.
 
+use openmailclient_formats::wav::{self, Wav};
+use openmailclient_ui_egui::Sound;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const RATE: u32 = 44_100;
@@ -38,14 +41,39 @@ fn samples() -> Vec<f32> {
         .collect()
 }
 
-/// Play the chime unless one is playing already.
+fn chime() -> Wav {
+    Wav { rate: RATE, channels: 1, samples: samples() }
+}
+
+/// The sound a file of the owner's holds, read as `reminders.options` made sure of it.
+fn of_file(path: &str) -> Result<Wav, String> {
+    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if size > wav::MAX_BYTES as u64 {
+        return Err("it is too large".into());
+    }
+    wav::read(&std::fs::read(path).map_err(|e| e.to_string())?)
+}
+
+/// Play the chime unless a sound is playing already.
 pub fn play() {
+    play_sound(Sound::Chime);
+}
+
+/// Play `sound` unless one is playing already.
+pub fn play_sound(sound: Sound) {
     if PLAYING.swap(true, Ordering::AcqRel) {
         return;
     }
-    let begun = std::thread::Builder::new().name("chime".into()).spawn(|| {
-        if let Err(e) = out(samples()) {
-            log::info!("the new-mail sound was not played: {e}");
+    let begun = std::thread::Builder::new().name("chime".into()).spawn(move || {
+        let wav = match &sound {
+            Sound::Chime => chime(),
+            Sound::File(path) => of_file(path).unwrap_or_else(|e| {
+                log::info!("the reminder sound {path} could not be played, the chime is: {e}");
+                chime()
+            }),
+        };
+        if let Err(e) = out(wav) {
+            log::info!("the sound was not played: {e}");
         }
         PLAYING.store(false, Ordering::Release);
     });
@@ -55,20 +83,20 @@ pub fn play() {
 }
 
 #[cfg(any(windows, target_os = "macos"))]
-fn out(samples: Vec<f32>) -> Result<(), String> {
+fn out(wav: Wav) -> Result<(), String> {
     let (_stream, handle) = rodio::OutputStream::try_default().map_err(|e| e.to_string())?;
     let sink = rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?;
-    sink.append(rodio::buffer::SamplesBuffer::new(1, RATE, samples));
+    sink.append(rodio::buffer::SamplesBuffer::new(wav.channels, wav.rate, wav.samples));
     sink.sleep_until_end();
     Ok(())
 }
 
-/// Elsewhere the chime is written as a WAV file of our own and handed to the sound server's
-/// player, or ALSA's.
+/// Elsewhere the sound is written as a WAV file of our own, as 16-bit PCM every player takes,
+/// and handed to the sound server's player, or ALSA's.
 #[cfg(not(any(windows, target_os = "macos")))]
-fn out(samples: Vec<f32>) -> Result<(), String> {
+fn out(sound: Wav) -> Result<(), String> {
     let path = std::env::temp_dir().join(format!("openmailclient-chime-{}.wav", std::process::id()));
-    std::fs::write(&path, wav(&samples)).map_err(|e| e.to_string())?;
+    std::fs::write(&path, wav::write(&sound)).map_err(|e| e.to_string())?;
     let played = ["paplay", "pw-play", "aplay"].iter().any(|player| {
         let mut command = std::process::Command::new(player);
         if *player == "aplay" {
@@ -86,29 +114,6 @@ fn out(samples: Vec<f32>) -> Result<(), String> {
     if played { Ok(()) } else { Err("no sound player was found".into()) }
 }
 
-/// 16-bit mono PCM in a RIFF WAVE file.
-#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
-fn wav(samples: &[f32]) -> Vec<u8> {
-    let data = u32::try_from(samples.len().saturating_mul(2)).unwrap_or(u32::MAX);
-    let mut w = Vec::with_capacity(44 + samples.len() * 2);
-    w.extend_from_slice(b"RIFF");
-    w.extend_from_slice(&data.saturating_add(36).to_le_bytes());
-    w.extend_from_slice(b"WAVEfmt ");
-    w.extend_from_slice(&16u32.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    w.extend_from_slice(&1u16.to_le_bytes()); // mono
-    w.extend_from_slice(&RATE.to_le_bytes());
-    w.extend_from_slice(&(RATE * 2).to_le_bytes());
-    w.extend_from_slice(&2u16.to_le_bytes());
-    w.extend_from_slice(&16u16.to_le_bytes());
-    w.extend_from_slice(b"data");
-    w.extend_from_slice(&data.to_le_bytes());
-    for s in samples {
-        w.extend_from_slice(&((s * f32::from(i16::MAX)) as i16).to_le_bytes());
-    }
-    w
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -118,8 +123,10 @@ mod tests {
         let loudest = s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
         assert!(loudest > 0.1 && loudest < 0.6, "{loudest}");
         assert!(s.last().is_some_and(|v| v.abs() < 1e-3));
-        let w = super::wav(&s);
+        let w = super::wav::write(&super::chime());
         assert_eq!(w.len(), 44 + s.len() * 2);
-        assert_eq!(&w[..4], b"RIFF");
+        assert_eq!(super::wav::read(&w).unwrap().samples.len(), s.len());
+        // A file that cannot be played is told of, for the chime to be played instead.
+        assert!(super::of_file("no-such-sound.wav").is_err());
     }
 }

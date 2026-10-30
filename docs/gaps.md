@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 130 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 131 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 131 · 2026-10-30 — M5.12: Reminders above every other window, and a sound of the owner's.
 - 130 · 2026-10-30 — M5.12: Tasks dragged onto the Calendar, appointment notes, and what a favourite last sent.
 - 129 · 2026-10-30 — M5.12: Mail Merge printed as letters and saved as one document, and contacts chosen by a filter.
 - 128 · 2026-10-28 — M5.12: a contact's picture and details in the contact window.

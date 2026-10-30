@@ -11,6 +11,7 @@ pub mod metafile;
 pub mod rich;
 pub mod rtf;
 pub mod vcf;
+pub mod wav;
 mod wmf;
 mod words;
 
