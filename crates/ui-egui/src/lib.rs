@@ -1562,6 +1562,16 @@ impl MailUi {
             run.push(("edit.undo", Value::Null));
         }
         if !typing && mail_keys {
+            // Shift and an arrow selects on from where the selection began: asked first, as an
+            // arrow alone is heard with Shift too.
+            for (key, id) in [(Key::ArrowDown, "mail.next"), (Key::ArrowUp, "mail.previous")] {
+                if hit(Modifiers::SHIFT, key) {
+                    run.push((id, json!({ "extend": true })));
+                }
+            }
+            if hit(ctrl, Key::A) {
+                run.push(("mail.selectAll", Value::Null));
+            }
             for (key, id) in [
                 (Key::ArrowDown, "mail.next"),
                 (Key::ArrowUp, "mail.previous"),
@@ -1704,6 +1714,11 @@ impl MailUi {
             x += clip_text(&p, pos2(x, y), 160.0, &counts, font(11.5), t.bar_text) + 16.0;
             if unread > 0 {
                 x += clip_text(&p, pos2(x, y), 160.0, &format!("Unread: {unread}"), font(11.5), t.bar_text) + 16.0;
+            }
+            // Going beyond Outlook, which does not say: how many are selected, when more than one.
+            if !s.also.is_empty() {
+                let many = s.also.len().saturating_add(usize::from(s.selected.is_some()));
+                x += clip_text(&p, pos2(x, y), 160.0, &format!("Selected: {many}"), font(11.5), t.bar_text) + 16.0;
             }
         }
         let right = if s.stores.is_empty() {

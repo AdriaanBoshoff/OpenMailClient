@@ -15,9 +15,19 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{"index": row number} or {"id": item id}; optional "folder": path to go to first (alone, it only goes there)"#,
+            params: r#"{"index": row number} or {"id": item id}; optional "folder": path to go to first (alone, it only goes there); "add": true selects it too, or no more if it was (Ctrl and a click); "through": true selects every row from where the selection began to it (Shift and a click); returns {"selected": how many are}"#,
             enabled: has_folder,
             run: select,
+        },
+        CommandSpec {
+            id: "mail.selectAll",
+            label: "Select All",
+            tab: "",
+            group: "",
+            shortcut: "Ctrl+A",
+            params: r#"selects every message of the list; what changes, moves or deletes the selected message then does it to each, as one step of Undo; returns {"selected": how many are}"#,
+            enabled: has_folder,
+            run: select_all,
         },
         CommandSpec {
             id: "edit.undo",
@@ -29,14 +39,23 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             enabled: can_undo,
             run: undo,
         },
-        CommandSpec { id: "mail.next", label: "Next Item", tab: "", group: "", shortcut: "Down", params: "", enabled: has_folder, run: next },
+        CommandSpec {
+            id: "mail.next",
+            label: "Next Item",
+            tab: "",
+            group: "",
+            shortcut: "Down",
+            params: r#"optional "extend": true selects on to it (Shift and Down)"#,
+            enabled: has_folder,
+            run: next,
+        },
         CommandSpec {
             id: "mail.previous",
             label: "Previous Item",
             tab: "",
             group: "",
             shortcut: "Up",
-            params: "",
+            params: r#"optional "extend": true selects on to it (Shift and Up)"#,
             enabled: has_folder,
             run: previous,
         },
@@ -174,6 +193,12 @@ pub(super) fn commands() -> Vec<CommandSpec> {
     ]
 }
 
+/// Select All (Ctrl+A): every message of the list.
+fn select_all(s: &mut Session, _: &Value) -> CmdResult {
+    s.choose_all()?;
+    Ok(json!({ "selected": s.chosen().len() }))
+}
+
 fn select(s: &mut Session, p: &Value) -> CmdResult {
     let went = p_str(p, "folder");
     if let Some(path) = went {
@@ -194,29 +219,37 @@ fn select(s: &mut Session, p: &Value) -> CmdResult {
     if !s.rows.iter().any(|r| r.id == id) {
         return Err(StoreError::NoItem.into());
     }
-    s.select_item(id)?;
-    ok()
+    // Ctrl and a click adds one or takes it away; Shift and a click selects through it.
+    match (p.get("add").and_then(Value::as_bool), p.get("through").and_then(Value::as_bool)) {
+        (_, Some(true)) => s.choose_through(id)?,
+        (Some(true), _) => s.toggle_chosen(id)?,
+        _ => s.select_item(id)?,
+    }
+    Ok(json!({ "selected": s.chosen().len() }))
 }
 
-fn step(s: &mut Session, forward: bool) -> CmdResult {
+fn step(s: &mut Session, p: &Value, forward: bool) -> CmdResult {
     let target = match s.selected_index() {
         None => s.rows.first(),
         Some(i) if forward => s.rows.get(i.saturating_add(1)),
         Some(i) => i.checked_sub(1).and_then(|p| s.rows.get(p)),
     }
     .map(|r| r.id);
-    if let Some(id) = target {
-        s.select_item(id)?;
+    match target {
+        // Shift and an arrow selects on from where the selection began.
+        Some(id) if p.get("extend").and_then(Value::as_bool) == Some(true) => s.choose_through(id)?,
+        Some(id) => s.select_item(id)?,
+        None => {}
     }
     ok()
 }
 
-fn next(s: &mut Session, _: &Value) -> CmdResult {
-    step(s, true)
+fn next(s: &mut Session, p: &Value) -> CmdResult {
+    step(s, p, true)
 }
 
-fn previous(s: &mut Session, _: &Value) -> CmdResult {
-    step(s, false)
+fn previous(s: &mut Session, p: &Value) -> CmdResult {
+    step(s, p, false)
 }
 
 fn mark_read(s: &mut Session, _: &Value) -> CmdResult {
@@ -229,8 +262,10 @@ fn mark_unread(s: &mut Session, _: &Value) -> CmdResult {
     ok()
 }
 
+/// Several selected go the way the one shown goes, as in Outlook, rather than each its own.
 fn toggle_read(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected("Unread/ Read", |it| it.set_read(!it.is_read()))?;
+    let read = !s.open.as_ref().is_some_and(openmailclient_model::Item::is_read);
+    s.edit_selected("Unread/ Read", |it| it.set_read(read))?;
     ok()
 }
 
@@ -240,8 +275,10 @@ fn toggle_read(s: &mut Session, _: &Value) -> CmdResult {
 fn toggle_flag(s: &mut Session, _: &Value) -> CmdResult {
     let (today, now, zone) = (s.today(), clock(s), s.zone.clone());
     let (start, due) = FollowUp::Today.days(today);
+    // Several selected are flagged or cleared as the one shown is.
+    let flagged = s.open.as_ref().is_some_and(|it| it.flag() == Flag::Flagged);
     s.edit_selected("Follow Up", |it| {
-        if it.flag() == Flag::Flagged {
+        if flagged {
             task::clear_flag(it);
         } else {
             task::follow_up(it, start, due, now, &zone);
@@ -270,11 +307,17 @@ fn categorize(s: &mut Session, p: &Value) -> CmdResult {
     if cat.is_empty() || cat.chars().count() > 255 {
         return Err(EngineError::BadParams("a category name is 1 to 255 characters".into()));
     }
-    s.edit_selected("Categorize", |it| match it.categories.iter().position(|c| c.eq_ignore_ascii_case(&cat)) {
-        Some(i) => {
-            it.categories.remove(i);
+    // A category the one shown has is taken from every one selected; else each is given it.
+    let has = s.open.as_ref().is_some_and(|it| it.categories.iter().any(|c| c.eq_ignore_ascii_case(&cat)));
+    s.edit_selected("Categorize", |it| {
+        let at = it.categories.iter().position(|c| c.eq_ignore_ascii_case(&cat));
+        match at {
+            Some(i) if has => {
+                it.categories.remove(i);
+            }
+            None if !has => it.categories.push(cat.clone()),
+            _ => {}
         }
-        None => it.categories.push(cat),
     })?;
     ok()
 }
@@ -305,16 +348,32 @@ fn delete(s: &mut Session, _: &Value) -> CmdResult {
     match deleted {
         Some(target) if !in_deleted => s.move_selected("Delete", target)?,
         _ => {
-            let id = s.selected.ok_or(StoreError::NoItem)?;
-            let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
-            let item = Box::new(st.remove(folder, openmailclient_model::ItemId(id))?);
-            super::imap_sync::forget(s, store, &item);
-            // Gone from the data file, and kept by the session so that it can be taken back.
-            s.did(Step::Removed { what: "Delete", store, folder, was: id, item });
+            s.selected.ok_or(StoreError::NoItem)?;
+            let (mut steps, mut failed) = (Vec::new(), None);
+            for id in s.chosen() {
+                let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
+                match st.remove(folder, openmailclient_model::ItemId(id)) {
+                    Ok(item) => {
+                        let item = Box::new(item);
+                        super::imap_sync::forget(s, store, &item);
+                        // Gone from the data file, and kept by the session so that it can be
+                        // taken back.
+                        steps.push(Step::Removed { what: "Delete", store, folder, was: id, item });
+                    }
+                    Err(e) => {
+                        failed.get_or_insert(e);
+                    }
+                }
+            }
+            s.did_all("Delete", steps);
             s.selected = None;
+            s.also.clear();
             s.open = None;
             s.refresh_folders(store);
             s.reload_rows()?;
+            if let Some(e) = failed {
+                return Err(e.into());
+            }
         }
     }
     ok()

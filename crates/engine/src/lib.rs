@@ -67,6 +67,8 @@ mod tests_remote;
 #[cfg(test)]
 mod tests_rules;
 #[cfg(test)]
+mod tests_select;
+#[cfg(test)]
 mod tests_send;
 #[cfg(test)]
 mod tests_signatures;
@@ -357,7 +359,13 @@ pub struct Session {
     previews: std::collections::HashMap<u64, Read>,
     /// How dates and times are written, as the system's region settings say. Set by the host.
     pub region: openmailclient_model::time::Region,
+    /// The row shown in the reading pane, one of those selected.
     pub selected: Option<u64>,
+    /// Rows selected beside `selected`, by Ctrl or Shift and a click or by Select All: what
+    /// changes, moves or deletes the selected message does it to each of them too.
+    pub also: std::collections::BTreeSet<u64>,
+    /// The row a Shift and a click selects from.
+    pub anchor: Option<u64>,
     pub open: Option<Item>,
     pub sort: SortKey,
     pub sort_desc: bool,
@@ -513,6 +521,8 @@ impl Session {
             current: None,
             rows: Vec::new(),
             selected: None,
+            also: Default::default(),
+            anchor: None,
             open: None,
             sort: SortKey::Date,
             sort_desc: true,
@@ -712,6 +722,8 @@ impl Session {
         }
         self.current = Some((store, folder));
         self.selected = None;
+        self.also.clear();
+        self.anchor = None;
         self.open = None;
         self.search.clear();
         self.previews.clear();
@@ -786,6 +798,82 @@ impl Session {
             self.selected = None;
             self.open = None;
         }
+        if self.selected.is_none() {
+            self.also.clear();
+        } else if !self.also.is_empty() {
+            // Those chosen with it that the list no longer shows are chosen no more.
+            let listed: std::collections::BTreeSet<u64> = self.rows.iter().map(|r| r.id).collect();
+            self.also.retain(|id| listed.contains(id));
+        }
+        Ok(())
+    }
+
+    /// The rows selected, in the list's order: the one shown and those chosen with it.
+    pub fn chosen(&self) -> Vec<u64> {
+        self.rows.iter().map(|r| r.id).filter(|id| self.selected == Some(*id) || self.also.contains(id)).collect()
+    }
+
+    /// The row to go on to once the rows `ids` have gone from the list: the first after the
+    /// last of them that is not one of them, or else the nearest before the first.
+    fn after_chosen(&self, ids: &[u64]) -> Option<u64> {
+        let gone: std::collections::BTreeSet<u64> = ids.iter().copied().collect();
+        let last = self.rows.iter().rposition(|r| gone.contains(&r.id))?;
+        let first = self.rows.iter().position(|r| gone.contains(&r.id))?;
+        let after = self.rows.get(last.saturating_add(1)..).unwrap_or_default().iter().find(|r| !gone.contains(&r.id));
+        let before = || self.rows.get(..first).unwrap_or_default().iter().rev().find(|r| !gone.contains(&r.id));
+        after.or_else(before).map(|r| r.id)
+    }
+
+    /// Ctrl and a click: `id` is selected too and shown or, selected already, is selected no
+    /// more and the next of those still selected is shown.
+    pub fn toggle_chosen(&mut self, id: u64) -> Result<(), EngineError> {
+        if !self.rows.iter().any(|r| r.id == id) {
+            return Err(StoreError::NoItem.into());
+        }
+        self.anchor = Some(id);
+        if self.also.remove(&id) {
+            return Ok(());
+        }
+        if self.selected == Some(id) {
+            match self.chosen().into_iter().find(|c| *c != id) {
+                Some(next) => {
+                    self.also.remove(&next);
+                    self.show_item(next)?;
+                }
+                None => {
+                    self.selected = None;
+                    self.open = None;
+                }
+            }
+            return Ok(());
+        }
+        let was = self.selected;
+        self.show_item(id)?;
+        self.also.extend(was);
+        Ok(())
+    }
+
+    /// Shift and a click: every row from the anchor to `id` is selected, and `id` is shown.
+    pub fn choose_through(&mut self, id: u64) -> Result<(), EngineError> {
+        let to = self.rows.iter().position(|r| r.id == id).ok_or(StoreError::NoItem)?;
+        let anchor = self.anchor.or(self.selected).filter(|a| self.rows.iter().any(|r| r.id == *a)).unwrap_or(id);
+        let from = self.rows.iter().position(|r| r.id == anchor).unwrap_or(to);
+        self.show_item(id)?;
+        let (low, high) = (from.min(to), from.max(to));
+        self.also = self.rows.get(low..=high).unwrap_or_default().iter().map(|r| r.id).filter(|c| *c != id).collect();
+        self.anchor = Some(anchor);
+        Ok(())
+    }
+
+    /// Select All: every row is selected; the one shown stays shown, or the first is.
+    pub fn choose_all(&mut self) -> Result<(), EngineError> {
+        let Some(first) = self.rows.first().map(|r| r.id) else { return Ok(()) };
+        if self.selected.is_none() {
+            self.show_item(first)?;
+            self.anchor = Some(first);
+        }
+        let shown = self.selected;
+        self.also = self.rows.iter().map(|r| r.id).filter(|id| Some(*id) != shown).collect();
         Ok(())
     }
 
@@ -799,9 +887,17 @@ impl Session {
         self.rows.iter().position(|r| r.id == sel)
     }
 
-    /// Select and load a row. Unread mail is marked read when the store allows it, as the
-    /// reading pane does in Outlook.
+    /// Select and load a row, alone. Unread mail is marked read when the store allows it, as
+    /// the reading pane does in Outlook.
     pub fn select_item(&mut self, id: u64) -> Result<(), EngineError> {
+        self.show_item(id)?;
+        self.also.clear();
+        self.anchor = Some(id);
+        Ok(())
+    }
+
+    /// Load a row into the reading pane, leaving what else is selected as it is.
+    fn show_item(&mut self, id: u64) -> Result<(), EngineError> {
         let (s, f) = self.current.ok_or(StoreError::NoFolder)?;
         let store = self.stores.get_mut(s).ok_or(StoreError::NoFolder)?;
         let mut item = store.load(f, ItemId(id))?;
@@ -820,56 +916,90 @@ impl Session {
         Ok(())
     }
 
-    /// Change the selected item in its store and refresh the views.
-    /// `what` is the command's label, for taking it back.
-    pub fn edit_selected(&mut self, what: &'static str, edit: impl FnOnce(&mut Item)) -> Result<(), EngineError> {
+    /// Change the selected items in their store and refresh the views: each one selected, as
+    /// one step of Undo. `what` is the command's label, for taking it back. One that cannot be
+    /// changed leaves the others changed, and its error is returned.
+    pub fn edit_selected(&mut self, what: &'static str, mut edit: impl FnMut(&mut Item)) -> Result<(), EngineError> {
         let (s, f) = self.current.ok_or(StoreError::NoFolder)?;
-        let id = self.selected.ok_or(StoreError::NoItem)?;
+        let shown = self.selected.ok_or(StoreError::NoItem)?;
+        let ids = self.chosen();
         let store = self.stores.get_mut(s).ok_or(StoreError::NoFolder)?;
-        let mut item = store.load(f, ItemId(id))?;
-        let before = Box::new(item.clone());
-        edit(&mut item);
-        store.update(f, ItemId(id), item.clone())?;
-        self.open = Some(item);
-        self.did(undo::Step::Edited { what, store: s, folder: f, id, before });
+        let (mut steps, mut failed) = (Vec::new(), None);
+        for id in ids {
+            let changed = store.load(f, ItemId(id)).and_then(|mut item| {
+                let before = Box::new(item.clone());
+                edit(&mut item);
+                store.update(f, ItemId(id), item.clone()).map(|()| (item, before))
+            });
+            match changed {
+                Ok((item, before)) => {
+                    if id == shown {
+                        self.open = Some(item);
+                    }
+                    steps.push(undo::Step::Edited { what, store: s, folder: f, id, before });
+                }
+                Err(e) => {
+                    failed.get_or_insert(e);
+                }
+            }
+        }
+        self.did_all(what, steps);
         self.refresh_folders(s);
-        self.reload_rows()
+        self.reload_rows()?;
+        failed.map_or(Ok(()), |e| Err(e.into()))
     }
 
-    /// Move the selected item to another folder of the same store; selection moves to the next row.
-    /// `what` is the command's label, for taking it back.
+    /// Move the selected items to another folder of the same store, as one step of Undo;
+    /// selection moves to the row after them. `what` is the command's label, for taking it
+    /// back. One that cannot be moved stays where it was, and its error is returned.
     pub fn move_selected(&mut self, what: &'static str, to: FolderId) -> Result<(), EngineError> {
         let (s, f) = self.current.ok_or(StoreError::NoFolder)?;
-        let id = self.selected.ok_or(StoreError::NoItem)?;
+        self.selected.ok_or(StoreError::NoItem)?;
         if to == f {
             return Ok(());
         }
         if self.folder_info(s, to).is_none() {
             return Err(StoreError::NoFolder.into());
         }
-        let next = self.selected_index().and_then(|i| self.rows.get(i + 1).or_else(|| i.checked_sub(1).and_then(|p| self.rows.get(p)))).map(|r| r.id);
+        let ids = self.chosen();
+        let next = self.after_chosen(&ids);
         let store = self.stores.get_mut(s).ok_or(StoreError::NoFolder)?;
-        let item = store.remove(f, ItemId(id))?;
-        let moved = match store.add(to, item.clone()) {
-            Ok(moved) => moved.0,
-            Err(e) => {
-                // A message that could not be put where it was going goes back where it was.
-                store.add(f, item)?;
-                self.refresh_folders(s);
-                self.reload_rows()?;
-                return Err(e.into());
+        let (mut steps, mut failed) = (Vec::new(), None);
+        for id in ids {
+            let item = match store.remove(f, ItemId(id)) {
+                Ok(item) => item,
+                Err(e) => {
+                    failed.get_or_insert(e);
+                    continue;
+                }
+            };
+            match store.add(to, item.clone()) {
+                Ok(moved) => steps.push(undo::Step::Moved { what, store: s, from: f, was: id, to, id: moved.0 }),
+                Err(e) => {
+                    // A message that could not be put where it was going goes back where it was.
+                    if let Err(back) = store.add(f, item) {
+                        failed = Some(back);
+                        break;
+                    }
+                    failed.get_or_insert(e);
+                }
             }
-        };
-        self.did(undo::Step::Moved { what, store: s, from: f, was: id, to, id: moved });
+        }
+        self.did_all(what, steps);
         self.selected = None;
+        self.also.clear();
         self.open = None;
         self.refresh_folders(s);
         self.reload_rows()?;
+        if let Some(e) = failed {
+            return Err(e.into());
+        }
         if let Some(n) = next {
             // Keep the unread state of the neighbour: moving on must not mark it read.
             let store = self.stores.get_mut(s).ok_or(StoreError::NoFolder)?;
             if let Ok(item) = store.load(f, ItemId(n)) {
                 self.selected = Some(n);
+                self.anchor = Some(n);
                 self.open = Some(item);
             }
         }

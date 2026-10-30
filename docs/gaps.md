@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 140 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 141 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 141 · 2026-10-30 — M5.19: several messages selected at once, by Ctrl, Shift and Select All, changed, moved and deleted together as one step of Undo.
 - 140 · 2026-10-30 — M5.18: Assign Task, task requests, accepted and declined, updates and completion reports by mail, Send Status Report, TNEF winmail.dat read and written.
 - 139 · 2026-10-30 — M5.17: a task's recurrence made and changed in its window, the next occurrence on completing, Skip Occurrence.
 - 138 · 2026-10-30 — M5.16: rules on mail as it is sent: deferred, copied, put in categories, flagged.

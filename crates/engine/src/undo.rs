@@ -24,6 +24,9 @@ pub enum Step {
     /// Rules were run on messages of a store at once (Run Rules Now): each as it was, where it
     /// is now and the copies made of it.
     Ruled { what: &'static str, store: usize, done: Vec<Ruled> },
+    /// One command done to several messages selected at once, taken back together. None of
+    /// `steps` is itself `Many`.
+    Many { what: &'static str, steps: Vec<Step> },
 }
 
 /// What a rule did to one message, with what is needed to take it back.
@@ -37,6 +40,39 @@ pub struct Ruled {
     pub copies: Vec<(FolderId, u64)>,
 }
 
+/// `step` follows the message that was `was` in `folder` and is `now`.
+fn renumber_step(step: &mut Step, in_store: usize, in_folder: FolderId, was: u64, now: u64) {
+    match step {
+        Step::Edited { store, folder, id, .. } | Step::Moved { store, to: folder, id, .. }
+            if *store == in_store && *folder == in_folder && *id == was =>
+        {
+            *id = now;
+        }
+        // What was made or brought up to date is known by its id too, so a delete taken back
+        // before it does not leave it behind.
+        Step::Ruled { store, done, .. } if *store == in_store => {
+            for r in done.iter_mut().filter(|r| r.at == in_folder && r.id == was) {
+                r.id = now;
+            }
+        }
+        Step::Imported { store, folder, added, updated, .. } if *store == in_store && *folder == in_folder => {
+            for id in added.iter_mut().filter(|id| **id == was) {
+                *id = now;
+            }
+            for (id, _) in updated.iter_mut().filter(|(id, _)| *id == was) {
+                *id = now;
+            }
+        }
+        // Not nested: what a `Many` holds is never itself one.
+        Step::Many { steps, .. } => {
+            for inner in steps.iter_mut().filter(|s| !matches!(s, Step::Many { .. })) {
+                renumber_step(inner, in_store, in_folder, was, now);
+            }
+        }
+        _ => {}
+    }
+}
+
 impl Step {
     /// The command that did it, as its label reads.
     pub fn what(&self) -> &'static str {
@@ -45,7 +81,8 @@ impl Step {
             | Self::Moved { what, .. }
             | Self::Removed { what, .. }
             | Self::Imported { what, .. }
-            | Self::Ruled { what, .. } => what,
+            | Self::Ruled { what, .. }
+            | Self::Many { what, .. } => what,
             Self::Discarded => "Discard",
         }
     }
@@ -60,32 +97,20 @@ impl Session {
         self.undo.push(step);
     }
 
+    /// Keep what one command did to each of several messages as one step: none is kept for
+    /// none, and one alone as itself.
+    pub fn did_all(&mut self, what: &'static str, mut steps: Vec<Step>) {
+        match steps.len() {
+            0 => {}
+            1 => self.did(steps.remove(0)),
+            _ => self.did(Step::Many { what, steps }),
+        }
+    }
+
     /// The message that was `was` in `folder` is `now`: older steps follow it.
     fn renumber(&mut self, in_store: usize, in_folder: FolderId, was: u64, now: u64) {
         for step in &mut self.undo {
-            match step {
-                Step::Edited { store, folder, id, .. } | Step::Moved { store, to: folder, id, .. }
-                    if *store == in_store && *folder == in_folder && *id == was =>
-                {
-                    *id = now;
-                }
-                // What was made or brought up to date is known by its id too, so a delete
-                // taken back before it does not leave it behind.
-                Step::Ruled { store, done, .. } if *store == in_store => {
-                    for r in done.iter_mut().filter(|r| r.at == in_folder && r.id == was) {
-                        r.id = now;
-                    }
-                }
-                Step::Imported { store, folder, added, updated, .. } if *store == in_store && *folder == in_folder => {
-                    for id in added.iter_mut().filter(|id| **id == was) {
-                        *id = now;
-                    }
-                    for (id, _) in updated.iter_mut().filter(|(id, _)| *id == was) {
-                        *id = now;
-                    }
-                }
-                _ => {}
-            }
+            renumber_step(step, in_store, in_folder, was, now);
         }
     }
 
@@ -96,6 +121,25 @@ impl Session {
         let what = step.what();
         let gone = |e: StoreError| EngineError::Format(format!("{what} can no longer be undone: {e}"));
         let (at_store, at_folder, at_id) = match step {
+            Step::Many { steps, .. } => {
+                // Each is taken back in turn, the last done first, and those taken back are
+                // selected together again, the first of them shown.
+                let (mut back, mut left) = (Vec::new(), 0usize);
+                for step in steps.into_iter().rev() {
+                    self.undo.push(step);
+                    match self.undo_last() {
+                        Ok(_) => back.extend(self.selected),
+                        Err(_) => left = left.saturating_add(1),
+                    }
+                }
+                let listed: std::collections::BTreeSet<u64> = self.rows.iter().map(|r| r.id).collect();
+                let shown = self.selected;
+                self.also = back.into_iter().filter(|id| Some(*id) != shown && listed.contains(id)).collect();
+                if left > 0 {
+                    return Err(EngineError::Format(format!("{what} was undone but for {left} message(s) changed or gone since")));
+                }
+                return Ok(what);
+            }
             Step::Discarded => {
                 let draft = self.set_aside.pop().ok_or(StoreError::NoItem).map_err(gone)?;
                 self.compose = Some(draft);
@@ -222,6 +266,8 @@ impl Session {
         let st = self.stores.get_mut(at_store).ok_or(StoreError::NoFolder)?;
         let item = st.load(at_folder, ItemId(at_id))?;
         self.selected = Some(at_id);
+        self.also.clear();
+        self.anchor = Some(at_id);
         self.open = Some(item);
         Ok(what)
     }

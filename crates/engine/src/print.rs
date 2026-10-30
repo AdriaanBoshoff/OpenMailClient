@@ -6,7 +6,7 @@ use openmailclient_formats::links::{self, Concern};
 use openmailclient_formats::rich::{Block, Doc, Para, Picture, Run, Script, Style as Look};
 use openmailclient_layout::{Column, Fonts, LayoutError, Line, Listed, MM, Memo, Paper, Printed, Row, Setup};
 use openmailclient_model::zone::Zone;
-use openmailclient_model::{Flag, FolderKind, Item, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, time};
+use openmailclient_model::{Flag, FolderKind, Item, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, Summary, time};
 use openmailclient_pdf::{Piece, Said, Stroke, Writer};
 use serde_json::{Value, json};
 
@@ -716,12 +716,13 @@ pub fn list_layout(s: &crate::Session, job: &Job, library: &Library) -> Result<L
     let listing = job.listing;
     let fields: &[Field] = if listing.columns.is_empty() { &[Field::Subject] } else { &listing.columns };
     let columns: Vec<Column> = fields.iter().map(|f| Column { name: f.label(outgoing), share: f.share(), right: matches!(f, Field::Size) }).collect();
-    // The rows that are printed: the list, or the one message that is selected in it.
-    let (first, chosen) = match listing.rows {
-        Rows::All => (0, s.rows.as_slice()),
+    // The rows that are printed: the list, or the messages selected in it.
+    let (first, chosen): (usize, Vec<&Summary>) = match listing.rows {
+        Rows::All => (0, s.rows.iter().collect()),
         Rows::Selected => {
             let at = s.selected_index().ok_or_else(|| EngineError::BadParams("no message is selected to print".into()))?;
-            (at, s.rows.get(at..at.saturating_add(1)).unwrap_or_default())
+            let picked: std::collections::BTreeSet<u64> = s.chosen().into_iter().collect();
+            (at, s.rows.iter().filter(|r| picked.contains(&r.id)).collect())
         }
     };
     // A heading stands over each group of the list as it is arranged; one row has none.
@@ -745,7 +746,10 @@ pub fn list_layout(s: &crate::Session, job: &Job, library: &Library) -> Result<L
     let unread = s.rows.iter().filter(|row| !row.read).count();
     let mut note = format!("{} item{}, {unread} unread", s.rows.len(), if s.rows.len() == 1 { "" } else { "s" });
     if listing.rows == Rows::Selected {
-        note = format!("The selected message, {} of {}", first.saturating_add(1), s.rows.len());
+        note = match chosen.len() {
+            1 => format!("The selected message, {} of {}", first.saturating_add(1), s.rows.len()),
+            n => format!("{n} selected messages of {}", s.rows.len()),
+        };
     }
     if s.unread_only {
         note.push_str("; unread only");

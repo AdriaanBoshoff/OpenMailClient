@@ -391,6 +391,7 @@ impl MailUi {
         }
         let total = y;
         let selected = s.selected;
+        let also = &s.also;
         let scroll_to = std::mem::take(&mut self.scroll_to_selected);
         // In a folder of mail going out, a row says whom it went to, as Outlook's do.
         let outgoing = s.current_folder().is_some_and(|f| matches!(f.kind, FolderKind::Sent | FolderKind::Drafts | FolderKind::Outbox));
@@ -437,8 +438,9 @@ impl MailUi {
                         Entry::Row(i) => {
                             let Some(row) = rows.get(*i) else { continue };
                             let r = Rect::from_min_size(pos2(area.left(), area.top() + y), vec2(area.width(), ROW_H));
-                            let is_selected = selected == Some(row.id);
-                            if is_selected && scroll_to {
+                            let focused = selected == Some(row.id);
+                            let is_selected = focused || also.contains(&row.id);
+                            if focused && scroll_to {
                                 ui.scroll_to_rect(r, None);
                             }
                             if *y > viewport.bottom() {
@@ -472,7 +474,19 @@ impl MailUi {
             ui.ctx().request_repaint();
         }
         if let Some(id) = clicked {
-            self.act("mail.select", json!({ "id": id }));
+            // Ctrl and a click adds a row to those selected or takes it away; Shift and a
+            // click selects every row from where the selection began.
+            let mods = ui.input(|i| i.modifiers);
+            let how = if opened {
+                json!({ "id": id })
+            } else if mods.shift {
+                json!({ "id": id, "through": true })
+            } else if mods.command {
+                json!({ "id": id, "add": true })
+            } else {
+                json!({ "id": id })
+            };
+            self.act("mail.select", how);
             if opened {
                 self.act("ui.openSelected", Value::Null);
             }
