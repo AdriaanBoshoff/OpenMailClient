@@ -2,7 +2,7 @@
 //! compose form.
 
 use crate::icons::{self, Icon};
-use crate::{MailUi, body, bold, clip_text, font, one_line, text_width, theme};
+use crate::{MailUi, body, bold, cell_text, clip_text, font, one_line, text_width, theme};
 use egui::{Align2, Rect, ScrollArea, Sense, Ui, UiBuilder, pos2, vec2};
 use openmailclient_engine::print::Field;
 use openmailclient_engine::{Module, ReadingPane, SortKey};
@@ -278,7 +278,7 @@ impl MailUi {
                     let mut right = r.right() - 10.0;
                     match &line.folder {
                         None => {
-                            clip_text(p, pos2(x + 16.0, r.center().y - 8.5), right - x - 16.0, &line.title, bold(12.5), t.text);
+                            cell_text(p, pos2(x + 16.0, r.center().y - 8.5), right - x - 16.0, &line.title, bold(12.5), t.text);
                             if resp.clicked() {
                                 acts.push(("ui.toggleFolder", json!({ "store": line.store, "folderId": u64::MAX })));
                             }
@@ -301,7 +301,7 @@ impl MailUi {
                                 if selected { t.accent } else { t.text_dim },
                             );
                             let name_font = if f.unread > 0 { bold(12.5) } else { font(12.5) };
-                            clip_text(p, pos2(x + 36.0, r.center().y - 8.5), right - x - 36.0, &line.title, name_font, t.text);
+                            cell_text(p, pos2(x + 36.0, r.center().y - 8.5), right - x - 36.0, &line.title, name_font, t.text);
                             if toggle {
                                 acts.push(("ui.toggleFolder", json!({ "store": line.store, "folderId": f.id.0 })));
                             } else if resp.clicked() {
@@ -445,7 +445,7 @@ impl MailUi {
                                 unread => format!("{unread} unread of {}", group.count),
                             };
                             let counted = p.text(pos2(r.right() - 12.0, r.center().y), Align2::RIGHT_CENTER, count, font(11.0), t.text_faint);
-                            clip_text(
+                            cell_text(
                                 &p,
                                 pos2(r.left() + 24.0, r.center().y - 8.0),
                                 (counted.left() - r.left() - 32.0).max(0.0),
@@ -618,7 +618,7 @@ impl MailUi {
         let left = rect.left() + pad;
         let width = rect.width() - pad * 2.0;
         let mut y = rect.top() + 14.0;
-        clip_text(&p, pos2(left, y), width, &item.subject(), font(18.0), t.text);
+        cell_text(&p, pos2(left, y), width, &item.subject(), font(18.0), t.text);
         y += 34.0;
 
         // Reply / Reply All / Forward on the right of the sender line.
@@ -646,7 +646,7 @@ impl MailUi {
         let text_x = left + 46.0;
         let text_w = bx - text_x - 10.0;
         let from = if email.is_empty() || email == sender { sender.clone() } else { format!("{sender} <{email}>") };
-        clip_text(&p, pos2(text_x, y - 1.0), text_w, &from, bold(13.0), t.text);
+        cell_text(&p, pos2(text_x, y - 1.0), text_w, &from, bold(13.0), t.text);
         let to = item.display_recipients(RECIP_TO);
         clip_text(&p, pos2(text_x, y + 18.0), text_w, &format!("To  {to}"), font(12.0), t.text_dim);
         y += 38.0;
@@ -1349,9 +1349,9 @@ fn draw_line(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme
                     _ => t.text,
                 };
                 let room = (w - 12.0).max(0.0);
-                let wrote = clip_text(p, pos2(x + 6.0, r.top() + 5.0), room, &text, if unread { bold(12.5) } else { font(12.5) }, colour);
+                let (from, wrote) = cell_text(p, pos2(x + 6.0, r.top() + 5.0), room, &text, if unread { bold(12.5) } else { font(12.5) }, colour);
                 if expired && wrote > 0.0 {
-                    p.hline(x + 6.0..=x + 6.0 + wrote, r.center().y, (1.0, t.text_dim));
+                    p.hline(from..=from + wrote, r.center().y, (1.0, t.text_dim));
                 }
             }
         }
@@ -1394,13 +1394,13 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme:
         right -= 5.0;
     }
     let who = if (outgoing && !row.to.trim().is_empty()) || row.from.is_empty() { &row.to } else { &row.from };
-    let who_w = clip_text(p, pos2(left, r.top() + 6.0), right - left, who, if row.read { font(13.5) } else { bold(13.5) }, t.text);
-    let strike = |y: f32, w: f32| {
+    let who_at = cell_text(p, pos2(left, r.top() + 6.0), right - left, who, if row.read { font(13.5) } else { bold(13.5) }, t.text);
+    let strike = |y: f32, (from, w): (f32, f32)| {
         if expired && w > 0.0 {
-            p.hline(left..=left + w, r.top() + y, (1.0, t.text_dim));
+            p.hline(from..=from + w, r.top() + y, (1.0, t.text_dim));
         }
     };
-    strike(15.0, who_w);
+    strike(15.0, who_at);
 
     // Line 2: subject and when.
     let shown_time = if held { row.deliver_after } else { row.time };
@@ -1425,7 +1425,7 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme:
     let when_w = crate::text_width(p, &when, font(11.5));
     p.text(pos2(r.right() - 10.0, r.top() + 34.0), Align2::RIGHT_CENTER, &when, font(11.5), if row.read { t.text_faint } else { t.accent });
     let subject = if row.subject.trim().is_empty() { "(no subject)" } else { &row.subject };
-    let subject_w = clip_text(
+    let subject_at = cell_text(
         p,
         pos2(left, r.top() + 25.0),
         r.right() - 22.0 - when_w - left,
@@ -1433,7 +1433,7 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme:
         if row.read { font(12.5) } else { bold(12.5) },
         if row.read { t.text } else { t.accent },
     );
-    strike(34.0, subject_w);
+    strike(34.0, subject_at);
 
     // Line 3: preview, with category squares on the right.
     let mut cat_x = r.right() - 10.0;
@@ -1443,9 +1443,16 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme:
         cat_x -= 3.0;
     }
     // A body that the preview holds whole ends with an end mark, as Outlook's list shows.
-    let preview_w = clip_text(p, pos2(left, r.top() + 43.0), cat_x - left - 4.0, &row.preview, font(12.0), t.text_faint);
-    let end_room = cat_x - 4.0 - (left + preview_w + 4.0);
-    if row.preview_whole && !row.preview.is_empty() && end_room >= text_width(p, "<end>", font(12.0)) {
-        p.text(pos2(left + preview_w + 4.0, r.top() + 43.0), Align2::LEFT_TOP, "<end>", font(12.0), t.text_faint);
+    let (preview_x, preview_w) = cell_text(p, pos2(left, r.top() + 43.0), cat_x - left - 4.0, &row.preview, font(12.0), t.text_faint);
+    // The end mark goes where the preview is read to end: on its left when it is read from the right.
+    let end_w = text_width(p, "<end>", font(12.0));
+    if row.preview_whole && !row.preview.is_empty() {
+        if preview_x > left {
+            if preview_x - 4.0 - end_w >= left {
+                p.text(pos2(preview_x - 4.0, r.top() + 43.0), Align2::RIGHT_TOP, "<end>", font(12.0), t.text_faint);
+            }
+        } else if cat_x - 4.0 - (left + preview_w + 4.0) >= end_w {
+            p.text(pos2(left + preview_w + 4.0, r.top() + 43.0), Align2::LEFT_TOP, "<end>", font(12.0), t.text_faint);
+        }
     }
 }

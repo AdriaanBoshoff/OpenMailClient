@@ -3870,3 +3870,40 @@ fn the_reminder_sound_is_chosen_and_heard_and_the_window_stands_apart() {
     assert!(!stands_apart(true, false, false, true), "back in the main window once it is in front");
     assert!(!stands_apart(false, false, true, false), "opened by hand, never apart");
 }
+
+#[test]
+fn a_line_read_from_the_right_is_set_at_the_right_of_its_cell() {
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut got = Vec::new();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let p = ui.painter().clone();
+        let at = egui::pos2(40.0, 10.0);
+        for text in [
+            "פגישת תכנון ביום שלישי",
+            "RE: تقرير المبيعات",
+            "Budget numbers",
+            "  2026 مشاريع",
+            "",
+            "פגישת תכנון ביום שלישי בשעה 10:30, חדר B2 — סדר יום ורשימת משתתפים מעודכנת",
+        ] {
+            got.push(crate::cell_text(&p, at, 300.0, text, crate::font(12.5), egui::Color32::BLACK));
+        }
+        got.push(crate::cell_text(&p, at, 3.0, "שלום", crate::font(12.5), egui::Color32::BLACK));
+    });
+    output.textures_delta.clear();
+    let ends = |(x, w): (f32, f32)| (x, x + w);
+    // Hebrew first: flush against the right end of the cell.
+    let (x, end) = ends(got[0]);
+    assert!(x > 40.0 && (end - 340.0).abs() < 0.5, "{:?}", got[0]);
+    // A line whose first letter is Latin is read from the left, whatever follows it.
+    assert_eq!(got[1].0, 40.0);
+    assert_eq!(got[2].0, 40.0);
+    // Digits and spaces have no direction: the first letter that has one decides.
+    assert!(got[3].0 > 40.0);
+    assert_eq!(got[4], (40.0, 0.0));
+    // Too long for the cell: cut, and still within it.
+    let (x, end) = ends(got[5]);
+    assert!(x >= 40.0 && end <= 340.5, "{:?}", got[5]);
+    assert_eq!(got[6], (40.0, 0.0), "no room");
+}

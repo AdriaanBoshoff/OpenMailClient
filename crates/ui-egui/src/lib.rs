@@ -583,8 +583,29 @@ pub(crate) fn seen_line_from(text: &str, rtl: Option<bool>, font: FontId, color:
 
 /// Draw one line clipped to `width` with an ellipsis; returns the width used.
 pub(crate) fn clip_text(p: &Painter, pos: Pos2, width: f32, text: &str, font: FontId, color: Color32) -> f32 {
+    let Some(galley) = clipped(p, width, text, font, color) else { return 0.0 };
+    let used = galley.size().x;
+    p.galley(pos, galley, color);
+    used
+}
+
+/// A line in a cell of its own, clipped to `width`: one whose paragraph is read from the right
+/// (its first letter with a direction is written from the right, UAX #9 P2 and P3) is set
+/// against the right end of the cell, as Outlook sets such a line, and any other from the left.
+/// Returns where what was drawn starts and how wide it is.
+pub(crate) fn cell_text(p: &Painter, pos: Pos2, width: f32, text: &str, font: FontId, color: Color32) -> (f32, f32) {
+    let Some(galley) = clipped(p, width, text, font, color) else { return (pos.x, 0.0) };
+    let used = galley.size().x;
+    let x = if openmailclient_fonts::script::first_strong(&one_line(text)) == Some(true) { pos.x + (width - used).max(0.0) } else { pos.x };
+    p.galley(pos2(x, pos.y), galley, color);
+    (x, used)
+}
+
+/// One line laid out to fit `width`, cut with an ellipsis where it is read to end; none when
+/// the room is too narrow for anything.
+fn clipped(p: &Painter, width: f32, text: &str, font: FontId, color: Color32) -> Option<std::sync::Arc<egui::Galley>> {
     if width < 6.0 {
-        return 0.0;
+        return None;
     }
     let galley = if openmailclient_fonts::script::has_rtl(text) {
         // What does not fit is cut from the end of the text as it is read, which is not the
@@ -617,9 +638,7 @@ pub(crate) fn clip_text(p: &Painter, pos: Pos2, width: f32, text: &str, font: Fo
         job.wrap = TextWrapping { max_width: width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
         p.layout_job(job)
     };
-    let used = galley.size().x;
-    p.galley(pos, galley, color);
-    used
+    Some(galley)
 }
 
 /// `text` cut in its middle to fit `width`: its start and its end are kept, since the end of a
