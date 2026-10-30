@@ -110,6 +110,8 @@ pub struct Row {
     pub folder: FolderId,
     pub id: u64,
     pub task: Task,
+    /// Whose copy it is, when it was given to someone or by someone.
+    pub assignment: task::request::Assignment,
 }
 
 impl Row {
@@ -446,7 +448,7 @@ impl Session {
                 total = total.saturating_add(1);
                 let t = Task::of(&item, &zone);
                 if wanted(&t) {
-                    rows.push(Row { store, folder, id: row.id, task: t });
+                    rows.push(Row { store, folder, id: row.id, task: t, assignment: task::request::Assignment::of(&item) });
                 }
             }
         }
@@ -470,7 +472,7 @@ impl Session {
                 }
                 let t = Task::of(&item, &zone);
                 if wanted(&t) {
-                    rows.push(Row { store, folder, id, task: t });
+                    rows.push(Row { store, folder, id, task: t, assignment: task::request::Assignment::default() });
                 }
             }
         }
@@ -548,6 +550,9 @@ pub fn row_json(s: &Session, r: &Row) -> Value {
         "categories": t.categories,
         "totalWork": t.total_work,
         "actualWork": t.actual_work,
+        // Given to someone, or by someone: whose copy it is and how it was answered.
+        "assigned": (r.assignment.ownership != task::request::Ownership::Own)
+            .then(|| json!({ "copy": r.assignment.ownership.name(), "answer": r.assignment.acceptance.name() })),
         // A task may have come from anyone, a flagged message surely did.
         "untrusted_content": {
             "subject": t.subject,
@@ -586,7 +591,7 @@ fn items(s: &mut Session, p: &Value) -> CmdResult {
 
 /// The row a command is about: the one named by "id" (with its "folder" and "store", which
 /// default to the Tasks folder shown), else the one chosen.
-fn row_key(s: &Session, p: &Value) -> Result<(usize, FolderId, u64), EngineError> {
+pub(super) fn row_key(s: &Session, p: &Value) -> Result<(usize, FolderId, u64), EngineError> {
     let Some(v) = p.get("id").filter(|v| !v.is_null()) else {
         return s.tasks.selected.ok_or_else(|| EngineError::BadParams("no task is chosen".into()));
     };
@@ -607,7 +612,7 @@ fn row_key(s: &Session, p: &Value) -> Result<(usize, FolderId, u64), EngineError
 }
 
 /// The item a row is, loaded, and whether it is one the To-Do List can hold.
-fn load_row(s: &mut Session, (store, folder, id): (usize, FolderId, u64)) -> Result<Item, EngineError> {
+pub(super) fn load_row(s: &mut Session, (store, folder, id): (usize, FolderId, u64)) -> Result<Item, EngineError> {
     let item = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.load(folder, ItemId(id))?;
     if !task::is_task(&item) && !task::is_flagged(&item) {
         return Err(EngineError::BadParams("that is neither a task nor a message flagged for follow-up".into()));
@@ -835,7 +840,7 @@ fn schedule(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Writes `f`'s change to the row's item, undone as one step, and shows it again wherever it
 /// is shown: among the tasks, and in the message list when it is a message there.
-fn edit_row(
+pub(super) fn edit_row(
     s: &mut Session,
     key: (usize, FolderId, u64),
     what: &'static str,
@@ -891,7 +896,10 @@ fn change(s: &mut Session, p: &Value) -> CmdResult {
             set_pattern(s, item, pattern);
         }
         Ok(())
-    })
+    })?;
+    // A task given to oneself tells the one who gave it what changed, as they asked.
+    super::task_request::changed(s, key, &before)?;
+    ok()
 }
 
 fn mark_complete(s: &mut Session, p: &Value) -> CmdResult {
@@ -909,11 +917,13 @@ fn complete_row(s: &mut Session, key: (usize, FolderId, u64), what: &'static str
     let mut item = load_row(s, key)?;
     let before = Box::new(item.clone());
     let Some(next) = task::complete_occurrence(&mut item, s.today(), clock(s), &s.zone) else {
+        let was = Task::of(&item, &s.zone);
         edit_row(s, key, what, |s, item| {
             task::mark_complete(item, s.today(), clock(s));
             Ok(())
         })?;
         s.status = "Marked complete".into();
+        super::task_request::changed(s, key, &was)?;
         return ok();
     };
     let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;

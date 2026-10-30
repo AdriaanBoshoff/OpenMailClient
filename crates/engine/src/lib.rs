@@ -73,6 +73,8 @@ mod tests_signatures;
 #[cfg(test)]
 mod tests_sync;
 #[cfg(test)]
+mod tests_task_request;
+#[cfg(test)]
 mod tests_tasks;
 #[cfg(test)]
 mod tests_todo_bar;

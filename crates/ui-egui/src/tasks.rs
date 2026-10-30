@@ -16,7 +16,7 @@ use crate::{MailUi, bold, clip_text, font, one_line};
 use egui::{Align2, Color32, Rect, Sense, Ui, pos2, vec2};
 use openmailclient_engine::cmd::tasks::{Row, View};
 use openmailclient_model::FolderId;
-use openmailclient_model::task::{MAX_WORK, Status, Task};
+use openmailclient_model::task::{self, MAX_WORK, Status, Task};
 use openmailclient_model::time;
 use serde_json::{Value, json};
 
@@ -163,11 +163,39 @@ pub(crate) struct TaskForm {
     recurring: bool,
     /// What the window says of when it is due, worked out when it was opened.
     due_words: String,
+    /// Whom it is given to, as the To line of Assign Task: shown once it is asked for.
+    pub assign_to: Option<String>,
+    /// What the window says of whom it was given to, or by whom, and their answer.
+    assigned_words: String,
+    /// It may be given to someone: one's own, or declined by whom it was given to.
+    can_assign: bool,
     pub said: Option<String>,
     focus: bool,
 }
 
 impl TaskForm {
+    /// What the window says of a task given to someone, or by someone, and whether it may be
+    /// given on.
+    pub(crate) fn given(&mut self, a: &task::request::Assignment) {
+        use task::request::{Acceptance, Ownership};
+        let clean = |s: &str| s.chars().filter(|c| !c.is_control()).take(200).collect::<String>();
+        let by = a.last_assigner().map(|x| clean(if x.name.is_empty() { &x.address } else { &x.name })).unwrap_or_default();
+        self.assigned_words = match (a.ownership, a.acceptance) {
+            (Ownership::Own, _) => String::new(),
+            (Ownership::Assigner, Acceptance::Accepted) => format!("Accepted by {}", clean(&a.owner)),
+            (Ownership::Assigner, Acceptance::Declined) => format!("Declined by {}; it may be given to someone else", clean(&a.owner)),
+            (Ownership::Assigner, _) => format!("Waiting for {} to answer", clean(&a.owner)),
+            (Ownership::Assignee, _) if a.updates => format!("Given to you by {by}, who is sent an update of each change"),
+            (Ownership::Assignee, _) => format!("Given to you by {by}"),
+        };
+        self.can_assign = !self.flagged_mail
+            && match a.ownership {
+                Ownership::Own => true,
+                Ownership::Assigner => a.acceptance == Acceptance::Declined,
+                Ownership::Assignee => a.acceptance == Acceptance::Accepted,
+            };
+    }
+
     pub(crate) fn new(today: i64) -> Self {
         let repeat = RepeatForm::of_pattern(None, &time::civil(time::from_unix(today.saturating_mul(86_400)), 0));
         Self { importance: 1, focus: true, reminder: format!("{} 08:00", iso(Some(today))), repeat_was: repeat.clone(), repeat, ..Self::default() }
@@ -207,6 +235,10 @@ impl TaskForm {
             regenerate_was: t.recurrence.as_ref().is_some_and(|r| r.sliding != 0),
             recurring: t.recurring,
             due_words: due_words(t, today),
+            assign_to: None,
+            assigned_words: String::new(),
+            // One's own until `given` says otherwise.
+            can_assign: !t.flagged_mail,
             said: None,
             focus: true,
         }
@@ -273,6 +305,7 @@ enum Ask {
     Save,
     Complete,
     Skip,
+    Assign,
     Delete,
 }
 
@@ -311,7 +344,9 @@ impl MailUi {
                     .cloned()
                     .ok_or("That task is not shown")?;
                 let reminder = row.task.reminder.map(|r| self.local_stamp(r)).unwrap_or_default();
-                self.task = Some(TaskForm::of(key, &row.task, reminder, today));
+                let mut form = TaskForm::of(key, &row.task, reminder, today);
+                form.given(&row.assignment);
+                self.task = Some(form);
                 if listed {
                     self.act("tasks.select", key_json(key));
                 }
@@ -778,6 +813,22 @@ impl MailUi {
                 ui.label(egui::RichText::new(&form.due_words).font(font(12.5)).color(t.text_dim));
                 ui.add_space(4.0);
             }
+            if !form.assigned_words.is_empty() {
+                ui.label(egui::RichText::new(&form.assigned_words).font(font(12.5)).color(t.text_dim));
+                ui.add_space(4.0);
+            }
+            if let Some(to) = form.assign_to.as_mut() {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("To").color(t.text_dim));
+                    ui.add(
+                        LineEdit::new(to, egui::Id::new("task-assign-to"))
+                            .desired_width(560.0)
+                            .char_limit(4000)
+                            .hint("Names or addresses, separated by semicolons", Some(t.text_faint)),
+                    );
+                });
+                ui.add_space(4.0);
+            }
             egui::ScrollArea::vertical().id_salt("task-form").max_height(room).show(ui, |ui| {
                 egui::Grid::new("task-grid").num_columns(4).spacing(vec2(10.0, 7.0)).show(ui, |ui| {
                     let dim = |ui: &mut Ui, s: &str| ui.label(egui::RichText::new(s).color(t.text_dim));
@@ -923,6 +974,13 @@ impl MailUi {
                     ask = Some(Ask::Complete);
                 }
                 if form.key.is_some()
+                    && form.can_assign
+                    && form.assign_to.is_none()
+                    && ui.add(dialog::plain("Assign Task")).on_hover_text("Gives it to someone by mail").clicked()
+                {
+                    form.assign_to = Some(String::new());
+                }
+                if form.key.is_some()
                     && form.recurring
                     && form.status != Status::Complete
                     && ui.add(dialog::plain("Skip Occurrence")).on_hover_text("Moves it on to its next occurrence").clicked()
@@ -933,7 +991,11 @@ impl MailUi {
                     if ui.add(dialog::plain("Cancel")).clicked() {
                         ask = Some(Ask::Close);
                     }
-                    if ui.add(dialog::primary(&t, "Save & Close")).clicked() {
+                    if form.assign_to.is_some() {
+                        if ui.add(dialog::primary(&t, "Send")).on_hover_text("Sends it to them as a task request").clicked() {
+                            ask = Some(Ask::Assign);
+                        }
+                    } else if ui.add(dialog::primary(&t, "Save & Close")).clicked() {
                         ask = Some(Ask::Save);
                     }
                 });
@@ -958,6 +1020,14 @@ impl MailUi {
             },
             Some(Ask::Skip) => match form.params() {
                 Ok(p) => self.execute("tasks.change", &p).and_then(|_| self.execute("tasks.skipOccurrence", &form.key.map_or(Value::Null, key_json))),
+                Err(e) => Err(e),
+            },
+            Some(Ask::Assign) => match form.params() {
+                Ok(p) => self.execute("tasks.change", &p).and_then(|_| {
+                    let mut a = form.key.map_or(Value::Null, key_json);
+                    a["to"] = json!(form.assign_to.clone().unwrap_or_default());
+                    self.execute("tasks.assign", &a)
+                }),
                 Err(e) => Err(e),
             },
             Some(Ask::Delete) => self.execute("tasks.delete", &form.key.map_or(Value::Null, key_json)),

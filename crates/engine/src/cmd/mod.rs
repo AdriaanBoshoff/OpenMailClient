@@ -25,6 +25,7 @@ pub(crate) mod rules;
 mod send;
 pub(crate) mod settings;
 mod signatures;
+mod task_request;
 pub mod tasks;
 pub mod todo_bar;
 mod update;
@@ -76,6 +77,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(names::commands());
         v.extend(merge::commands());
         v.extend(tasks::commands());
+        v.extend(task_request::commands());
         v.extend(update::commands());
         v.extend(calendar_file::commands());
         v.extend(meeting::commands());

@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 139 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 140 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -56,7 +56,7 @@
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (on screen they are downloaded when asked for, M4.10; on paper their place is named),
    right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, a printer's own settings (trays, two-sided; it prints on any printer the system has, with copies and pages, M1.10),
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
-4. **Tasks** has its views and the To-Do List with flagged mail beside the tasks (M5.9), and reminders come up for appointments, tasks and flagged mail (M5.10), and to-dos in calendar files are read into Tasks and Tasks saved as one (M5.11); tasks are kept in step with a CalDAV server's task lists (M5.12); the To-Do Bar stands beside every module (M5.12); tasks recur, made and changed in their window, and move on to their next occurrence once done (M5.17); Assign Task is a do-later in ROADMAP. People has its five views, contacts and groups and vCard files (M5.8); contacts are kept in step with a CardDAV server, and the Address Book, Check Names and Mail Merge are there (M5.11). The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6) and meetings, invitations sent, answered and called off (M5.7), answered with a comment or without telling (M5.12); the Scheduling Assistant is a do-later in ROADMAP.
+4. **Tasks** has its views and the To-Do List with flagged mail beside the tasks (M5.9), and reminders come up for appointments, tasks and flagged mail (M5.10), and to-dos in calendar files are read into Tasks and Tasks saved as one (M5.11); tasks are kept in step with a CalDAV server's task lists (M5.12); the To-Do Bar stands beside every module (M5.12); tasks recur, made and changed in their window, and move on to their next occurrence once done (M5.17); a task is given to someone by mail, accepted or declined, and kept up to date from them (M5.18). People has its five views, contacts and groups and vCard files (M5.8); contacts are kept in step with a CardDAV server, and the Address Book, Check Names and Mail Merge are there (M5.11). The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6) and meetings, invitations sent, answered and called off (M5.7), answered with a comment or without telling (M5.12); the Scheduling Assistant is a do-later in ROADMAP.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
 6. **Web build and web access.** The engine and everything under it compiles for wasm32; there is no web app (M6),
    and the mailbox cannot be reached from a browser on another device (M7: served over HTTPS by
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 140 · 2026-10-30 — M5.18: Assign Task, task requests, accepted and declined, updates and completion reports by mail, Send Status Report, TNEF winmail.dat read and written.
 - 139 · 2026-10-30 — M5.17: a task's recurrence made and changed in its window, the next occurrence on completing, Skip Occurrence.
 - 138 · 2026-10-30 — M5.16: rules on mail as it is sent: deferred, copied, put in categories, flagged.
 - 137 · 2026-10-30 — M5.15: Run Rules Now taken back with Undo; rules on sender and recipient addresses and days received, forwarding, replying and a sound, with loop guards.

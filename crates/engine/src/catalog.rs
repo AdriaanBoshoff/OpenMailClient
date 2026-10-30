@@ -165,7 +165,9 @@ pub const FEATURES: &[Feature] = &[
     f("Tasks", "Home", "Follow Up", "Today, Tomorrow, This Week", "tasks.followUp"),
     f("Tasks", "Home", "Current View", "To-Do List, Detailed, Simple List", "tasks.view"),
     f("Tasks", "Home", "Find", "Search Tasks", "tasks.search"),
-    f("Tasks", "Task", "Manage Task", "Assign Task", ""),
+    f("Tasks", "Task", "Manage Task", "Assign Task", "tasks.assign"),
+    f("Tasks", "Task", "Manage Task", "Send Status Report", "tasks.sendStatusReport"),
+    f("Tasks", "Task Request", "Respond", "Accept, Decline", "tasks.respond"),
     f("Tasks", "Task", "Recurrence", "Recurrence", "tasks.recurrence"),
     f("Tasks", "Task", "Manage Task", "Skip Occurrence", "tasks.skipOccurrence"),
 ];

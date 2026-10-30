@@ -104,6 +104,8 @@ pub(crate) struct Bar {
     pub(crate) warn: bool,
     /// Accept, Tentative and Decline are offered.
     pub(crate) answers: bool,
+    /// A task request's Accept and Decline are offered.
+    pub(crate) task_answers: bool,
     /// Remove from Calendar: the appointment a cancellation names.
     pub(crate) remove: Option<u64>,
     /// Show in Calendar: the day it is on, YYYY-MM-DD.
@@ -115,7 +117,8 @@ impl MailUi {
     /// something is done.
     pub(crate) fn meeting_bar(&mut self) -> Option<Bar> {
         let item = self.session.open.as_ref()?;
-        if !meeting::is_meeting_message(item) {
+        let task_kind = openmailclient_model::task::request::Kind::of(item);
+        if !meeting::is_meeting_message(item) && task_kind.is_none() {
             return None;
         }
         let key = format!(
@@ -131,7 +134,10 @@ impl MailUi {
             return bar.clone();
         }
         let sender = item.sender_email();
-        let bar = self.session.run("calendar.invitation", &Value::Null).ok().map(|v| self.bar_of(&v, &sender));
+        let bar = match task_kind {
+            Some(_) => self.session.run("tasks.request", &Value::Null).ok().map(|v| task_bar(&v, &item_sender(self))),
+            None => self.session.run("calendar.invitation", &Value::Null).ok().map(|v| self.bar_of(&v, &sender)),
+        };
         self.invitation = Some((key, bar.clone()));
         bar
     }
@@ -324,6 +330,16 @@ impl MailUi {
                 ui.label(egui::RichText::new(&bar.words).font(crate::font(12.0)).color(t.text));
             });
             ui.horizontal(|ui| {
+                if bar.task_answers {
+                    for (label, response, hint) in [
+                        ("Accept", "accept", "Put it in your tasks and tell the one who gave it"),
+                        ("Decline", "decline", "Tell the one who gave it you will not do it"),
+                    ] {
+                        if ui.add(crate::dialog::plain(label)).on_hover_text(hint).clicked() {
+                            acts.push(("tasks.respond", json!({ "response": response })));
+                        }
+                    }
+                }
                 if bar.answers {
                     for (label, response, hint) in [
                         ("Accept", "accept", "Put it in your calendar and tell the organizer"),
@@ -370,6 +386,27 @@ impl MailUi {
             });
         });
     }
+}
+
+/// Who sent the open message, by name where it gives one.
+fn item_sender(ui: &MailUi) -> String {
+    ui.session.open.as_ref().map(|m| Some(m.sender_name()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| m.sender_email())).unwrap_or_default()
+}
+
+/// The bar of a task request, acceptance, rejection or update: what it says, in words.
+fn task_bar(v: &Value, sender: &str) -> Bar {
+    let clean = |s: &str| s.chars().filter(|c| !c.is_control()).take(200).collect::<String>();
+    let who = clean(sender);
+    let due = v["due"].as_str().map(|d| format!(" Due {d}.")).unwrap_or_default();
+    let words = match v["kind"].as_str() {
+        Some("request") if v["inTasks"].is_u64() => format!("{who} asked you to do this task; it is in your tasks.{due}"),
+        Some("request") => format!("{who} asked you to do this task.{due}"),
+        Some("accept") => format!("{who} accepted the task."),
+        Some("decline") => format!("{who} declined the task; it is yours again."),
+        _ => format!("{who} sent how far along the task is: {}% complete.", v["percent"].as_u64().unwrap_or(0)),
+    };
+    let readable = v.get("readable").is_none();
+    Bar { words, task_answers: readable && v["kind"] == "request", ..Bar::default() }
 }
 
 #[cfg(test)]

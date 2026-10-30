@@ -1172,10 +1172,12 @@ fn kept(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut said
             }
             let told = (is_unread && !first).then(|| crate::arrival::Told::of(&item));
             // A meeting's answer or cancellation is taken in once the message is kept.
-            let meeting = openmailclient_model::meeting::is_meeting_message(&item).then(|| item.clone());
+            let meeting = (openmailclient_model::meeting::is_meeting_message(&item)
+                || openmailclient_model::task::request::Kind::of(&item).is_some())
+            .then(|| item.clone());
             match s.stores.get_mut(store).map(|st| st.add(folder, item)) {
                 Some(Ok(new)) => {
-                    if let Some(said) = meeting.and_then(|m| super::meeting::arrived(s, &m)) {
+                    if let Some(said) = meeting.and_then(|m| super::meeting::arrived(s, &m).or_else(|| super::task_request::arrived(s, &m))) {
                         meetings.push(said);
                     }
                     // The rules are run on mail that came since, not on what a first receive

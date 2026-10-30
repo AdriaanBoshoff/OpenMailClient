@@ -228,10 +228,12 @@ fn send_now(s: &mut Session, wait: bool) -> CmdResult {
             skipped.push(json!({ "subject": summary.subject, "said": "it expired before it went; change when it expires, or delete it" }));
             continue;
         }
-        // Something that is not a message or a meeting's request, answer or cancellation (a
-        // task request, say) waits; a meeting's goes with its calendar, [MS-OXOCAL] 2.2.6.
+        // Something that is not a message, a meeting's request, answer or cancellation or a
+        // task's waits; a meeting's goes with its calendar, [MS-OXOCAL] 2.2.6, and a task's
+        // with its winmail.dat, [MS-OXOTASK] 3.1.4.3.
         let class = item.message_class().to_ascii_uppercase();
-        if !(class.is_empty() || class.starts_with("IPM.NOTE") || class.starts_with("IPM.SCHEDULE.MEETING.")) {
+        if !(class.is_empty() || class.starts_with("IPM.NOTE") || class.starts_with("IPM.SCHEDULE.MEETING.") || class.starts_with("IPM.TASKREQUEST"))
+        {
             skipped.push(json!({ "subject": summary.subject, "said": format!("a {} is not sent by this version", item.message_class()) }));
             continue;
         }

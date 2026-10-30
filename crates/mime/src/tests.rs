@@ -214,3 +214,145 @@ fn a_subject_keeps_its_white_space_through_a_message_file() {
     let folded = "Subject: one\r\n  two\r\n\tthree\r\n\r\nbody";
     assert_eq!(parse(folded.as_bytes()).unwrap().subject(), "one  two\tthree");
 }
+
+/// A task request's item as Outlook carries one: properties of every kind, named ones by number
+/// and by name, a hidden attached task with its own named properties and recipients, and a file.
+fn tnef_item() -> Item {
+    use openmailclient_model::{NameId, NamedKey, pset};
+    let mut task = Item::default();
+    task.props.set_str(pid::MESSAGE_CLASS, "IPM.Task");
+    task.set_subject("Write the report");
+    let guid = [3u8; 16];
+    task.named.push((NamedKey { guid, name: NameId::Id(0x8113) }, PropValue::Int32(2)));
+    task.named.push((NamedKey { guid, name: NameId::Id(0x811F) }, PropValue::String("Bo Lind".into())));
+    task.add_recipient(RECIP_TO, "Bo Lind", "bo@example.org");
+    let mut item = Item::default();
+    item.props.set_str(pid::MESSAGE_CLASS, "IPM.TaskRequest");
+    item.set_subject("Task Request: Write the report");
+    item.set_body_text("Due Friday.\r\nPlease.");
+    item.props.set(pid::IMPORTANCE, PropValue::Int32(2));
+    item.props.set(pid::CLIENT_SUBMIT_TIME, PropValue::Time(time::from_civil(2030, 3, 4, 5, 6, 7, 0)));
+    item.props.set(0x6600, PropValue::Bool(true));
+    item.props.set(0x6601, PropValue::Int16(-7));
+    item.props.set(0x6602, PropValue::Int64(1 << 40));
+    item.props.set(0x6603, PropValue::Float64(2.5));
+    item.props.set(0x6604, PropValue::Binary(vec![1, 2, 3, 4, 5]));
+    item.props.set(0x6605, PropValue::MultiInt32(vec![1, -2, 3]));
+    item.props.set(0x6606, PropValue::MultiString(vec!["é".into(), "".into(), "abc".into()]));
+    item.props.set(0x6607, PropValue::Guid([9; 16]));
+    item.categories = vec!["Red".into(), "Work".into()];
+    item.named.push((NamedKey { guid: pset::PS_PUBLIC_STRINGS, name: NameId::Name("x-odd".into()) }, PropValue::String("v".into())));
+    let mut hidden = Attachment::default();
+    hidden.props.set(pid::ATTACH_METHOD, PropValue::Int32(5));
+    hidden.props.set(pid::RENDERING_POSITION, PropValue::Int32(-1));
+    hidden.props.set(pid::ATTACHMENT_HIDDEN, PropValue::Bool(true));
+    hidden.props.set_str(pid::ATTACH_LONG_FILENAME, "Write the report");
+    hidden.embedded = Some(Box::new(task));
+    item.attachments.push(hidden);
+    item.attachments.push(Attachment::file("notes.txt", "text/plain", b"plain notes".to_vec()));
+    item
+}
+
+#[test]
+fn tnef_keeps_an_item_and_its_attached_task() {
+    let item = tnef_item();
+    let bytes = tnef::write(&item);
+    assert!(tnef::is_tnef(&bytes));
+    let back = tnef::read(&bytes).unwrap();
+    assert_eq!(back.message_class(), "IPM.TaskRequest");
+    assert_eq!(back.subject(), "Task Request: Write the report");
+    assert_eq!(back.props.str(pid::BODY), Some("Due Friday.\r\nPlease."));
+    for id in [pid::IMPORTANCE, pid::CLIENT_SUBMIT_TIME, 0x6600, 0x6601, 0x6602, 0x6603, 0x6604, 0x6605, 0x6606, 0x6607] {
+        assert_eq!(back.props.get(id), item.props.get(id), "{id:#06x}");
+    }
+    assert_eq!(back.categories, item.categories);
+    assert_eq!(back.named, item.named);
+    assert_eq!(back.attachments.len(), 2);
+    let hidden = &back.attachments[0];
+    assert_eq!(hidden.props.i32(pid::ATTACH_METHOD), Some(5));
+    assert_eq!(hidden.props.i32(pid::RENDERING_POSITION), Some(-1));
+    assert_eq!(hidden.props.bool(pid::ATTACHMENT_HIDDEN), Some(true));
+    let task = hidden.embedded.as_ref().unwrap();
+    assert_eq!(task.message_class(), "IPM.Task");
+    assert_eq!(task.subject(), "Write the report");
+    assert_eq!(task.named, item.attachments[0].embedded.as_ref().unwrap().named);
+    assert_eq!(task.recipients.len(), 1, "an attached item says who it was for");
+    assert_eq!(back.attachments[1].name(), "notes.txt");
+    assert_eq!(back.attachments[1].data, b"plain notes");
+    // Read once, it is what it says: written and read again, nothing more changes.
+    let again = tnef::write(&back);
+    assert_eq!(tnef::write(&tnef::read(&again).unwrap()), again);
+}
+
+#[test]
+fn a_task_request_goes_with_its_winmail_dat_and_the_mime_says_who_sent_it() {
+    let mut item = tnef_item();
+    item.set_sender("Ana Costa", "ana@example.org");
+    item.add_recipient(RECIP_TO, "Bo Lind", "bo@example.org");
+    item.refresh_display_recipients();
+    let mail = write(&item);
+    let text = String::from_utf8_lossy(&mail);
+    assert!(text.contains("winmail.dat") && text.contains("application/ms-tnef"), "{text}");
+    assert!(!text.contains("notes.txt"), "its files travel inside the TNEF");
+    let back = parse(&mail).unwrap();
+    assert_eq!(back.message_class(), "IPM.TaskRequest");
+    assert!(back.attachments.iter().all(|a| a.name() != "winmail.dat"));
+    assert_eq!(back.attachments.len(), 2);
+    assert!(back.attachments[0].embedded.is_some());
+    assert_eq!(back.categories, item.categories);
+
+    // A TNEF that says it is from someone else, under another subject, is not believed.
+    let mut liar = tnef_item();
+    liar.set_sender("The Bank", "bank@example.com");
+    liar.set_subject("Urgent");
+    let tnef = tnef::write(&liar);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&tnef);
+    let eml = format!(
+        "From: Ana Costa <ana@example.org>\r\nSubject: Hello\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nHi\r\n--b\r\nContent-Type: application/octet-stream; name=winmail.dat\r\nContent-Transfer-Encoding: base64\r\n\r\n{b64}\r\n--b--\r\n"
+    );
+    let got = parse(eml.as_bytes()).unwrap();
+    assert_eq!((got.sender_email(), got.subject()), ("ana@example.org".to_string(), "Hello".to_string()));
+    assert_eq!(got.body_text().trim(), "Hi", "the MIME's body is kept");
+    assert_eq!(got.message_class(), "IPM.TaskRequest");
+}
+
+#[test]
+fn hostile_tnef_never_panics() {
+    let bytes = tnef::write(&tnef_item());
+    assert!(bytes.len() < 8_192, "sized first: {}", bytes.len());
+    // Every cut of it.
+    for n in 0..bytes.len() {
+        let _ = tnef::read(&bytes[..n]);
+    }
+    // Every byte flipped in turn, one at a time.
+    for i in 0..bytes.len() {
+        let mut b = bytes.clone();
+        b[i] ^= 0xFF;
+        let _ = tnef::read(&b);
+    }
+    // Counts and lengths that claim far more than there is.
+    let mut huge = bytes[..6].to_vec();
+    huge.extend_from_slice(&[1, 0x03, 0x90, 0x06, 0x00, 0x10, 0, 0, 0]);
+    huge.extend_from_slice(&u32::MAX.to_le_bytes());
+    huge.extend_from_slice(&[0x02, 0x01, 0x00, 0x66]);
+    huge.extend_from_slice(&u32::MAX.to_le_bytes());
+    let _ = tnef::read(&huge);
+    // Attached items inside attached items, far deeper than is read.
+    let mut deep = Item::default();
+    for _ in 0..40 {
+        let mut outer = Item::default();
+        let mut a = Attachment::default();
+        a.props.set(pid::ATTACH_METHOD, PropValue::Int32(5));
+        a.embedded = Some(Box::new(deep));
+        outer.attachments.push(a);
+        deep = outer;
+    }
+    assert!(tnef::read(&tnef::write(&deep)).is_some());
+    // Not a TNEF at all, or another version of one.
+    assert!(tnef::read(b"not tnef").is_none());
+    let mut other = bytes.clone();
+    if let Some(at) = other.windows(4).position(|w| w == [0, 0, 1, 0]) {
+        other[at + 2] = 2;
+    }
+    assert!(tnef::read(&other).is_none());
+}

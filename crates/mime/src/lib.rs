@@ -5,6 +5,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod header;
+pub mod tnef;
 mod write;
 
 use base64::Engine as _;
@@ -212,6 +213,16 @@ fn walk(data: &[u8], depth: usize, ctx: &mut Ctx) {
         ctx.item.props.set_str(pid::MESSAGE_CLASS, class);
         ctx.classed = true;
     }
+    // Outlook's own properties for the message, sent beside the MIME ([MS-OXTNEF] 2.1.3.5):
+    // merged in, not shown as a `winmail.dat` no other program can open.
+    let tnef_named = filename.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("winmail.dat"));
+    if (mime == "application/ms-tnef" || mime == "application/vnd.ms-tnef" || tnef_named)
+        && depth < MAX_DEPTH
+        && let Some(inner) = tnef::read(&decoded)
+    {
+        merge_tnef(ctx, inner);
+        return;
+    }
     let n = ctx.item.attachments.len() + 1;
     let name = filename.unwrap_or_else(|| format!("ATT{n:05}.{}", extension_for(&mime)));
     let mut a = Attachment::file(&name, &mime, decoded);
@@ -222,6 +233,43 @@ fn walk(data: &[u8], depth: usize, ctx: &mut Ctx) {
         }
     }
     ctx.item.attachments.push(a);
+}
+
+/// What a message's TNEF says, laid onto what its MIME says. Who sent it, to whom, when and under
+/// what subject are the MIME's to say ([MS-OXTNEF] 2.1.3.5.2): a TNEF cannot give another sender
+/// than the mail it came in. A body the MIME gives is kept; the TNEF's RTF stands beside it.
+fn merge_tnef(ctx: &mut Ctx, inner: Item) {
+    let protected = |id: u16| {
+        matches!(id, 0x0039..=0x0067 | 0x0070 | 0x0071 | 0x007D | 0x0C00..=0x0CFF | 0x0E00..=0x0E08 | 0x0E1B | 0x0E1D | 0x1035 | 0x1039 | 0x1042 | 0x3FD9 | 0x5D00..=0x5D0F)
+            || id == pid::SUBJECT
+    };
+    for (id, v) in inner.props.0 {
+        if protected(id)
+            || (id == pid::BODY && ctx.have_text)
+            || (id == pid::HTML && ctx.have_html)
+            // Codepages say how the MIME's own text was read.
+            || id == pid::INTERNET_CODEPAGE
+            || id == pid::MESSAGE_CODEPAGE
+        {
+            continue;
+        }
+        if id == pid::BODY {
+            ctx.have_text = true;
+        }
+        if id == pid::MESSAGE_CLASS {
+            ctx.classed = true;
+        }
+        ctx.item.props.set(id, v);
+    }
+    if !inner.categories.is_empty() {
+        ctx.item.categories = inner.categories;
+    }
+    for (k, v) in inner.named {
+        ctx.item.named.retain(|(n, _)| *n != k);
+        ctx.item.named.push((k, v));
+    }
+    let room = MAX_PARTS.saturating_sub(ctx.item.attachments.len());
+    ctx.item.attachments.extend(inner.attachments.into_iter().take(room));
 }
 
 /// The message class of a message carrying this calendar, when it is a meeting's.

@@ -19,6 +19,7 @@ use crate::recur::{End, Freq, Recurrence};
 use crate::zone::Offsets;
 use crate::{Flag, Item, time};
 
+pub mod request;
 /// PSETID_Task {00062003-0000-0000-C000-000000000046} ([MS-OXPROPS] 1.3.2).
 pub const PSETID_TASK: [u8; 16] = [0x03, 0x20, 0x06, 0x00, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
 

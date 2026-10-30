@@ -83,7 +83,13 @@ pub fn write(item: &Item) -> Vec<u8> {
             None => text_part("plain", &text),
         },
     };
-    if !files.is_empty() {
+    // A task request, and an answer to one, is nothing without the task it carries: it goes as
+    // Outlook sends one, its properties and attachments in a `winmail.dat` beside the text
+    // ([MS-OXTNEF] 2.1.3.5, [MS-OXOTASK] 3.1.4.3).
+    if item.message_class().starts_with("IPM.TaskRequest") {
+        let tnef = Attachment::file("winmail.dat", "application/ms-tnef", crate::tnef::write(item));
+        body = multipart("mixed", seed ^ 3, &[body, attachment_part(&tnef, false)]);
+    } else if !files.is_empty() {
         let mut parts = vec![body];
         parts.extend(files.iter().map(|a| attachment_part(a, false)));
         body = multipart("mixed", seed ^ 3, &parts);
