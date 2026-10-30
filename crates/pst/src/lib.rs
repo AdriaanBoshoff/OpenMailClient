@@ -18,6 +18,7 @@ mod journal;
 mod ltp;
 mod ltp_write;
 mod ndb;
+mod search_queue;
 mod store_write;
 mod undo;
 mod write;

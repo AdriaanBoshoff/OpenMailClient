@@ -20,7 +20,7 @@ use std::io::{Read, Seek, Write};
 const NID_MESSAGE_STORE: u32 = 0x21;
 const NID_NAME_TO_ID_MAP: u32 = 0x61;
 const NID_ROOT_FOLDER: u32 = 0x122;
-const NID_SEARCH_MANAGEMENT_QUEUE: u32 = 0x1E1;
+use crate::search_queue::NID_SEARCH_MANAGEMENT_QUEUE;
 const NID_SEARCH_ACTIVITY_LIST: u32 = 0x201;
 const NID_HIERARCHY_TEMPLATE: u32 = 0x60D;
 const NID_CONTENTS_TEMPLATE: u32 = 0x60E;

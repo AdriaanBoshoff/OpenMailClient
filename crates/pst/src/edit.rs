@@ -11,6 +11,7 @@ use crate::journal::{self, Diff, Found, Journal, Op, TOP};
 use crate::ltp::{self, Raw, Row};
 use crate::ltp_write::{Late, NID_TYPE_OBJECT, Subs, encode, write_pc_late};
 use crate::ndb::{NbtEntry, Ndb, Subnodes, u32_at};
+use crate::search_queue::{self, NID_SEARCH_MANAGEMENT_QUEUE, Sud};
 use crate::store_write::{
     ASSOC, ATTACHMENTS, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, attachment_cells, cannot, cell_for, copy,
     count, flag, int, text,
@@ -759,7 +760,8 @@ impl PstStore {
             let ty = nid & 0x1F;
             let folder = nid & !0x1F | TYPE_FOLDER;
             if edits.is_some() {
-                if nid == NID_NAME_TO_ID_MAP {
+                // Written last, with what this save changed queued in it.
+                if nid == NID_NAME_TO_ID_MAP || nid == NID_SEARCH_MANAGEMENT_QUEUE {
                     continue;
                 }
                 if ty == TYPE_HIERARCHY && tables.contains(&folder) {
@@ -896,6 +898,10 @@ impl PstStore {
                 self.copy_node(&mut o, NID_NAME_TO_ID_MAP, e.parent, e, &mut budget)?;
             }
         }
+        if let Some(edits) = edits {
+            let suds = self.updates(edits, &gone, &dead);
+            self.queue(&mut o, &suds, &mut budget)?;
+        }
         let done = match edits {
             Some(_) => {
                 Written { folders: folders.len() as u64, items: folders.iter().map(|f| u64::from(f.info.total)).sum(), unreadable: 0, hidden: 0 }
@@ -903,6 +909,76 @@ impl PstStore {
             None => Written::default(),
         };
         Ok((o, done))
+    }
+}
+
+impl PstStore {
+    /// What a save of `edits` changes, in the order it is told to the program that keeps the
+    /// search folders ([MS-PST] 2.4.8.1): folders made, moved and changed, then each message
+    /// moved, changed, put in and taken out, then folders deleted. A folder's change is one
+    /// of its name, its place or whether it has subfolders; a message's own counts too.
+    fn updates(&self, edits: &Edits, gone: &HashSet<u32>, dead: &HashSet<u32>) -> Vec<Sud> {
+        let root = self.root;
+        let (mut folders, mut messages, mut deleted) = (Vec::new(), Vec::new(), Vec::new());
+        for f in &edits.folders {
+            let parent = f.info.parent.and_then(|p| nid_of(p.0)).unwrap_or(root);
+            match edits.was.get(&f.nid) {
+                _ if f.new => folders.push(Sud::FldAdd { parent, fld: f.nid }),
+                None => {}
+                Some(w) => {
+                    if w.parent.unwrap_or(root) != parent {
+                        folders.push(Sud::FldMov { parent, fld: f.nid });
+                    }
+                    if w.name != f.info.name || w.has_children != f.info.has_children {
+                        folders.push(Sud::FldMod { fld: f.nid });
+                    }
+                }
+            }
+            for e in f.items.iter().flatten() {
+                match self.ndb.nbt.get(&e.nid) {
+                    Some(was) => {
+                        if was.parent != f.nid {
+                            messages.push(Sud::MsgMov { new: f.nid, msg: e.nid, old: was.parent });
+                        }
+                        if e.item.is_some() {
+                            messages.push(Sud::MsgMod { parent: f.nid, msg: e.nid });
+                        }
+                    }
+                    None => messages.push(Sud::MsgAdd { parent: f.nid, msg: e.nid }),
+                }
+            }
+        }
+        let mut lost: Vec<(u32, u32)> =
+            gone.iter().filter(|n| *n & 0x1F == TYPE_MESSAGE).filter_map(|n| self.ndb.nbt.get(n).map(|e| (e.parent, *n))).collect();
+        lost.sort_unstable();
+        messages.extend(lost.into_iter().map(|(parent, msg)| Sud::MsgDel { parent, msg }));
+        let mut dead: Vec<u32> = dead.iter().copied().collect();
+        dead.sort_unstable();
+        deleted.extend(dead.into_iter().map(|fld| Sud::FldDel { fld }));
+        folders.into_iter().chain(messages).chain(deleted).collect()
+    }
+
+    /// The Search Management Queue with `suds` added behind what waits in it ([MS-PST]
+    /// 2.4.8.4.1); a queue that may not be read, or a file without one, keeps what it has.
+    fn queue<W: Read + Write + Seek>(&mut self, o: &mut Out<W>, suds: &[Sud], budget: &mut usize) -> Result<(), PstError> {
+        let Some(e) = self.ndb.nbt.get(&NID_SEARCH_MANAGEMENT_QUEUE).copied() else {
+            return Ok(());
+        };
+        let joined = match suds {
+            [] => None,
+            _ => search_queue::queued(&self.ndb.data(e.data)?, e.parent, suds),
+        };
+        match joined {
+            Some(bytes) => {
+                self.near(o, NID_SEARCH_MANAGEMENT_QUEUE);
+                let max = o.w.max_data();
+                let data = o.w.data(bytes.chunks(max))?;
+                // The head is back at the first SUD (2.4.8.3).
+                o.w.node(NID_SEARCH_MANAGEMENT_QUEUE, 0, data, 0);
+                Ok(())
+            }
+            None => self.copy_node(o, NID_SEARCH_MANAGEMENT_QUEUE, e.parent, e, budget),
+        }
     }
 }
 

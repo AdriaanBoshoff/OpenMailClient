@@ -459,6 +459,66 @@ fn a_search_folder_shows_a_changed_message_as_it_is_now() {
     assert_eq!(cells(&mut store), [after[1].clone()]);
 }
 
+/// What waits in a file's Search Management Queue, as (type, the first three words of its data).
+fn queue_of(store: &mut PstStore) -> Vec<(u16, [u32; 3])> {
+    let e = *store.ndb.nbt.get(&crate::search_queue::NID_SEARCH_MANAGEMENT_QUEUE).unwrap();
+    let data = store.ndb.data(e.data).unwrap();
+    assert_eq!((e.parent, data.len() % crate::search_queue::SUD_SIZE), (0, 0), "the head is at the first, and each SUD whole");
+    let word = |c: &[u8], at: usize| u32::from_le_bytes(c[at..at + 4].try_into().unwrap());
+    data.chunks(20).map(|c| (u16::from_le_bytes([c[2], c[3]]), [word(c, 4), word(c, 8), word(c, 12)])).collect()
+}
+
+#[test]
+fn what_a_save_changed_is_queued_for_the_search_folders_to_be_worked_out_again() {
+    // [MS-PST] 2.4.8.4.1: each change is queued, so that the program that keeps the search
+    // folders works out again which searches each message belongs to.
+    let mut store = open();
+    assert!(queue_of(&mut store).is_empty());
+    let (inbox, sent) = (folder(&mut store, "Inbox"), folder(&mut store, "Sent Items"));
+    let listed = store.list(inbox.id).unwrap();
+    let (first, second) = (ItemId(listed[0].id), ItemId(listed[1].id));
+    let (n, i, s) = (|id: ItemId| id.0 as u32, inbox.id.0 as u32, sent.id.0 as u32);
+    let mut item = store.load(inbox.id, first).unwrap();
+    item.set_read(!item.is_read());
+    store.update(inbox.id, first, item).unwrap();
+    let moved = store.remove(inbox.id, second).unwrap();
+    store.add(sent.id, moved).unwrap();
+    let gone = ItemId(store.list(sent.id).unwrap()[0].id);
+    store.remove(sent.id, gone).unwrap();
+    let new = store.add(inbox.id, mail("Written here", false)).unwrap();
+    let made = store.create_folder(inbox.id, "Made here").unwrap();
+    let projects = folder(&mut store, "Projects");
+    store.rename_folder(projects.id, "Work").unwrap();
+    let calendar = folder(&mut store, "Calendar");
+    store.delete_folder(calendar.id).unwrap();
+
+    let mut back = saved(&mut store);
+    let q = queue_of(&mut back);
+    let (made, projects, calendar) = (made.0 as u32, projects.id.0 as u32, calendar.id.0 as u32);
+    let has = |t: u16, w: [u32; 3]| q.contains(&(t, w));
+    assert!(has(0x0002, [i, n(first), 0]), "the message changed: {q:x?}");
+    assert!(has(0x0001, [i, n(new), 0]), "the message put in");
+    assert!(has(0x0004, [s, n(second), i]), "the message moved, from the Inbox to Sent Items");
+    assert!(has(0x0003, [s, n(gone), 0]), "the message deleted");
+    assert!(has(0x0005, [i, made, 0]) && has(0x0006, [projects, 0, 0]) && has(0x0007, [calendar, 0, 0]), "the folders");
+    // Folders made come before the messages put in them, and deleted ones last.
+    let at = |t: u16| q.iter().position(|(u, _)| *u == t).unwrap();
+    assert!(at(0x0005) < at(0x0001) && at(0x0007) == q.len() - 1);
+    assert_eq!(q.len(), 7, "nothing else: {q:x?}");
+
+    // What waits is kept, and what the next save changed goes behind it; a save of nothing
+    // changed adds nothing.
+    let mut item = back.load(inbox.id, first).unwrap();
+    item.set_flag(Flag::Flagged);
+    back.update(inbox.id, first, item).unwrap();
+    let mut third = saved(&mut back);
+    let q3 = queue_of(&mut third);
+    assert_eq!((&q3[..7], q3.get(7)), (&q[..], Some(&(0x0002, [i, n(first), 0]))));
+    assert_eq!(q3.len(), 8);
+    let mut fourth = saved(&mut third);
+    assert_eq!(queue_of(&mut fourth), q3);
+}
+
 pub(super) fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("omc-edit-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
