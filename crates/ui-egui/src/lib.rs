@@ -450,6 +450,8 @@ pub struct MailUi {
     reset_window: bool,
     /// The last new message told of (`Arrived::seq`), and the alert standing for it.
     told_seq: u64,
+    /// The rules' sounds already played.
+    sounds_heard: u64,
     pub(crate) alert: Option<alert::Shown>,
     /// Times the host is to play the new-mail sound (`take_chimes`).
     chimes: u32,
@@ -719,6 +721,7 @@ impl MailUi {
             check_place: false,
             reset_window: false,
             told_seq: 0,
+            sounds_heard: 0,
             alert: None,
             chimes: 0,
             progress_open: false,

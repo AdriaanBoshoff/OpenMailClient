@@ -190,3 +190,72 @@ fn rules_are_made_ordered_and_kept() {
     assert_eq!(s.rules.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn run_rules_now_is_taken_back_with_undo() {
+    let mut s = Session::with_sample();
+    s.run("folder.select", &json!({ "folder": "Inbox" })).unwrap();
+    s.run("folder.new", &json!({ "name": "Import" })).unwrap();
+    s.run("folder.new", &json!({ "name": "Kept" })).unwrap();
+    s.run(
+        "rules.save",
+        &json!({ "rule": { "name": "Import tool", "when": [{ "test": "subject", "words": ["import tool"] }],
+            "then": [{ "do": "copy", "folder": "Inbox/Kept" }, { "do": "move", "folder": "Inbox/Import" }, { "do": "category", "name": "Tools" }] } }),
+    )
+    .unwrap();
+    let projects = count(&s, "Projects");
+    let done = s.run("rules.runNow", &json!({ "subfolders": true })).unwrap();
+    let n = u32::try_from(done["matched"].as_u64().unwrap()).unwrap();
+    assert!(n >= 1, "{done}");
+    assert_eq!((count(&s, "Import").0, count(&s, "Kept").0), (n, n));
+    s.run("edit.undo", &Value::Null).unwrap();
+    // Each message is back where it was, as it was, and the copies are gone.
+    assert_eq!((count(&s, "Import").0, count(&s, "Kept").0), (0, 0));
+    assert_eq!(count(&s, "Projects"), projects);
+    s.run("folder.select", &json!({ "folder": "Inbox/Projects" })).unwrap();
+    for i in 0..s.rows.len() {
+        s.run("mail.select", &json!({ "index": i })).unwrap();
+        assert!(s.open.as_ref().unwrap().categories.iter().all(|c| c != "Tools"));
+    }
+}
+
+#[test]
+fn rules_forward_and_reply_through_the_outbox() {
+    let mut s = Session::with_sample();
+    s.run("folder.select", &json!({ "folder": "Inbox" })).unwrap();
+    let outbox = count(&s, "Outbox").0;
+    s.run(
+        "rules.save",
+        &json!({ "rule": { "name": "Pass on", "when": [{ "test": "subject", "words": ["import tool"] }],
+            "then": [{ "do": "forward", "to": ["lee@example.test"] }, { "do": "reply", "words": "Thanks, I have it." }] } }),
+    )
+    .unwrap();
+    let look = s.run("rules.runNow", &json!({ "preview": true, "subfolders": true })).unwrap();
+    assert!(look["messages"][0]["does"].as_str().unwrap().contains("forwarded to lee@example.test, answered"), "{look}");
+    assert_eq!(count(&s, "Outbox").0, outbox, "a look writes nothing");
+    let done = s.run("rules.runNow", &json!({ "subfolders": true })).unwrap();
+    let n = u32::try_from(done["matched"].as_u64().unwrap()).unwrap();
+    let added = count(&s, "Outbox").0 - outbox;
+    // A forward of each, and one answer to each sender at most; nothing is sent from here.
+    assert!(added > n && added <= 2 * n, "{added} for {n}: {done}");
+    s.run("folder.select", &json!({ "folder": "Outbox" })).unwrap();
+    let mut forwards = 0;
+    for i in 0..s.rows.len() {
+        s.run("mail.select", &json!({ "index": i })).unwrap();
+        let it = s.open.clone().unwrap();
+        let wire = String::from_utf8(openmailclient_mime::write(&it)).unwrap();
+        if it.subject().starts_with("FW:") {
+            forwards += 1;
+            assert!(wire.contains("Auto-Submitted: auto-generated"), "{wire}");
+        } else if it.subject().starts_with("RE:") {
+            assert!(it.body_text().starts_with("Thanks, I have it."));
+            assert!(wire.contains("X-Auto-Response-Suppress: All"));
+        }
+    }
+    assert_eq!(forwards, n);
+    // Run again: the senders already answered are not answered twice.
+    s.run("folder.select", &json!({ "folder": "Inbox" })).unwrap();
+    let before = count(&s, "Outbox").0;
+    s.run("rules.runNow", &json!({ "subfolders": true })).unwrap();
+    assert_eq!(count(&s, "Outbox").0 - before, added, "a new run is a run of its own");
+}

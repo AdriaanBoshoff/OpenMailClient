@@ -27,7 +27,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "Home",
             group: "Move",
             shortcut: "",
-            params: r#"{}; returns {"rules": [{"name", "on", "account", "when": [conditions], "except": [conditions], "then": [actions], "words": what it does, in words}]}, in the order they are tried. A condition is {"test": "from"|"sentTo"|"subject"|"body"|"subjectOrBody"|"header", "words": [..]}, {"test": "toMe"|"ccMe"|"toOrCcMe"|"onlyToMe"|"hasAttachment"|"meeting"}, {"test": "importance", "level": "low"|"normal"|"high"} or {"test": "size", "min": KB, "max": KB}; an action {"do": "move"|"copy", "folder": a path in its data file}, {"do": "delete"|"markRead"|"flag"|"clearFlag"|"stop"}, {"do": "category", "name"} or {"do": "importance", "level"}"#,
+            params: r#"{}; returns {"rules": [{"name", "on", "account", "when": [conditions], "except": [conditions], "then": [actions], "words": what it does, in words}]}, in the order they are tried. A condition is {"test": "from"|"sentTo"|"subject"|"body"|"subjectOrBody"|"header"|"senderAddress"|"recipientAddress", "words": [..]}, {"test": "received", "after": "YYYY-MM-DD", "before": "YYYY-MM-DD"}, {"test": "toMe"|"ccMe"|"toOrCcMe"|"onlyToMe"|"hasAttachment"|"meeting"}, {"test": "importance", "level": "low"|"normal"|"high"} or {"test": "size", "min": KB, "max": KB}; an action {"do": "move"|"copy", "folder": a path in its data file}, {"do": "delete"|"markRead"|"flag"|"clearFlag"|"stop"}, {"do": "category", "name"}, {"do": "importance", "level"}, {"do": "forward", "to": [addresses]}, {"do": "reply", "words"} or {"do": "sound"}; a forward or reply is filed in the Outbox, never made of mail a machine wrote, and a sender is answered once"#,
             enabled: always,
             run: list,
         },
@@ -211,6 +211,8 @@ pub(crate) fn apply(
     id: u64,
     plan: &Plan,
     trouble: &mut Vec<String>,
+    undo: Option<&mut Vec<crate::undo::Ruled>>,
+    answered: &mut rules::Answered,
 ) -> Result<(FolderId, u64), EngineError> {
     if plan.rules.is_empty() {
         return Ok((folder, id));
@@ -243,9 +245,10 @@ pub(crate) fn apply(
             f
         })
     };
-    let st = s.stores.get_mut(store).ok_or(openmailclient_model::StoreError::NoFolder)?;
-    let mut item = st.load(folder, ItemId(id))?;
+    let mut item = s.stores.get_mut(store).ok_or(openmailclient_model::StoreError::NoFolder)?.load(folder, ItemId(id))?;
     let before = item.clone();
+    answer(s, &before, plan, answered, trouble);
+    let st = s.stores.get_mut(store).ok_or(openmailclient_model::StoreError::NoFolder)?;
     if plan.read {
         item.set_read(true);
     }
@@ -265,12 +268,14 @@ pub(crate) fn apply(
     if item != before {
         st.update(folder, ItemId(id), item.clone())?;
     }
+    let mut made = Vec::new();
     for f in copies {
         let mut copy = item.clone();
         // A copy is a message of its own, not the one the server has.
         super::imap_sync::Place::clear(&mut copy);
-        if let Err(e) = st.add(f, copy) {
-            trouble.push(format!("rule {named}: a copy could not be kept: {e}"));
+        match st.add(f, copy) {
+            Ok(c) => made.push((f, c.0)),
+            Err(e) => trouble.push(format!("rule {named}: a copy could not be kept: {e}")),
         }
     }
     let mut at = (folder, id);
@@ -285,7 +290,45 @@ pub(crate) fn apply(
             }
         }
     }
+    if let Some(undo) = undo {
+        undo.push(crate::undo::Ruled { from: folder, before: Box::new(before), at: at.0, id: at.1, copies: made });
+    }
     Ok(at)
+}
+
+/// The forward and the reply a plan asks for, filed in the Outbox. Nothing written by a machine
+/// is answered or forwarded, no sender is answered twice, nothing goes back to one of my own
+/// addresses, and forwards stop for the hour after [`rules::MAX_FORWARDS_AN_HOUR`].
+fn answer(s: &mut Session, item: &openmailclient_model::Item, plan: &Plan, answered: &mut rules::Answered, trouble: &mut Vec<String>) {
+    if plan.forward.is_empty() && plan.reply.is_none() {
+        return;
+    }
+    let named = plan.rules.join(", ");
+    if rules::automatic(item) {
+        trouble.push(format!("rule {named}: a message written by a machine is not answered or forwarded"));
+        return;
+    }
+    let me = me(s);
+    let mine = |a: &str| me.iter().any(|m| m.eq_ignore_ascii_case(a.trim()));
+    let to: Vec<&str> = plan.forward.iter().map(String::as_str).filter(|a| !mine(a)).collect();
+    if !to.is_empty() {
+        if answered.may_forward(clock(s)) {
+            if let Err(e) = super::compose::by_rule(s, item, true, &to.join(", "), "") {
+                trouble.push(format!("rule {named}: it could not be forwarded: {e}"));
+            }
+        } else {
+            trouble.push(format!("rule {named}: {} forwards were made in the last hour; no more are made", rules::MAX_FORWARDS_AN_HOUR));
+        }
+    }
+    if let Some(words) = &plan.reply {
+        let sender = item.sender_email();
+        if sender.contains('@') && !mine(&sender) && answered.may_reply(&sender) {
+            let words = format!("{}\n\n", words.trim_end());
+            if let Err(e) = super::compose::by_rule(s, item, false, &sender, &words) {
+                trouble.push(format!("rule {named}: it could not be answered: {e}"));
+            }
+        }
+    }
 }
 
 /// The folder Run Rules Now starts at, and those under it where asked.
@@ -323,6 +366,12 @@ fn does(plan: &Plan) -> String {
         None => {}
     }
     out.extend(plan.categories.iter().map(|c| format!("in {c}")));
+    if !plan.forward.is_empty() {
+        out.push(format!("forwarded to {}", plan.forward.join(", ")));
+    }
+    if plan.reply.is_some() {
+        out.push("answered".into());
+    }
     if let Some(l) = plan.importance {
         out.push(["low", "normal", "high"].get(usize::try_from(l).unwrap_or(1)).map_or("normal", |l| l).to_string() + " importance");
     }
@@ -372,6 +421,8 @@ fn run_now(s: &mut Session, p: &Value) -> CmdResult {
         each.push((f, ids));
     }
     let (mut looked, mut matched, mut moved, mut deleted) = (0usize, 0usize, 0usize, 0usize);
+    let mut done = Vec::new();
+    let mut answered = rules::Answered::default();
     let mut shown = Vec::new();
     let mut trouble = Vec::new();
     for (f, ids) in each {
@@ -382,7 +433,7 @@ fn run_now(s: &mut Session, p: &Value) -> CmdResult {
             }
             let Some(item) = s.stores.get_mut(store).and_then(|st| st.load(f, ItemId(id)).ok()) else { continue };
             looked += 1;
-            let plan = rules::plan(&chosen, &item, account.as_deref(), &me);
+            let plan = rules::plan(&chosen, &item, account.as_deref(), &me, &s.zone);
             if plan.rules.is_empty() {
                 continue;
             }
@@ -396,7 +447,7 @@ fn run_now(s: &mut Session, p: &Value) -> CmdResult {
                 }
                 continue;
             }
-            match apply(s, store, f, id, &plan, &mut trouble) {
+            match apply(s, store, f, id, &plan, &mut trouble, Some(&mut done), &mut answered) {
                 Ok((now_in, _)) => moved += usize::from(now_in != f),
                 Err(e) => trouble.push(format!("{}: {e}", item.subject())),
             }
@@ -404,6 +455,9 @@ fn run_now(s: &mut Session, p: &Value) -> CmdResult {
                 trouble.truncate(MAX_SHOWN);
             }
         }
+    }
+    if !done.is_empty() {
+        s.did(crate::undo::Step::Ruled { what: "Run Rules Now", store, done });
     }
     if !preview && matched > 0 {
         s.refresh_folders(store);
@@ -441,11 +495,17 @@ pub(crate) fn on_arrival(
     }
     let Some(item) = s.stores.get_mut(store).and_then(|st| st.load(folder, ItemId(id)).ok()) else { return (folder, id, true) };
     let me = me(s);
-    let plan = rules::plan(&s.rules, &item, Some(account), &me);
+    let plan = rules::plan(&s.rules, &item, Some(account), &me, &s.zone);
     if plan.rules.is_empty() {
         return (folder, id, true);
     }
-    match apply(s, store, folder, id, &plan, trouble) {
+    if plan.sound {
+        s.arrived.sounds = s.arrived.sounds.saturating_add(1);
+    }
+    let mut answered = std::mem::take(&mut s.arrived.answered);
+    let done = apply(s, store, folder, id, &plan, trouble, None, &mut answered);
+    s.arrived.answered = answered;
+    match done {
         Ok((f, new)) => (f, new, !plan.read && !plan.delete),
         Err(e) => {
             trouble.push(format!("the rules could not be run on a message: {e}"));

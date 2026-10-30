@@ -39,8 +39,14 @@ enum Act {
 impl MailUi {
     /// Note what came since the last frame, and tell of it as the owner chose.
     pub(crate) fn new_mail(&mut self, ctx: &egui::Context) {
+        // A rule asked for the sound, whatever the new-mail options say.
+        let rang = self.session.arrived.sounds > self.sounds_heard;
+        self.sounds_heard = self.session.arrived.sounds;
         let last = self.session.arrived.last;
         if last <= self.told_seq {
+            if rang {
+                self.chimes = self.chimes.saturating_add(1);
+            }
             return;
         }
         let told = self.told_seq;
@@ -48,7 +54,7 @@ impl MailUi {
         let fresh: Vec<_> = self.session.arrived.list.iter().filter(|a| a.seq > told).collect();
         let Some(newest) = fresh.last() else { return };
         let alerts = self.session.alerts;
-        if alerts.sound {
+        if alerts.sound || rang {
             self.chimes = self.chimes.saturating_add(1);
         }
         if alerts.flash && !ctx.input(|i| i.viewport().focused.unwrap_or(true)) {

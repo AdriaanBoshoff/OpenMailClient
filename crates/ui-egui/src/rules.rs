@@ -21,6 +21,12 @@ enum Fill {
     Size,
     Folder,
     Name,
+    /// Days, on or after and on or before, YYYY-MM-DD.
+    Days,
+    /// Addresses, separated by semicolons.
+    Addresses,
+    /// Words of mine, on several lines.
+    Text,
 }
 
 const TESTS: &[(&str, &str, Fill)] = &[
@@ -38,6 +44,9 @@ const TESTS: &[(&str, &str, Fill)] = &[
     ("importance", "Marked as importance", Fill::Level),
     ("size", "With a size in KB", Fill::Size),
     ("meeting", "Which is a meeting request or answer", Fill::Nothing),
+    ("senderAddress", "With words in the sender's address", Fill::Words),
+    ("recipientAddress", "With words in the recipient's address", Fill::Words),
+    ("received", "Received in a span of days", Fill::Days),
 ];
 
 const ACTS: &[(&str, &str, Fill)] = &[
@@ -50,6 +59,9 @@ const ACTS: &[(&str, &str, Fill)] = &[
     ("category", "Put it in the category", Fill::Name),
     ("importance", "Mark it as importance", Fill::Level),
     ("stop", "Stop processing more rules", Fill::Nothing),
+    ("forward", "Forward it to", Fill::Addresses),
+    ("reply", "Reply to the sender with", Fill::Text),
+    ("sound", "Play a sound", Fill::Nothing),
 ];
 
 const LEVELS: [&str; 3] = ["low", "normal", "high"];
@@ -69,13 +81,19 @@ impl Part {
         let text = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         let words: Vec<&str> = v.get("words").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
         let n = |k: &str| v.get(k).and_then(Value::as_u64).filter(|&n| n > 0).map(|n| n.to_string()).unwrap_or_default();
-        Part {
-            kind: text(key),
-            text: if words.is_empty() { text(if text(key) == "category" { "name" } else { "folder" }) } else { words.join("; ") },
-            level: LEVELS.iter().position(|l| *l == text("level")).unwrap_or(1),
-            min: n("min"),
-            max: n("max"),
+        let kind = text(key);
+        if kind == "received" {
+            return Part { kind, min: text("after"), max: text("before"), level: 1, ..Part::default() };
         }
+        let to: Vec<&str> = v.get("to").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+        let filled = match kind.as_str() {
+            "forward" => to.join("; "),
+            "reply" => text("words"),
+            "category" => text("name"),
+            _ if words.is_empty() => text("folder"),
+            _ => words.join("; "),
+        };
+        Part { kind, text: filled, level: LEVELS.iter().position(|l| *l == text("level")).unwrap_or(1), min: n("min"), max: n("max") }
     }
 
     fn json(&self, key: &str, fill: Fill) -> Value {
@@ -90,6 +108,12 @@ impl Part {
             }
             Fill::Folder => v["folder"] = json!(self.text),
             Fill::Name => v["name"] = json!(self.text.trim()),
+            Fill::Days => {
+                v["after"] = json!(self.min.trim());
+                v["before"] = json!(self.max.trim());
+            }
+            Fill::Addresses => v["to"] = json!(self.text.split([';', ',']).map(str::trim).filter(|a| !a.is_empty()).collect::<Vec<_>>()),
+            Fill::Text => v["words"] = json!(self.text),
         }
         v
     }
@@ -178,6 +202,24 @@ fn parts(ui: &mut Ui, t: &crate::theme::Tokens, salt: &str, list: &mut Vec<Part>
                     ui.add(LineEdit::new(&mut p.min, id.with("min")).desired_width(60.0).char_limit(10).hint("at least", None));
                     ui.label(egui::RichText::new("to").color(t.text_dim));
                     ui.add(LineEdit::new(&mut p.max, id.with("max")).desired_width(60.0).char_limit(10).hint("any", None));
+                }
+                Fill::Days => {
+                    ui.add(LineEdit::new(&mut p.min, id.with("after")).desired_width(90.0).char_limit(10).hint("from YYYY-MM-DD", None));
+                    ui.label(egui::RichText::new("to").color(t.text_dim));
+                    ui.add(LineEdit::new(&mut p.max, id.with("before")).desired_width(90.0).char_limit(10).hint("any day", None));
+                }
+                Fill::Addresses => {
+                    ui.add(LineEdit::new(&mut p.text, id).desired_width(260.0).char_limit(2000).hint("name@example.org; another@example.org", None));
+                }
+                Fill::Text => {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut p.text)
+                            .id(id)
+                            .desired_width(260.0)
+                            .desired_rows(3)
+                            .char_limit(8000)
+                            .hint_text("What the reply says"),
+                    );
                 }
                 Fill::Folder => {
                     let shown = if p.text.is_empty() { "Choose a folder" } else { p.text.as_str() };

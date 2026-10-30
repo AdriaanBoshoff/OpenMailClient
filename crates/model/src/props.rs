@@ -9,6 +9,9 @@ pub mod pid {
     /// When a message stops being of use ([MS-OXPROPS] PidTagExpiryTime).
     pub const EXPIRY_TIME: u16 = 0x0015;
     pub const IMPORTANCE: u16 = 0x0017;
+    /// The automatic answers a message asks not to be sent to it ([MS-OXPROPS]
+    /// PidTagAutoResponseSuppress, [MS-OXCMAIL] 2.2.3.2.20); set on what a rule writes.
+    pub const AUTO_RESPONSE_SUPPRESS: u16 = 0x3FDF;
     pub const MESSAGE_CLASS: u16 = 0x001A;
     pub const SUBJECT: u16 = 0x0037;
     pub const CLIENT_SUBMIT_TIME: u16 = 0x0039;

@@ -40,6 +40,13 @@ pub fn write(item: &Item) -> Vec<u8> {
     if !item.categories.is_empty() {
         header(&mut out, "Keywords", &encode_text(&item.categories.join(", ")));
     }
+    // Written by a rule, not a person: an answer is auto-replied, anything else auto-generated
+    // ([RFC 3834] 5), and no automatic answer is to come back ([MS-OXCMAIL] 2.2.3.2.20).
+    if item.props.i32(pid::AUTO_RESPONSE_SUPPRESS).is_some_and(|v| v != 0) {
+        let answers = item.props.str(pid::IN_REPLY_TO_ID).is_some_and(|v| !v.is_empty());
+        header(&mut out, "Auto-Submitted", if answers { "auto-replied" } else { "auto-generated" });
+        header(&mut out, "X-Auto-Response-Suppress", "All");
+    }
     if item.is_unsent() {
         header(&mut out, "X-Unsent", "1");
     }

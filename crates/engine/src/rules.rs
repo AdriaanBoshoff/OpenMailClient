@@ -10,7 +10,8 @@
 //! Rules are kept with the settings. What is read is hostile: names, words and lists are capped,
 //! and a part that makes no sense is left out and counted.
 
-use openmailclient_model::{Item, RECIP_BCC, RECIP_CC, RECIP_TO, meeting, pid};
+use openmailclient_model::zone::Zone;
+use openmailclient_model::{Item, RECIP_BCC, RECIP_CC, RECIP_TO, meeting, pid, time};
 use serde_json::{Value, json};
 
 pub const MAX_RULES: usize = 256;
@@ -22,6 +23,28 @@ pub const MAX_WORD: usize = 255;
 pub const MAX_PARTS: usize = 32;
 /// A folder's path, in characters.
 const MAX_PATH: usize = 1024;
+/// Addresses one rule forwards to, and the length of the words it replies with.
+const MAX_TO: usize = 20;
+const MAX_REPLY: usize = 8000;
+
+/// The day number (since 1970) of "YYYY-MM-DD".
+fn day_of_text(t: &str) -> Option<i64> {
+    let mut parts = t.trim().splitn(3, '-');
+    let y: i64 = parts.next()?.parse().ok()?;
+    let m: u32 = parts.next()?.parse().ok()?;
+    let d: u32 = parts.next()?.parse().ok()?;
+    if !(1601..=9999).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let day = time::to_unix(time::from_civil(y, m, d, 0, 0, 0, 0)).div_euclid(86_400);
+    // The 31st of a month of 30 days is no day.
+    (day_text(day) == format!("{y:04}-{m:02}-{d:02}")).then_some(day)
+}
+
+fn day_text(day: i64) -> String {
+    let c = time::civil(time::from_unix(day.saturating_mul(86_400)), 0);
+    format!("{:04}-{:02}-{:02}", c.year, c.month, c.day)
+}
 
 /// What a message is tested for. Words are looked for anywhere in what is named, any case, and
 /// any one of them is enough.
@@ -52,6 +75,16 @@ pub enum Test {
     },
     /// A meeting's request, answer or cancellation.
     Meeting,
+    /// From an address (not a name) that has one of these.
+    SenderAddress(Vec<String>),
+    /// Sent to an address (To or Cc, not a name) that has one of these.
+    RecipientAddress(Vec<String>),
+    /// Received on or after the day `after` and on or before the day `before`, here, as day
+    /// numbers since 1970; either may be open.
+    Received {
+        after: Option<i64>,
+        before: Option<i64>,
+    },
 }
 
 /// What is done to a message a rule takes.
@@ -70,6 +103,12 @@ pub enum Act {
     Importance(i32),
     /// No rule after this one is tried.
     Stop,
+    /// Forwarded to these addresses, through the Outbox.
+    Forward(Vec<String>),
+    /// Answered to its sender with these words above it, through the Outbox.
+    Reply(String),
+    /// The new-mail sound played, whatever the new-mail options say.
+    Sound,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -86,6 +125,76 @@ pub struct Rule {
 }
 
 /// What the rules that take a message say to do, put together.
+/// What rules have answered and forwarded, so that no sender is answered twice and forwarding
+/// cannot run on without end between two people's rules.
+#[derive(Clone, Debug, Default)]
+pub struct Answered {
+    /// The senders answered, lower case.
+    replied: Vec<String>,
+    /// When each forward of the last hour was made (store time).
+    forwards: Vec<i64>,
+}
+
+/// Forwards made by rules in an hour, and senders remembered as answered.
+pub const MAX_FORWARDS_AN_HOUR: usize = 100;
+const MAX_REPLIED: usize = 5000;
+const HOUR: i64 = 36_000_000_000;
+
+impl Answered {
+    /// Whether `sender` may be answered now; it is taken as answered.
+    pub fn may_reply(&mut self, sender: &str) -> bool {
+        let sender = sender.trim().to_lowercase();
+        if sender.is_empty() || self.replied.contains(&sender) {
+            return false;
+        }
+        if self.replied.len() >= MAX_REPLIED {
+            self.replied.remove(0);
+        }
+        self.replied.push(sender);
+        true
+    }
+
+    /// Whether another forward may be made at `now`; it is counted.
+    pub fn may_forward(&mut self, now: i64) -> bool {
+        self.forwards.retain(|&t| t > now.saturating_sub(HOUR) && t <= now);
+        if self.forwards.len() >= MAX_FORWARDS_AN_HOUR {
+            return false;
+        }
+        self.forwards.push(now);
+        true
+    }
+}
+
+/// Whether `item` was written by a machine, not a person, so that no rule answers it: marked
+/// so ([RFC 3834] 5, 3.1.8), sent to a list ([RFC 2369], [RFC 2919]) or in bulk, a delivery
+/// report, or from an address that takes no answers.
+pub fn automatic(item: &Item) -> bool {
+    let head = item.props.str(pid::TRANSPORT_MESSAGE_HEADERS).unwrap_or("").to_lowercase();
+    let field = |name: &str| head.lines().filter_map(move |l| l.strip_prefix(name).map(|v| v.trim().to_string())).collect::<Vec<_>>();
+    if field("auto-submitted:").iter().any(|v| !v.starts_with("no")) {
+        return true;
+    }
+    if field("precedence:").iter().any(|v| ["bulk", "list", "junk"].iter().any(|b| v.starts_with(b))) {
+        return true;
+    }
+    if !field("list-id:").is_empty() || !field("list-unsubscribe:").is_empty() || !field("x-auto-response-suppress:").is_empty() {
+        return true;
+    }
+    if item.props.i32(pid::AUTO_RESPONSE_SUPPRESS).is_some_and(|v| v != 0) {
+        return true;
+    }
+    let class = item.props.str(pid::MESSAGE_CLASS).unwrap_or("").to_ascii_lowercase();
+    if class.starts_with("report.") {
+        return true;
+    }
+    let from = item.sender_email().to_ascii_lowercase();
+    let local = from.split('@').next().unwrap_or("");
+    from.is_empty()
+        || ["mailer-daemon", "postmaster", "noreply", "no-reply", "donotreply", "do-not-reply", "bounce"]
+            .iter()
+            .any(|n| local == *n || local.starts_with(&format!("{n}+")) || local.starts_with(&format!("{n}-")))
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Plan {
     /// The names of the rules that took it, in order.
@@ -100,6 +209,11 @@ pub struct Plan {
     pub copies: Vec<String>,
     /// Put in Deleted Items, whatever else was asked.
     pub delete: bool,
+    /// Forwarded to these addresses.
+    pub forward: Vec<String>,
+    /// Answered with these words.
+    pub reply: Option<String>,
+    pub sound: bool,
 }
 
 /// What a message is and who it went to, lowered once for every rule.
@@ -109,6 +223,9 @@ struct Seen {
     subject: String,
     body: String,
     header: String,
+    /// The sender's addresses alone, and those it was sent to (To and Cc).
+    from_address: String,
+    to_address: String,
 }
 
 /// The addresses of a message's recipients of one kind.
@@ -140,6 +257,14 @@ impl Seen {
             subject: item.subject().to_lowercase(),
             body: item.body_text().to_lowercase(),
             header: item.props.str(pid::TRANSPORT_MESSAGE_HEADERS).unwrap_or("").to_lowercase(),
+            from_address: [
+                item.sender_email().as_str(),
+                item.props.str(pid::SENDER_SMTP_ADDRESS).unwrap_or(""),
+                item.props.str(pid::SENT_REPRESENTING_SMTP_ADDRESS).unwrap_or(""),
+            ]
+            .join("\n")
+            .to_lowercase(),
+            to_address: [addresses(item, RECIP_TO), addresses(item, RECIP_CC)].concat().join("\n"),
         }
     }
 }
@@ -149,7 +274,7 @@ fn has_any(text: &str, words: &[String]) -> bool {
 }
 
 impl Test {
-    fn met(&self, item: &Item, seen: &Seen, me: &[String]) -> bool {
+    fn met(&self, item: &Item, seen: &Seen, me: &[String], zone: &Zone) -> bool {
         let mine = |kind: i32| addresses(item, kind).iter().any(|a| me.iter().any(|m| m.eq_ignore_ascii_case(a)));
         match self {
             Test::From(w) => has_any(&seen.from, w),
@@ -172,20 +297,30 @@ impl Test {
                 kb >= *min && (*max == 0 || kb <= *max)
             }
             Test::Meeting => meeting::is_meeting_message(item),
+            Test::SenderAddress(w) => has_any(&seen.from_address, w),
+            Test::RecipientAddress(w) => has_any(&seen.to_address, w),
+            Test::Received { after, before } => {
+                let at = item.time();
+                if at <= 0 {
+                    return false;
+                }
+                let day = zone.day_of(at);
+                after.is_none_or(|a| day >= a) && before.is_none_or(|b| day <= b)
+            }
         }
     }
 }
 
 /// What the rules that are on say to do with `item`, come through the account `account`, for
 /// an owner whose addresses are `me`.
-pub fn plan(rules: &[Rule], item: &Item, account: Option<&str>, me: &[String]) -> Plan {
+pub fn plan(rules: &[Rule], item: &Item, account: Option<&str>, me: &[String], zone: &Zone) -> Plan {
     let seen = Seen::of(item);
     let mut plan = Plan::default();
     for rule in rules.iter().filter(|r| r.on) {
         if rule.account.as_deref().is_some_and(|a| Some(a) != account) {
             continue;
         }
-        if !rule.when.iter().all(|t| t.met(item, &seen, me)) || rule.except.iter().any(|t| t.met(item, &seen, me)) {
+        if !rule.when.iter().all(|t| t.met(item, &seen, me, zone)) || rule.except.iter().any(|t| t.met(item, &seen, me, zone)) {
             continue;
         }
         plan.rules.push(rule.name.clone());
@@ -209,6 +344,19 @@ pub fn plan(rules: &[Rule], item: &Item, account: Option<&str>, me: &[String]) -
                 }
                 Act::Importance(l) => plan.importance = Some(*l),
                 Act::Stop => stop = true,
+                Act::Forward(to) => {
+                    for a in to {
+                        if !plan.forward.iter().any(|x| x.eq_ignore_ascii_case(a)) {
+                            plan.forward.push(a.clone());
+                        }
+                    }
+                }
+                Act::Reply(words) => {
+                    if plan.reply.is_none() {
+                        plan.reply = Some(words.clone());
+                    }
+                }
+                Act::Sound => plan.sound = true,
             }
         }
         if stop {
@@ -281,6 +429,28 @@ impl Test {
                 Test::Size { min, max }
             }
             "meeting" => Test::Meeting,
+            "senderAddress" => Test::SenderAddress(words_of(v)?),
+            "recipientAddress" => Test::RecipientAddress(words_of(v)?),
+            "received" => {
+                let day = |k: &str| -> Result<Option<i64>, String> {
+                    match v.get(k) {
+                        None | Some(Value::Null) => Ok(None),
+                        Some(Value::String(t)) if t.is_empty() => Ok(None),
+                        Some(Value::String(t)) => day_of_text(t).map(Some).ok_or_else(|| format!("\"{k}\" is a day, YYYY-MM-DD")),
+                        Some(_) => Err(format!("\"{k}\" is a day, YYYY-MM-DD")),
+                    }
+                };
+                let (after, before) = (day("after")?, day("before")?);
+                if after.is_none() && before.is_none() {
+                    return Err("a received condition has an \"after\" or a \"before\" day".into());
+                }
+                if let (Some(a), Some(b)) = (after, before)
+                    && b < a
+                {
+                    return Err("its \"before\" day is not before its \"after\" day".into());
+                }
+                Test::Received { after, before }
+            }
             other => return Err(format!("\"{}\" is not a condition rules know", other.chars().take(32).collect::<String>())),
         })
     }
@@ -302,6 +472,11 @@ impl Test {
             Test::Importance(l) => json!({ "test": "importance", "level": level_name(*l) }),
             Test::Size { min, max } => json!({ "test": "size", "min": min, "max": max }),
             Test::Meeting => json!({ "test": "meeting" }),
+            Test::SenderAddress(x) => w("senderAddress", x),
+            Test::RecipientAddress(x) => w("recipientAddress", x),
+            Test::Received { after, before } => {
+                json!({ "test": "received", "after": after.map(day_text), "before": before.map(day_text) })
+            }
         }
     }
 
@@ -323,6 +498,12 @@ impl Test {
             Test::Size { min, max: 0 } => format!("of {min} KB or more"),
             Test::Size { min, max } => format!("of {min} to {max} KB"),
             Test::Meeting => "which is a meeting's request, answer or cancellation".into(),
+            Test::SenderAddress(w) => format!("with {} in the sender's address", quoted(w)),
+            Test::RecipientAddress(w) => format!("with {} in the recipient's address", quoted(w)),
+            Test::Received { after: Some(a), before: Some(b) } => format!("received from {} to {}", day_text(*a), day_text(*b)),
+            Test::Received { after: Some(a), before: None } => format!("received on or after {}", day_text(*a)),
+            Test::Received { after: None, before: Some(b) } => format!("received on or before {}", day_text(*b)),
+            Test::Received { .. } => "received at any time".into(),
         }
     }
 }
@@ -354,6 +535,28 @@ impl Act {
             }
             "importance" => Act::Importance(level_of(v)?),
             "stop" => Act::Stop,
+            "forward" => {
+                let list = v.get("to").and_then(Value::as_array).ok_or("\"to\" is a list of addresses to forward to")?;
+                let to: Vec<String> = list
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|a| a.contains('@') && a.len() <= 320 && !a.chars().any(|c| c.is_control() || c.is_whitespace() || ",;<>\"".contains(c)))
+                    .map(str::to_string)
+                    .collect();
+                if to.is_empty() || to.len() != list.len() || to.len() > MAX_TO {
+                    return Err("a forward's \"to\" is 1 to 20 addresses, each name@domain".into());
+                }
+                Act::Forward(to)
+            }
+            "reply" => {
+                let words = v.get("words").and_then(Value::as_str).unwrap_or("");
+                if words.trim().is_empty() || words.len() > MAX_REPLY {
+                    return Err("a reply's \"words\" are 1 to 8000 characters".into());
+                }
+                Act::Reply(words.replace("\r\n", "\n"))
+            }
+            "sound" => Act::Sound,
             other => return Err(format!("\"{}\" is not an action rules know", other.chars().take(32).collect::<String>())),
         })
     }
@@ -369,6 +572,9 @@ impl Act {
             Act::Category(c) => json!({ "do": "category", "name": c }),
             Act::Importance(l) => json!({ "do": "importance", "level": level_name(*l) }),
             Act::Stop => json!({ "do": "stop" }),
+            Act::Forward(to) => json!({ "do": "forward", "to": to }),
+            Act::Reply(w) => json!({ "do": "reply", "words": w }),
+            Act::Sound => json!({ "do": "sound" }),
         }
     }
 
@@ -383,6 +589,9 @@ impl Act {
             Act::Category(c) => format!("put it in the {c} category"),
             Act::Importance(l) => format!("mark it as {} importance", level_name(*l)),
             Act::Stop => "stop processing more rules".into(),
+            Act::Forward(to) => format!("forward it to {}", to.join(", ")),
+            Act::Reply(_) => "reply to the sender with words of mine".into(),
+            Act::Sound => "play a sound".into(),
         }
     }
 }
@@ -511,19 +720,19 @@ mod tests {
             rule(json!({ "name": "Never", "then": [{ "do": "delete" }] })),
         ];
         let m = message("news@example.test", &["pat@example.test"], "Launch day", "");
-        let p = plan(&rules, &m, None, &me);
+        let p = plan(&rules, &m, None, &me, &Zone::fixed(0));
         assert_eq!(p.rules, ["News", "Copy"]);
         assert_eq!((p.move_to.as_deref(), p.copies.as_slice(), p.read, p.delete), (Some("Inbox/News"), &["Launch".to_string()][..], true, false));
         // The last takes everything else.
-        let other = plan(&rules, &message("kim@example.test", &["x@example.test"], "Hi", ""), None, &me);
+        let other = plan(&rules, &message("kim@example.test", &["x@example.test"], "Hi", ""), None, &me, &Zone::fixed(0));
         assert_eq!((other.rules.as_slice(), other.delete), (&["Never".to_string()][..], true));
         // An exception, a rule turned off, and one for another account.
         let mut rules = rules;
         rules[0].except = vec![Test::OnlyToMe];
         rules[1].on = false;
         rules[2].account = Some("a2".into());
-        assert_eq!(plan(&rules, &m, Some("a1"), &me), Plan::default());
-        assert_eq!(plan(&rules, &m, Some("a2"), &me).rules, ["Never"]);
+        assert_eq!(plan(&rules, &m, Some("a1"), &me, &Zone::fixed(0)), Plan::default());
+        assert_eq!(plan(&rules, &m, Some("a2"), &me, &Zone::fixed(0)).rules, ["Never"]);
     }
 
     #[test]
@@ -540,5 +749,86 @@ mod tests {
         assert_eq!((back, ignored), (vec![r], 6));
         let many: Vec<Value> = (0..MAX_RULES + 5).map(|n| json!({ "name": format!("r{n}"), "then": [{ "do": "markRead" }] })).collect();
         assert_eq!(of_json(&Value::Array(many)).0.len(), MAX_RULES);
+    }
+
+    #[test]
+    fn addresses_days_forwards_and_replies() {
+        let zone = Zone::fixed(0);
+        let rule = |when: Value, then: Value| Rule::of_json(&json!({ "name": "r", "when": [when], "then": [then] })).unwrap();
+        let mut m = message("Kim <kim@shop.example>", &["pat@example.test"], "Hello", "");
+        m.props.set_str(pid::SENDER_EMAIL_ADDRESS, "kim@shop.example");
+        m.props.set_str(pid::SENDER_NAME, "Kim Shop");
+        m.props.set(pid::MESSAGE_DELIVERY_TIME, openmailclient_model::PropValue::Time(time::from_civil(2026, 10, 13, 23, 30, 0, 0)));
+        let took = |r: &Rule| !plan(std::slice::from_ref(r), &m, None, &[], &zone).rules.is_empty();
+        // The address alone, not the name.
+        assert!(took(&rule(json!({ "test": "senderAddress", "words": ["@shop.example"] }), json!({ "do": "markRead" }))));
+        assert!(!took(&rule(json!({ "test": "senderAddress", "words": ["Kim Shop"] }), json!({ "do": "markRead" }))));
+        assert!(took(&rule(json!({ "test": "recipientAddress", "words": ["pat@"] }), json!({ "do": "markRead" }))));
+        // Days, both ends kept; in a zone two hours east, half past eleven is the next day.
+        let on = rule(json!({ "test": "received", "after": "2026-10-13", "before": "2026-10-13" }), json!({ "do": "sound" }));
+        assert!(took(&on));
+        assert!(plan(std::slice::from_ref(&on), &m, None, &[], &zone).sound);
+        assert!(plan(std::slice::from_ref(&on), &m, None, &[], &Zone::fixed(120)).rules.is_empty());
+        assert!(took(&rule(json!({ "test": "received", "after": "2026-10-01" }), json!({ "do": "markRead" }))));
+        assert!(!took(&rule(json!({ "test": "received", "before": "2026-10-12" }), json!({ "do": "markRead" }))));
+        assert_eq!(Rule::of_json(&on.to_json()).unwrap(), on);
+        assert!(on.words(None).contains("received from 2026-10-13 to 2026-10-13"), "{}", on.words(None));
+        for bad in [
+            json!({ "test": "received" }),
+            json!({ "test": "received", "after": "2026-02-30" }),
+            json!({ "test": "received", "after": "2026-10-13", "before": "2026-10-01" }),
+            json!({ "test": "received", "after": 5 }),
+        ] {
+            assert!(Test::of_json(&bad).is_err(), "{bad}");
+        }
+        // Forwards gather their addresses once; the first reply's words are the ones written.
+        let two = vec![
+            rule(json!({ "test": "senderAddress", "words": ["kim"] }), json!({ "do": "forward", "to": ["lee@example.test", "sam@example.test"] })),
+            rule(json!({ "test": "senderAddress", "words": ["kim"] }), json!({ "do": "forward", "to": ["LEE@example.test"] })),
+        ];
+        assert_eq!(plan(&two, &m, None, &[], &zone).forward, ["lee@example.test", "sam@example.test"]);
+        let reply = rule(json!({ "test": "senderAddress", "words": ["kim"] }), json!({ "do": "reply", "words": "Thanks,\r\nPat" }));
+        assert_eq!(plan(std::slice::from_ref(&reply), &m, None, &[], &zone).reply.as_deref(), Some("Thanks,\nPat"));
+        assert_eq!(Rule::of_json(&reply.to_json()).unwrap(), reply);
+        for bad in [
+            json!({ "do": "forward", "to": [] }),
+            json!({ "do": "forward", "to": ["not an address"] }),
+            json!({ "do": "forward", "to": ["a@b.example", 5] }),
+            json!({ "do": "forward", "to": ["a@b.example>, c@d.example"] }),
+            json!({ "do": "reply", "words": "  " }),
+            json!({ "do": "reply", "words": "x".repeat(MAX_REPLY + 1) }),
+        ] {
+            assert!(Act::of_json(&bad).is_err(), "{bad}");
+        }
+        let many: Vec<String> = (0..=MAX_TO).map(|n| format!("p{n}@example.test")).collect();
+        assert!(Act::of_json(&json!({ "do": "forward", "to": many })).is_err());
+    }
+
+    #[test]
+    fn machines_are_not_answered() {
+        let person = message("kim@shop.example", &["pat@example.test"], "Hello", "");
+        assert!(!automatic(&person));
+        for head in ["Auto-Submitted: auto-replied", "Precedence: bulk", "List-Id: <news.example>", "List-Unsubscribe: <mailto:x@example>"] {
+            let mut m = person.clone();
+            m.props.set_str(pid::TRANSPORT_MESSAGE_HEADERS, &format!("From: kim@shop.example\r\n{head}\r\n"));
+            assert!(automatic(&m), "{head}");
+        }
+        let mut no = person.clone();
+        no.props.set_str(pid::TRANSPORT_MESSAGE_HEADERS, "Auto-Submitted: no\r\n");
+        assert!(!automatic(&no));
+        for from in ["mailer-daemon@example.test", "no-reply@shop.example", "noreply+x@shop.example", ""] {
+            let mut m = person.clone();
+            m.props.set_str(pid::SENDER_EMAIL_ADDRESS, from);
+            assert!(automatic(&m), "{from}");
+        }
+        let mut answered = Answered::default();
+        assert!(answered.may_reply("Kim@shop.example"));
+        assert!(!answered.may_reply("kim@SHOP.example"), "one answer to a sender");
+        let hour = 36_000_000_000;
+        for _ in 0..MAX_FORWARDS_AN_HOUR {
+            assert!(answered.may_forward(hour * 10));
+        }
+        assert!(!answered.may_forward(hour * 10 + 1));
+        assert!(answered.may_forward(hour * 11 + 1), "an hour later there may be more");
     }
 }

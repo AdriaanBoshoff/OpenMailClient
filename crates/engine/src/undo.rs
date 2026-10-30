@@ -21,13 +21,31 @@ pub enum Step {
     /// Items were put in `folder` from a file at once: `added` are new, and each of `updated`
     /// was brought up to date from what it was.
     Imported { what: &'static str, store: usize, folder: FolderId, added: Vec<u64>, updated: Vec<(u64, Box<Item>)> },
+    /// Rules were run on messages of a store at once (Run Rules Now): each as it was, where it
+    /// is now and the copies made of it.
+    Ruled { what: &'static str, store: usize, done: Vec<Ruled> },
+}
+
+/// What a rule did to one message, with what is needed to take it back.
+#[derive(Clone, Debug)]
+pub struct Ruled {
+    pub from: FolderId,
+    pub before: Box<Item>,
+    /// Where it is now.
+    pub at: FolderId,
+    pub id: u64,
+    pub copies: Vec<(FolderId, u64)>,
 }
 
 impl Step {
     /// The command that did it, as its label reads.
     pub fn what(&self) -> &'static str {
         match self {
-            Self::Edited { what, .. } | Self::Moved { what, .. } | Self::Removed { what, .. } | Self::Imported { what, .. } => what,
+            Self::Edited { what, .. }
+            | Self::Moved { what, .. }
+            | Self::Removed { what, .. }
+            | Self::Imported { what, .. }
+            | Self::Ruled { what, .. } => what,
             Self::Discarded => "Discard",
         }
     }
@@ -53,6 +71,11 @@ impl Session {
                 }
                 // What was made or brought up to date is known by its id too, so a delete
                 // taken back before it does not leave it behind.
+                Step::Ruled { store, done, .. } if *store == in_store => {
+                    for r in done.iter_mut().filter(|r| r.at == in_folder && r.id == was) {
+                        r.id = now;
+                    }
+                }
                 Step::Imported { store, folder, added, updated, .. } if *store == in_store && *folder == in_folder => {
                     for id in added.iter_mut().filter(|id| **id == was) {
                         *id = now;
@@ -114,6 +137,52 @@ impl Session {
                 self.reload_calendar()?;
                 self.reload_people()?;
                 self.reload_tasks()?;
+                return Ok(what);
+            }
+            Step::Ruled { store, done, .. } => {
+                // Each message is put back as it was, where it was, and its copies go; one gone
+                // since is left as it is.
+                let mut left = 0usize;
+                let mut back_at = Vec::new();
+                for r in done.into_iter().rev() {
+                    let Some(st) = self.stores.get_mut(store) else { break };
+                    for (f, id) in &r.copies {
+                        let _ = st.remove(*f, ItemId(*id));
+                    }
+                    let put = if r.at == r.from {
+                        st.update(r.from, ItemId(r.id), *r.before).map(|()| r.id)
+                    } else {
+                        match st.remove(r.at, ItemId(r.id)) {
+                            Ok(now) => match st.add(r.from, *r.before) {
+                                Ok(back) => Ok(back.0),
+                                Err(e) => {
+                                    // It stays where the rule put it rather than be nowhere.
+                                    let _ = st.add(r.at, now);
+                                    Err(e)
+                                }
+                            },
+                            Err(e) => Err(e),
+                        }
+                    };
+                    match put {
+                        Ok(back) => back_at.push((r.from, r.at, r.id, back)),
+                        Err(_) => left += 1,
+                    }
+                }
+                for (from, at, was, back) in back_at {
+                    if at != from {
+                        self.renumber(store, at, was, back);
+                    }
+                }
+                self.refresh_folders(store);
+                self.reload_rows()?;
+                if self.selected.is_some_and(|id| !self.rows.iter().any(|r| r.id == id)) {
+                    self.selected = None;
+                    self.open = None;
+                }
+                if left > 0 {
+                    return Err(EngineError::Format(format!("{what} was undone but for {left} message(s) changed or gone since")));
+                }
                 return Ok(what);
             }
             Step::Removed { store, folder, was, mut item, .. } => {

@@ -849,3 +849,28 @@ fn restore(s: &mut Session, _: &Value) -> CmdResult {
     s.compose = Some(draft);
     Ok(json!({ "left": s.set_aside.len() }))
 }
+
+/// A forward or a reply a rule makes of `item` to `to`, filed in the Outbox to go with the next
+/// Send/Receive, from the account the message reached; a reply says `words` above the message
+/// it answers. Nothing is sent from here.
+pub(crate) fn by_rule(s: &mut Session, item: &Item, forward: bool, to: &str, words: &str) -> Result<(), EngineError> {
+    let mut draft =
+        Draft { kind: if forward { "Forward" } else { "Reply" }, to: clamp(to, MAX_LINE), account: account_reached(s, item), ..Draft::default() };
+    if forward {
+        draft.subject = prefixed("FW:", &item.subject());
+        draft.attachments = item.attachments.clone();
+        draft.body = clamp(&quoted(s, item), MAX_BODY);
+    } else {
+        draft.subject = prefixed("RE:", &item.subject());
+        (draft.in_reply_to, draft.references) = thread_of(item);
+        draft.body = clamp(&format!("{words}{}", quoted(s, item)), MAX_BODY);
+    }
+    sign(s, &mut draft);
+    let store = drafts_store(s, &draft)?.ok_or_else(|| EngineError::Format("there is no writable data file to keep the message in".into()))?;
+    let folder = s.find_folder(store, FolderKind::Outbox).ok_or_else(|| EngineError::Format("this data file has no Outbox".into()))?;
+    let mut made = build(s, &draft, true);
+    made.props.set(pid::AUTO_RESPONSE_SUPPRESS, PropValue::Int32(-1));
+    s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.add(folder, made)?;
+    s.refresh_folders(store);
+    Ok(())
+}

@@ -140,6 +140,11 @@ pub struct Arrivals {
     /// Accounts received from in this run: from the second time on, a POP3 server that had
     /// nothing the first time is not taken to be received from for the first time.
     pub(crate) heard_from: Vec<String>,
+    /// How many times a rule has asked for the new-mail sound; the window plays it when this
+    /// goes up.
+    pub sounds: u64,
+    /// What rules have answered and forwarded in this run.
+    pub(crate) answered: crate::rules::Answered,
 }
 
 impl Arrivals {
