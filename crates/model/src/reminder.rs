@@ -6,6 +6,12 @@
 //! (3.1.4.6.2); dismissing one of a single item takes the reminder away, and dismissing one of
 //! a series puts the signal time on its next occurrence (3.1.4.6.1), so each occurrence is
 //! reminded of in its turn and none before it again.
+//!
+//! An occurrence changed on its own keeps a reminder of its own in its ExceptionInfo
+//! ([MS-OXOCAL] 2.2.1.44.2, ReminderSet and ReminderDelta): set where the series has none, taken
+//! away where it has one, or given so many minutes before. A series with no reminder of its own
+//! is still looked at for those, as Outlook's Reminders search folder looks at every recurring
+//! item ([MS-OXORMDR] 2.2.2.1); once the last of them is dismissed, they are put away with it.
 
 use crate::Item;
 use crate::calendar::{self, Appointment, MINUTE, bool_of, named, set_named, time_of};
@@ -92,12 +98,15 @@ fn reminder_set(item: &Item) -> bool {
 /// task is done, or a series has no occurrence left to remind of. `here` is the zone days are
 /// read in.
 pub fn of(item: &Item, now: i64, here: &Zone) -> Option<Reminder> {
-    if !reminder_set(item) {
-        return None;
-    }
     if calendar::is_appointment(item) {
         let a = Appointment::of(item)?;
+        if !reminder_set(item) && !occurrence_reminded(&a) {
+            return None;
+        }
         return appointment(item, &a, now);
+    }
+    if !reminder_set(item) {
+        return None;
     }
     let is_task = task::is_task(item);
     if !is_task && !task::is_flagged(item) {
@@ -124,11 +133,31 @@ fn own(a: &Appointment) -> Option<i64> {
     a.reminder.map(|m| a.start.saturating_sub(i64::from(m).clamp(0, MAX_BEFORE).saturating_mul(MINUTE)))
 }
 
+/// Whether an occurrence of a series changed on its own has a reminder of its own set.
+fn occurrence_reminded(a: &Appointment) -> bool {
+    a.recurrence.as_ref().is_some_and(|r| r.exceptions.iter().any(|e| e.reminder_set == Some(true)))
+}
+
+/// The most minutes before its start any occurrence of `a` is reminded of: the series' own, or
+/// one an occurrence changed on its own gives.
+fn longest_before(a: &Appointment) -> i64 {
+    let own = i64::from(a.reminder.unwrap_or(0));
+    let changed = a.recurrence.as_ref().map_or(0, |r| {
+        r.exceptions
+            .iter()
+            .filter(|e| e.reminder_set != Some(false))
+            .map(|e| i64::from(e.reminder_delta.unwrap_or(if e.reminder_set == Some(true) { 15 } else { 0 })))
+            .max()
+            .unwrap_or(0)
+    });
+    own.max(changed).clamp(0, MAX_BEFORE)
+}
+
 /// The occurrences of a series whose reminder times fall in `[from, to)`, each with it,
 /// earliest first.
 fn reminded_between(a: &Appointment, from: i64, to: i64) -> Vec<(i64, Appointment)> {
     // An occurrence starts up to so long after its reminder.
-    let before = i64::from(a.reminder.unwrap_or(0)).clamp(0, MAX_BEFORE).saturating_mul(MINUTE).saturating_add(DAY);
+    let before = longest_before(a).saturating_mul(MINUTE).saturating_add(DAY);
     let mut list: Vec<_> = a
         .occurrences(from, to.saturating_add(before))
         .into_iter()
@@ -171,18 +200,36 @@ pub fn dismiss(item: &mut Item, now: i64, here: &Zone) -> bool {
     let Some(r) = of(item, now, here) else { return false };
     let c = pset::PSETID_COMMON;
     let series = if calendar::is_appointment(item) { Appointment::of(item).filter(|a| a.recurrence.is_some()) } else { None };
-    // The next after the one dismissed: its own reminder time, not a snoozed one, is counted from.
-    let next = series.and_then(|a| {
+    // The next after the one dismissed: its own reminder time, not a snoozed one, is counted
+    // from, the occurrence's own where it was changed on its own.
+    let next = series.as_ref().and_then(|a| {
         let Due::At(start) = r.due else { return None };
-        let at = own(&Appointment { start, ..a.clone() })?;
-        reminded_between(&a, at.saturating_add(1), at.saturating_add(LOOK)).into_iter().next()
+        let this = a.occurrences(start, start.saturating_add(1)).into_iter().find(|o| o.start == start && o.occurrence == r.occurrence);
+        let at = this.as_ref().and_then(own).or_else(|| own(&Appointment { start, ..a.clone() }))?;
+        reminded_between(a, at.saturating_add(1), at.saturating_add(LOOK)).into_iter().next()
     });
     match next {
         Some((at, o)) => {
             set_named(item, c, lid::REMINDER_SIGNAL_TIME, PropValue::Time(at));
             set_named(item, c, lid::REMINDER_TIME, PropValue::Time(o.start));
         }
-        None => set_named(item, c, lid::REMINDER_SET, PropValue::Bool(false)),
+        None => {
+            // The reminders occurrences kept of their own are put away with the last of them,
+            // so a series with none of its own is not reminded of them again.
+            if let Some(mut a) = series.filter(occurrence_reminded) {
+                if let Some(rec) = a.recurrence.as_mut() {
+                    for e in &mut rec.exceptions {
+                        if e.reminder_set == Some(true) {
+                            e.reminder_set = None;
+                            e.reminder_delta = None;
+                        }
+                    }
+                }
+                a.reminder = None;
+                a.write(item);
+            }
+            set_named(item, c, lid::REMINDER_SET, PropValue::Bool(false));
+        }
     }
     true
 }
@@ -290,6 +337,57 @@ mod tests {
         assert!(of(&item, then + 20 * MINUTE, &utc).unwrap().is_due(then + 20 * MINUTE));
         assert!(dismiss(&mut item, then + 20 * MINUTE, &utc));
         assert_eq!(of(&item, then + 20 * MINUTE, &utc).unwrap().due, Due::At(at(DAY0 + 5, 9)));
+    }
+
+    #[test]
+    fn an_occurrence_changed_on_its_own_keeps_a_reminder_of_its_own() {
+        let utc = Zone::utc();
+        let series = |reminder| {
+            let mut a = Appointment { subject: "Clinic".into(), start: at(DAY0, 9), end: at(DAY0, 10), reminder, ..Appointment::default() };
+            a.recurring = true;
+            a.recurrence = Some(Recurrence::new(recur::Freq::Daily, recur::Rule::Day, 1, recur::End::After(10), DAY0, 540, 600, 1));
+            a
+        };
+        // A series with none: one occurrence is given one of an hour, and is reminded of alone.
+        let mut a = series(None);
+        let mut third = a.occurrences(at(DAY0 + 2, 0), at(DAY0 + 3, 0)).remove(0);
+        third.reminder = Some(60);
+        assert!(a.change_occurrence(DAY0 + 2, &third));
+        let mut item = a.item();
+        let back = Appointment::of(&item).unwrap();
+        assert_eq!(back.reminder, None, "the series still has none");
+        let r = of(&item, at(DAY0, 7), &utc).unwrap();
+        assert_eq!((r.due, r.signal, r.occurrence), (Due::At(at(DAY0 + 2, 9)), at(DAY0 + 2, 8), Some(DAY0 + 2)));
+        assert!(!r.is_due(at(DAY0, 7)));
+        assert!(of(&item, at(DAY0 + 2, 8), &utc).unwrap().is_due(at(DAY0 + 2, 8)));
+        // Dismissed, it is gone for good, and the occurrence's reminder with it.
+        assert!(dismiss(&mut item, at(DAY0 + 2, 8), &utc));
+        assert_eq!(of(&item, at(DAY0 + 2, 8), &utc), None);
+        assert_eq!(of(&item, at(DAY0 + 20, 8), &utc), None, "not again later either");
+        let after = Appointment::of(&item).unwrap();
+        assert_eq!(after.subject, "Clinic");
+        assert_eq!(after.recurrence.as_ref().map(|r| r.exceptions.len()), Some(1), "the occurrence stays changed");
+
+        // A series with a quarter of an hour: one occurrence two days before, another none.
+        let mut a = series(Some(15));
+        let mut fifth = a.occurrences(at(DAY0 + 4, 0), at(DAY0 + 5, 0)).remove(0);
+        fifth.reminder = Some(2 * 24 * 60);
+        assert!(a.change_occurrence(DAY0 + 4, &fifth));
+        let mut second = a.occurrences(at(DAY0 + 1, 0), at(DAY0 + 2, 0)).remove(0);
+        second.reminder = None;
+        assert!(a.change_occurrence(DAY0 + 1, &second));
+        let mut item = a.item();
+        let r = of(&item, at(DAY0, 9), &utc).unwrap();
+        assert_eq!(r.due, Due::At(at(DAY0, 9)), "the first, its own quarter of an hour before");
+        assert!(dismiss(&mut item, at(DAY0, 9), &utc));
+        // The second has none; the third comes next, and the fifth's comes before the fourth's.
+        let r = of(&item, at(DAY0, 9), &utc).unwrap();
+        assert_eq!((r.due, r.signal), (Due::At(at(DAY0 + 2, 9)), at(DAY0 + 2, 9) - 15 * MINUTE));
+        assert!(dismiss(&mut item, at(DAY0 + 2, 9) - 15 * MINUTE, &utc));
+        let r = of(&item, at(DAY0 + 2, 9) - 15 * MINUTE, &utc).unwrap();
+        assert_eq!((r.due, r.signal), (Due::At(at(DAY0 + 4, 9)), at(DAY0 + 2, 9)), "two days before");
+        assert!(dismiss(&mut item, at(DAY0 + 2, 9), &utc));
+        assert_eq!(of(&item, at(DAY0 + 2, 9), &utc).unwrap().due, Due::At(at(DAY0 + 3, 9)), "then the fourth");
     }
 
     #[test]
