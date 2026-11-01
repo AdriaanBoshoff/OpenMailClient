@@ -870,6 +870,13 @@ impl MailUi {
         self.window = Some(now);
     }
 
+    /// The window's place was put back by what knows every screen (eframe, from its own file
+    /// beside the settings, brought onto a screen that is there): its first frames leave it
+    /// where it stands, on whichever screen that is.
+    pub fn trust_place(&mut self) {
+        self.check_place = false;
+    }
+
     /// Take what a settings file says of the window; what makes no sense in it is left out.
     fn apply_settings(&mut self, ui: &Value) {
         self.apply_theme_settings(ui);

@@ -339,6 +339,11 @@ fn safe_file_name(text: &str) -> String {
 }
 
 impl eframe::App for App {
+    /// eframe keeps the window's place alone; the window's own state is kept in the settings.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.ui.ui(ui);
         let ctx = ui.ctx().clone();
@@ -486,7 +491,21 @@ fn main() -> ExitCode {
     if let Some(pos) = place.and_then(|w| w.pos) {
         viewport = viewport.with_position(pos);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    // The window's place on any screen, a second one too, is kept by eframe in a file of our
+    // own beside the settings; it knows where every screen stands and, on Windows, brings a
+    // place on a screen no longer there back onto one that is. The settings' own place, on
+    // the first screen alone, is used when that file is not there yet.
+    let window_file = app.settings.as_ref().and_then(|p| p.parent().map(|dir| dir.join("window.ron")));
+    if window_file.as_ref().is_some_and(|f| f.is_file()) {
+        app.ui.trust_place();
+    }
+    let options = eframe::NativeOptions {
+        viewport,
+        persist_window: window_file.is_some(),
+        // Without settings nothing is kept: a file that is only read, never written.
+        persistence_path: Some(window_file.unwrap_or_else(|| std::env::temp_dir().join("openmailclient-no-window.ron"))),
+        ..Default::default()
+    };
     let creator = move |cc: &eframe::CreationContext<'_>| -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
         // A watched Inbox that heard of new mail wakes the window, which receives it at once.
         let ctx = cc.egui_ctx.clone();

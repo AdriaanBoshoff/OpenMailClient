@@ -1109,6 +1109,17 @@ fn the_window_stands_where_it_stood_and_never_where_no_screen_is() {
         moved.extend(frame(&mut lost, &ctx, Vec::new(), Some(info(1700.0, 900.0, 1100.0, 700.0, [1280.0, 720.0]))));
     }
     assert_eq!(moved.iter().filter(|c| matches!(c, egui::ViewportCommand::OuterPosition(p) if *p == egui::pos2(40.0, 40.0))).count(), 1, "{moved:?}");
+    // Put back on a second screen by what knows where every screen is, it is left there.
+    let mut second = MailUi::new(Session::with_sample());
+    second.apply_settings(&json!({ "window": { "width": 1100, "height": 700, "x": 2400, "y": 100, "maximized": false } }));
+    second.trust_place();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut moved = Vec::new();
+    for _ in 0..3 {
+        moved.extend(frame(&mut second, &ctx, Vec::new(), Some(info(2400.0, 100.0, 1100.0, 700.0, screen))));
+    }
+    assert!(!moved.iter().any(|c| matches!(c, egui::ViewportCommand::OuterPosition(_))), "{moved:?}");
 
     // A settings file is not believed beyond what a window can be.
     for (junk, size, pos) in [
