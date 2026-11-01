@@ -68,6 +68,15 @@ const CALENDAR_HOME: &[Group] = &[
             with(big(Icon::WorkWeekView, "Work\nWeek", "calendar.view"), r#"{"view":"workWeek"}"#),
             with(big(Icon::WeekView, "Week", "calendar.view"), r#"{"view":"week"}"#),
             with(big(Icon::MonthView, "Month", "calendar.view"), r#"{"view":"month"}"#),
+            with(
+                big(
+                    Icon::ScheduleView,
+                    "Schedule
+View",
+                    "calendar.view",
+                ),
+                r#"{"view":"schedule"}"#,
+            ),
         ],
     ),
     ("Manage Calendars", &[big(Icon::Calendar, "Open\nCalendar", "ui.openCalendarDialog")]),

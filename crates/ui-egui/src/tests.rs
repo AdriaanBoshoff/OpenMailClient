@@ -2202,7 +2202,7 @@ fn the_calendar_draws_every_view_with_hostile_appointments() {
     }
     for dark in [false, true] {
         ui.execute("ui.theme", &json!({ "theme": if dark { "dark" } else { "light" } })).unwrap();
-        for view in ["day", "workWeek", "week", "month"] {
+        for view in ["day", "workWeek", "week", "month", "schedule"] {
             ui.execute("calendar.view", &json!({ "view": view })).unwrap();
             for size in [egui::vec2(1280.0, 800.0), egui::vec2(320.0, 240.0), egui::vec2(1.0, 1.0)] {
                 draw_window(&mut ui, size);

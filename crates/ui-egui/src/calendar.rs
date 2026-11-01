@@ -25,12 +25,12 @@ const BAND_ROW: f32 = 22.0;
 /// All-day events shown above the hours before the rest are counted.
 const BAND_ROWS: usize = 4;
 /// The hours the working day is shaded for, and the first shown.
-const WORK: (u32, u32) = (8, 17);
+pub(crate) const WORK: (u32, u32) = (8, 17);
 /// One line of an appointment in a month's day.
 const MONTH_LINE: f32 = 18.0;
 
 /// The date a local day number is.
-fn date_of(day: i64) -> Civil {
+pub(crate) fn date_of(day: i64) -> Civil {
     time::civil(calendar::day_start(day, 0), 0)
 }
 
@@ -267,11 +267,11 @@ fn reminder_words(r: Option<i32>) -> String {
     }
 }
 
-fn ymd(c: &Civil) -> String {
+pub(crate) fn ymd(c: &Civil) -> String {
     format!("{:04}-{:02}-{:02}", c.year, c.month, c.day)
 }
 
-fn hm(c: &Civil) -> String {
+pub(crate) fn hm(c: &Civil) -> String {
     format!("{:02}:{:02}", c.hour, c.minute)
 }
 
@@ -294,7 +294,7 @@ fn length_words(minutes: i64) -> String {
 
 impl AppointmentForm {
     /// A new appointment from `start` (FILETIME), half an hour long, or all day.
-    fn new_at(start: i64, all_day: bool, here: &Zone) -> Self {
+    pub(crate) fn new_at(start: i64, all_day: bool, here: &Zone) -> Self {
         let end = if all_day { start.saturating_add(DAY) } else { start.saturating_add(30 * MINUTE) };
         let a = Appointment {
             subject: String::new(),
@@ -501,6 +501,8 @@ impl MailUi {
         let grid = Rect::from_min_max(pos2(area.left(), head.bottom()), area.max);
         if self.session.calendar.view == View::Month {
             self.month_grid(ui, grid, &days);
+        } else if self.session.calendar.view == View::Schedule {
+            self.schedule_grid(ui, grid);
         } else {
             self.time_grid(ui, grid, &days);
         }
@@ -635,7 +637,7 @@ Kept in step with a calendar server at each Send/Receive"
         let (Some(first), Some(last)) = (days.first().copied(), days.last().copied()) else { return String::new() };
         let (a, b) = (date_of(first), date_of(last));
         match s.calendar.view {
-            View::Day => s.region.long_date(&a),
+            View::Day | View::Schedule => s.region.long_date(&a),
             View::Month => {
                 let c = date_of(if s.calendar.day == 0 { s.today() } else { s.calendar.day });
                 format!("{} {}", c.month_name(), c.year)
@@ -911,7 +913,7 @@ Kept in step with a calendar server at each Send/Receive"
 
     /// One appointment: its time, coloured as it is shown as, with its subject and place.
     #[allow(clippy::too_many_arguments)]
-    fn appointment_box(&self, ui: &mut Ui, p: &Painter, r: Rect, id: u64, a: &Appointment, chosen: bool, place: &str) -> egui::Response {
+    pub(crate) fn appointment_box(&self, ui: &mut Ui, p: &Painter, r: Rect, id: u64, a: &Appointment, chosen: bool, place: &str) -> egui::Response {
         let t = &self.tokens;
         let (fill, bar) = match a.busy {
             Busy::OutOfOffice => (t.away.gamma_multiply(0.22), t.away),
@@ -1538,7 +1540,7 @@ Kept in step with a calendar server at each Send/Receive"
 }
 
 /// The parameters `calendar.select` takes for an appointment or one occurrence of it.
-fn select_params(id: u64, occurrence: Option<i64>) -> Value {
+pub(crate) fn select_params(id: u64, occurrence: Option<i64>) -> Value {
     match occurrence {
         Some(day) => json!({ "id": id, "occurrence": ymd(&date_of(day)) }),
         None => json!({ "id": id }),

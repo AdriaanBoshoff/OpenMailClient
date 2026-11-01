@@ -54,6 +54,8 @@ pub enum Icon {
     WorkWeekView,
     WeekView,
     MonthView,
+    /// Rows across a day, each with its time taken.
+    ScheduleView,
     Bell,
     Clock,
     Palette,
@@ -364,6 +366,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             for x in [4.75, 8.0, 11.25] {
                 pen.line(&[(x, 5.0), (x, 13.5)]);
             }
+        }
+        Icon::ScheduleView => {
+            pen.closed(&[(1.5, 2.5), (14.5, 2.5), (14.5, 13.5), (1.5, 13.5)]);
+            pen.line(&[(5.0, 2.5), (5.0, 13.5)]);
+            for y in [6.2, 9.8] {
+                pen.line(&[(1.5, y), (14.5, y)]);
+            }
+            pen.filled(&[(6.5, 3.8), (10.5, 3.8), (10.5, 5.0), (6.5, 5.0)]);
+            pen.filled(&[(8.5, 7.4), (13.0, 7.4), (13.0, 8.6), (8.5, 8.6)]);
+            pen.filled(&[(6.0, 11.0), (9.0, 11.0), (9.0, 12.2), (6.0, 12.2)]);
         }
         Icon::Bell => {
             pen.line(&[

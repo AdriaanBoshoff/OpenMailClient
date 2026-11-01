@@ -136,7 +136,7 @@ pub const FEATURES: &[Feature] = &[
     f("Calendar", "Home", "New", "New Meeting", "calendar.newMeeting"),
     f("Calendar", "Home", "Go To", "Today", "calendar.today"),
     f("Calendar", "Home", "Arrange", "Day, Work Week, Week, Month", "calendar.view"),
-    f("Calendar", "Home", "Arrange", "Schedule View", ""),
+    f("Calendar", "Home", "Arrange", "Schedule View", "calendar.schedule"),
     f("Calendar", "Home", "Manage Calendars", "Open Calendar", "calendar.import"),
     f("Calendar", "Home", "Share", "E-mail Calendar", "calendar.email"),
     f("Calendar", "File", "Save As", "Save Calendar", "calendar.saveAs"),

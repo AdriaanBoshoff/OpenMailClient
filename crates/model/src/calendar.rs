@@ -740,6 +740,8 @@ pub enum View {
     #[default]
     Week,
     Month,
+    /// One day across, each calendar a row of it: Outlook's Schedule View.
+    Schedule,
 }
 
 impl View {
@@ -749,11 +751,12 @@ impl View {
             Self::WorkWeek => "workWeek",
             Self::Week => "week",
             Self::Month => "month",
+            Self::Schedule => "schedule",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        [Self::Day, Self::WorkWeek, Self::Week, Self::Month].into_iter().find(|v| v.name().eq_ignore_ascii_case(s))
+        [Self::Day, Self::WorkWeek, Self::Week, Self::Month, Self::Schedule].into_iter().find(|v| v.name().eq_ignore_ascii_case(s))
     }
 
     /// The days shown (local day numbers, days since 1970-01-01) when `day` is the day chosen
@@ -762,7 +765,7 @@ impl View {
         let weekday = |d: i64| (d.rem_euclid(7) + 4).rem_euclid(7) as u32;
         let begun = |d: i64| d.saturating_sub(i64::from((weekday(d) + 7 - week_start % 7) % 7));
         match self {
-            Self::Day => vec![day],
+            Self::Day | Self::Schedule => vec![day],
             Self::Week => (0..7).map(|i| begun(day).saturating_add(i)).collect(),
             Self::WorkWeek => {
                 // Monday to Friday of the week `day` is in, whichever day weeks begin on.
@@ -781,7 +784,7 @@ impl View {
     /// The day chosen after moving one view forward (`by` 1) or back (-1).
     pub fn step(self, day: i64, by: i64) -> i64 {
         match self {
-            Self::Day => day.saturating_add(by),
+            Self::Day | Self::Schedule => day.saturating_add(by),
             Self::WorkWeek | Self::Week => day.saturating_add(by.saturating_mul(7)),
             Self::Month => {
                 let c = time::civil(day_start(day, 0), 0);
@@ -982,6 +985,9 @@ mod tests {
         assert_eq!(View::Day.days(wed, 0), vec![wed]);
         assert_eq!(View::Week.days(wed, 0).first(), Some(&day("2026-10-18")), "a week from Sunday");
         assert_eq!(View::Week.days(wed, 1).first(), Some(&day("2026-10-19")), "or from Monday");
+        assert_eq!(View::Schedule.days(day("2026-10-18"), 0), vec![day("2026-10-18")]);
+        assert_eq!(View::Schedule.step(day("2026-10-18"), -1), day("2026-10-17"));
+        assert_eq!(View::parse("Schedule"), Some(View::Schedule));
         assert_eq!(View::WorkWeek.days(day("2026-10-18"), 0), (0..5).map(|i| day("2026-10-12") + i).collect::<Vec<_>>());
         let month = View::Month.days(wed, 0);
         assert_eq!((month.len(), month[0]), (42, day("2026-09-27")));

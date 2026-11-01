@@ -38,9 +38,27 @@ pub struct Shown {
     /// The calendar chosen to be shown (`calendar.open`); while it is there, it is the one
     /// shown and written to.
     pub chosen: Option<(usize, FolderId)>,
+    /// In the Schedule View, every calendar of the data files open, each a row of the day.
+    pub rows: Vec<ScheduleRow>,
 }
 
-const VIEW_PARAMS: &str = r#"{"view": "day" | "workWeek" | "week" | "month"}"#;
+/// One calendar's row of the Schedule View.
+#[derive(Clone, Debug)]
+pub struct ScheduleRow {
+    pub store: usize,
+    pub folder: FolderId,
+    pub name: String,
+    /// The colour its calendar server gives it, `#rrggbb`.
+    pub color: Option<String>,
+    /// Its appointments of the day, as `Shown::items` has them.
+    pub items: Vec<(u64, Appointment)>,
+    pub unreadable: usize,
+}
+
+/// Calendars the Schedule View shows at most, each read for the day.
+const MAX_ROWS: usize = 32;
+
+const VIEW_PARAMS: &str = r#"{"view": "day" | "workWeek" | "week" | "month" | "schedule"}"#;
 const APPOINTMENT_PARAMS: &str = r#"{"subject", "start": "YYYY-MM-DD HH:MM" local time (a date alone for an all-day event), "end" (default: half an hour on, or the next day for an all-day event), "location", "allDay": bool, "busy": "free" | "tentative" | "busy" | "outOfOffice" | "workingElsewhere", "reminder": minutes before, or null for none (default 15; none for an all-day event), "repeat": as calendar.recurrence takes it, "zone": the time zone it is kept in and its times are given in, a name calendar.timeZones gives, or null for none (default: the one dates are shown in); a series in a zone keeps its hour there whatever the season, "attendees": those asked, which makes it a meeting one organizes (see calendar.newMeeting), "notes": its body, plain text (a series' alone; an occurrence has its series' notes)}"#;
 const REPEAT_PARAMS: &str = r#"{"id" (default: the one chosen), "repeat": null or "none" for once, or {"every": "day" | "weekday" | "week" | "month" | "year", "interval": days, weeks or months between (default 1), "on": weekday names (a week's days, or with "nth" the days of a month counted), "nth": 1 to 4 or "last", "day": the day of the month (default: the start's), "lastDay": true for the month's last day, "count": occurrences 1 to 999, or "until": "YYYY-MM-DD" (default: no end)}}; the first occurrence is the first day it falls on from the start, and occurrences changed on their own are as planned again"#;
 
@@ -55,6 +73,16 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             params: VIEW_PARAMS,
             enabled: always,
             run: view,
+        },
+        CommandSpec {
+            id: "calendar.schedule",
+            label: "Schedule View",
+            tab: "Home",
+            group: "Arrange",
+            shortcut: "Ctrl+Alt+5",
+            params: r#"{"date": "YYYY-MM-DD" (default: the day chosen)}; the Calendar shows that day across, each calendar of the data files open a row of it; returns {"day", "calendars": [{"store", "folder", "name", "shown": the one written to, "color", "items": as calendar.items gives them, "unreadable"}], "busy": [{"start", "end"}] when any calendar is taken up, free and out-of-office time aside}"#,
+            enabled: always,
+            run: schedule,
         },
         CommandSpec {
             id: "calendar.calendars",
@@ -321,9 +349,37 @@ impl Session {
             self.calendar.selected = None;
             self.calendar.occurrence = None;
         }
+        self.calendar.rows = if self.calendar.view == View::Schedule { self.schedule_rows(from, to, &items, unreadable) } else { Vec::new() };
         self.calendar.items = items;
         self.calendar.unreadable = unreadable;
         Ok(())
+    }
+
+    /// Each calendar's appointments in `[from, to)`, the one shown as `shown` has them; a
+    /// calendar that cannot be read is a row of nothing, counted as unreadable.
+    fn schedule_rows(&mut self, from: i64, to: i64, shown: &[(u64, Appointment)], unreadable: usize) -> Vec<ScheduleRow> {
+        let mut rows = Vec::new();
+        let mut room = MAX_ITEMS;
+        for c in calendars(self).into_iter().take(MAX_ROWS) {
+            let (Some(store), Some(folder)) = (c["store"].as_u64().and_then(|n| usize::try_from(n).ok()), c["folder"].as_u64()) else { continue };
+            let folder = FolderId(folder);
+            let (mut items, unreadable) = if c["shown"].as_bool() == Some(true) {
+                (shown.to_vec(), unreadable)
+            } else {
+                self.appointments_in(store, folder, from, to).unwrap_or((Vec::new(), 1))
+            };
+            items.truncate(room);
+            room = room.saturating_sub(items.len());
+            rows.push(ScheduleRow {
+                store,
+                folder,
+                name: c["name"].as_str().unwrap_or("").to_string(),
+                color: c["color"].as_str().map(str::to_string),
+                items,
+                unreadable,
+            });
+        }
+        rows
     }
 
     /// The pattern `repeat` (as `calendar.recurrence` takes it) makes for an appointment that
@@ -354,6 +410,12 @@ impl Session {
     /// a series apart, and how many items could not be read.
     pub fn appointments_between(&mut self, from: i64, to: i64) -> Result<(Vec<(u64, Appointment)>, usize), EngineError> {
         let Some((store, folder)) = calendar_folder(self) else { return Ok((Vec::new(), 0)) };
+        self.appointments_in(store, folder, from, to)
+    }
+
+    /// The appointments of the Calendar folder `folder` of store `store` in `[from, to)`, as
+    /// `appointments_between` gives them.
+    pub fn appointments_in(&mut self, store: usize, folder: FolderId, from: i64, to: i64) -> Result<(Vec<(u64, Appointment)>, usize), EngineError> {
         let st = self.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
         let mut found = Vec::new();
         let mut unreadable = 0usize;
@@ -376,9 +438,59 @@ impl Session {
 
 fn view(s: &mut Session, p: &Value) -> CmdResult {
     let name = need_str(p, "view")?;
-    s.calendar.view = View::parse(name).ok_or_else(|| EngineError::BadParams(format!("\"{name}\" is not day, workWeek, week or month")))?;
+    s.calendar.view = View::parse(name).ok_or_else(|| EngineError::BadParams(format!("\"{name}\" is not day, workWeek, week, month or schedule")))?;
     s.reload_calendar()?;
     ok()
+}
+
+/// When anyone is taken up in `[from, to)`: the times of every row's busy, tentative and
+/// elsewhere appointments, those that meet or overlap made one, earliest first.
+pub fn busy_of(rows: &[ScheduleRow], from: i64, to: i64) -> Vec<(i64, i64)> {
+    let mut spans: Vec<(i64, i64)> = rows
+        .iter()
+        .flat_map(|r| &r.items)
+        .filter(|(_, a)| !matches!(a.busy, Busy::Free | Busy::OutOfOffice))
+        .map(|(_, a)| (a.start.max(from), a.end.min(to)))
+        .filter(|(a, b)| a < b)
+        .collect();
+    spans.sort_unstable();
+    let mut busy: Vec<(i64, i64)> = Vec::new();
+    for (start, end) in spans {
+        match busy.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => busy.push((start, end)),
+        }
+    }
+    busy
+}
+
+fn schedule(s: &mut Session, p: &Value) -> CmdResult {
+    let day = date_param(s, p, "date")?;
+    s.calendar.view = View::Schedule;
+    if let Some(day) = day {
+        s.calendar.day = day;
+    }
+    s.reload_calendar()?;
+    let rows = s.calendar.rows.clone();
+    let shown = calendar_folder(s);
+    let (from, to) = (calendar::day_start(s.calendar.day, &s.zone), calendar::day_start(s.calendar.day.saturating_add(1), &s.zone));
+    let busy = busy_of(&rows, from, to);
+    let calendars: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "store": r.store,
+                "folder": r.folder.0,
+                "name": r.name,
+                "shown": shown == Some((r.store, r.folder)),
+                "color": r.color,
+                "items": r.items.iter().map(|(id, a)| appointment_json(s, *id, a)).collect::<Vec<_>>(),
+                "unreadable": r.unreadable,
+            })
+        })
+        .collect();
+    let busy: Vec<Value> = busy.iter().map(|(a, b)| json!({ "start": stamp(s, *a), "end": stamp(s, *b) })).collect();
+    Ok(json!({ "day": day_text(s.calendar.day), "calendars": calendars, "busy": busy }))
 }
 
 fn today(s: &mut Session, _: &Value) -> CmdResult {

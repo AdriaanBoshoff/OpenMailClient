@@ -142,7 +142,7 @@ pub fn style_now(s: &crate::Session) -> Style {
     use openmailclient_model::calendar::View;
     match s.module {
         Module::Calendar => s.print_calendar_style.unwrap_or(match s.calendar.view {
-            View::Day => Style::Daily,
+            View::Day | View::Schedule => Style::Daily,
             View::WorkWeek | View::Week => Style::WeeklyAgenda,
             View::Month => Style::Monthly,
         }),

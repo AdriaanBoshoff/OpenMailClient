@@ -428,3 +428,44 @@ fn time_zones_are_listed_and_chosen_and_a_second_one_shown() {
     }
     assert_eq!(s.zone_chosen.as_deref(), Some("Asia/Tokyo"), "a bad name changes nothing");
 }
+
+#[test]
+fn the_schedule_view_shows_every_calendar_a_row_of_the_day() {
+    let mut s = session();
+    s.add_store(Box::new(crate::sample::sample_store(s.now)));
+    run(&mut s, "nav.module", json!({"module": "calendar"}));
+    // A plan in the second data file's calendar alone.
+    let listed = run(&mut s, "calendar.calendars", Value::Null);
+    let second = listed["calendars"].as_array().unwrap().iter().find(|c| c["store"] == 1).unwrap()["folder"].clone();
+    run(&mut s, "calendar.open", json!({"store": 1, "folder": second}));
+    run(&mut s, "calendar.new", json!({"subject": "Dentist", "start": "2026-10-07 08:00", "end": "2026-10-07 09:00"}));
+    let first = listed["calendars"][0]["folder"].clone();
+    run(&mut s, "calendar.open", json!({"store": 0, "folder": first}));
+
+    let day = run(&mut s, "calendar.schedule", json!({"date": "2026-10-07"}));
+    assert_eq!(s.calendar.view, openmailclient_model::calendar::View::Schedule);
+    assert_eq!(s.calendar_days().len(), 1);
+    assert_eq!(day["day"], "2026-10-07");
+    let rows = day["calendars"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!((rows[0]["shown"].as_bool(), rows[1]["shown"].as_bool()), (Some(true), Some(false)));
+    assert_eq!(subjects(&rows[0]), ["Team stand-up", "Review the spring catalogue", "Call with the print shop"]);
+    assert!(subjects(&rows[1]).contains(&"Dentist".to_string()));
+    assert!(!subjects(&rows[0]).contains(&"Dentist".to_string()), "each calendar its own");
+    // When anyone is taken up: the dentist's hour among them, in order and none overlapping.
+    let busy: Vec<(String, String)> =
+        day["busy"].as_array().unwrap().iter().map(|b| (b["start"].as_str().unwrap().into(), b["end"].as_str().unwrap().into())).collect();
+    assert!(busy.contains(&("2026-10-07 08:00".into(), "2026-10-07 09:00".into())), "{busy:?}");
+    assert!(busy.windows(2).all(|w| w[0].1 < w[1].0), "{busy:?}");
+    assert!(busy.iter().all(|(a, b)| a.starts_with("2026-10-07") && (b.starts_with("2026-10-07") || b == "2026-10-08 00:00")));
+
+    // A day at a time, and the rows go with any other view.
+    run(&mut s, "calendar.next", Value::Null);
+    assert_eq!(s.calendar_days(), vec![s.calendar.day]);
+    assert_eq!(s.calendar.rows.len(), 2);
+    run(&mut s, "calendar.view", json!({"view": "week"}));
+    assert!(s.calendar.rows.is_empty());
+    run(&mut s, "calendar.view", json!({"view": "schedule"}));
+    assert_eq!(s.calendar.rows.len(), 2);
+    assert!(s.run("calendar.schedule", &json!({"date": "the seventh"})).is_err());
+}

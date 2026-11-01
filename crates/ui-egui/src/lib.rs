@@ -28,6 +28,7 @@ mod preview;
 mod progress;
 mod reminders;
 mod rules;
+mod schedule;
 mod scheduling;
 mod signatures;
 pub use reminders::Sound;
@@ -987,7 +988,7 @@ impl MailUi {
         if self.session.selected != before {
             self.scroll_to_selected = true;
         }
-        if id == "calendar.view" || id == "calendar.today" || id == "nav.module" {
+        if id == "calendar.view" || id == "calendar.schedule" || id == "calendar.today" || id == "nav.module" {
             self.cal_scroll = true;
         }
         if id.starts_with("search.") || id.starts_with("folder.") {
@@ -1551,10 +1552,10 @@ impl MailUi {
             }
         }
         if calendar {
-            // The Calendar's own keys: views on Ctrl+Alt+1 to 4, a new appointment on Ctrl+N,
+            // The Calendar's own keys: views on Ctrl+Alt+1 to 5, a new appointment on Ctrl+N,
             // the days before and after on Alt+Up and Alt+Down.
             let ctrl_alt = Modifiers::COMMAND | Modifiers::ALT;
-            for (key, view) in [(Key::Num1, "day"), (Key::Num2, "workWeek"), (Key::Num3, "week"), (Key::Num4, "month")] {
+            for (key, view) in [(Key::Num1, "day"), (Key::Num2, "workWeek"), (Key::Num3, "week"), (Key::Num4, "month"), (Key::Num5, "schedule")] {
                 if hit(ctrl_alt, key) {
                     run.push(("calendar.view", json!({ "view": view })));
                 }

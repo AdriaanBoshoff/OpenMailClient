@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 156 · 2026-11-01 · ranked: the top of the list is what hurts most.
+**Status:** revision 157 · 2026-11-01 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 157 · 2026-11-01 — M5.35: the Calendar's Schedule View, every calendar a row of the day with when anyone is busy; M5 closed.
 - 156 · 2026-11-01 — M5.34: every zone's whole history from the system's zone database, the tz files or Windows' registry.
 - 155 · 2026-11-01 — M5.33: a folder's named properties carried by an export from an `.ost` and by a file written whole again.
 - 154 · 2026-11-01 — M5.32: named properties we write found by Outlook by name, in a whole and an in-place save.
