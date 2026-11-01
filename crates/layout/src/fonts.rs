@@ -469,6 +469,16 @@ impl<'a> Fonts<'a> {
                 }
             }
         }
+        // A letter of a script none of these has is looked for in the fonts that script is
+        // written in, those of it that are installed.
+        let script = openmailclient_fonts::cover::script_of(ch).and_then(|n| openmailclient_fonts::cover::SCRIPTS.get(n));
+        for name in script.map(|script| script.fonts).unwrap_or_default() {
+            let Some(pick) = self.pick(name, chain.bold, chain.italic) else { continue };
+            let glyph = self.glyph(pick.face, ch);
+            if glyph != 0 {
+                return Some((pick, glyph));
+            }
+        }
         first.map(|pick| (pick, 0))
     }
 }

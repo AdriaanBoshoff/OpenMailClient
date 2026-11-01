@@ -2,7 +2,7 @@
 //! compose form.
 
 use crate::icons::{self, Icon};
-use crate::{MailUi, body, bold, cell_text, clip_text, font, one_line, text_width, theme};
+use crate::{MailUi, body, bold, cell_text, clip_text, faces, font, one_line, text_width, theme};
 use egui::{Align2, Rect, ScrollArea, Sense, Ui, UiBuilder, pos2, vec2};
 use openmailclient_engine::print::Field;
 use openmailclient_engine::{Module, ReadingPane, SortKey};
@@ -417,6 +417,8 @@ impl MailUi {
         let shown = Shown { now, now_day, tz: &s.zone, region: &s.region, outgoing };
         let rows = &s.rows;
         let mut unread_previews: Vec<u64> = Vec::new();
+        // A character of each script the rows shown are written in, for the fonts to cover.
+        let mut scripts: Vec<char> = Vec::new();
         let mut clicked: Option<u64> = None;
         let mut opened = false;
         ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
@@ -481,6 +483,9 @@ impl MailUi {
                             if row.preview.is_empty() {
                                 unread_previews.push(row.id);
                             }
+                            for text in [&row.subject, &row.from, &row.to, &row.preview] {
+                                faces::scripts_in(text, &mut scripts);
+                            }
                             if resp.clicked() {
                                 clicked = Some(row.id);
                             }
@@ -495,6 +500,7 @@ impl MailUi {
         });
         // The rows on screen whose folder's table holds no preview get theirs from the
         // message, a few each frame.
+        self.faces.cover(ui.ctx(), &scripts);
         if !unread_previews.is_empty() && self.session.fill_previews(&unread_previews) {
             ui.ctx().request_repaint();
         }

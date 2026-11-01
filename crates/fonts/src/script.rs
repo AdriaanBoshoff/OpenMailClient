@@ -227,6 +227,12 @@ fn join(c: char) -> Join {
     }
 }
 
+/// Whether `c` takes part in Arabic joining: a letter that joins, a mark it is joined
+/// through, or tatweel and the zero-width joiner that join what stands beside them.
+pub fn joins(c: char) -> bool {
+    !matches!(join(c), Join::None)
+}
+
 /// `text` with each Arabic letter as the shape it has where it stands, for the letters whose
 /// shapes `has` says can be drawn; the others are left as they are. As many characters come
 /// back as went in: an alef that lam takes into itself becomes [`TAKEN`].

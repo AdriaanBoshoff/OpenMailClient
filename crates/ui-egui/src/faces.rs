@@ -6,12 +6,17 @@
 //! with installed names. Only the faces a message uses are loaded (bold and italic text have
 //! faces of their own), and how many fonts and how many bytes of them are loaded is capped; past
 //! the caps, and for a name nothing answers to, text is drawn in the reader's own font.
+//!
+//! Text in a script the interface fonts have no letters for (Devanagari, Thai, Korean,
+//! Chinese and the others of `openmailclient_fonts::cover`) is drawn in an installed font
+//! that has them, put behind every other font the first time such text is shown.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use egui::{Context, FontData, FontDefinitions, FontFamily};
+use egui::{Context, FontData, FontDefinitions, FontFamily, FontId};
 use openmailclient_fonts::Library;
+use openmailclient_fonts::cover::{SCRIPTS, script_of};
 use openmailclient_formats::rich::{Block, Doc};
 
 /// Font files and bytes of them loaded while the window is open.
@@ -23,6 +28,10 @@ const MAX_KNOWN: usize = 1024;
 /// Lists looked up for one message, each as regular, bold, italic or both.
 const MAX_ASKED_PER_MESSAGE: usize = 128;
 const MAX_DEPTH: usize = 64;
+/// Fonts for scripts, and bytes of them, loaded while the window is open: one per script.
+const MAX_SCRIPT_BYTES: usize = 96 << 20;
+/// Characters of one message looked through for scripts.
+const MAX_SCANNED: usize = 400_000;
 
 /// One face of a family: its name in lower case, bold, italic.
 type Which = (String, bool, bool);
@@ -49,6 +58,21 @@ pub(crate) struct Faces {
     ready: Vec<FontFamily>,
     faces: usize,
     bytes: usize,
+    /// For each script, whether a font for it has been looked for.
+    tried: Vec<bool>,
+    script_bytes: usize,
+}
+
+/// One character of each script in `text` that the interface fonts may lack, added to `seen`
+/// if none of its script is there yet.
+pub(crate) fn scripts_in(text: &str, seen: &mut Vec<char>) {
+    for c in text.chars().filter(|c| u32::from(*c) >= 0x0530) {
+        if let Some(n) = script_of(c)
+            && !seen.iter().any(|known| script_of(*known) == Some(n))
+        {
+            seen.push(c);
+        }
+    }
 }
 
 impl Faces {
@@ -87,6 +111,15 @@ impl Faces {
         let mut asked: Vec<(&Arc<str>, bool, bool)> = Vec::new();
         named(&doc.blocks, &mut asked, 0);
         let mut added = false;
+        let mut seen = Vec::new();
+        let mut left = MAX_SCANNED;
+        each_text(&doc.blocks, 0, &mut |text| {
+            if left > 0 {
+                left = left.saturating_sub(text.len());
+                scripts_in(text, &mut seen);
+            }
+        });
+        self.scripts(ctx, &seen, &mut added);
         for (list, bold, italic) in asked {
             let Some(family) = self.family(list) else { continue };
             // The upright face too: it is what italic text is slanted from where there is no
@@ -99,6 +132,71 @@ impl Faces {
         if added {
             ctx.set_fonts(self.defs.clone());
             ctx.request_repaint();
+        }
+    }
+
+    /// Fonts for the scripts of `seen` (one character of each, as `scripts_in` gives them)
+    /// that the interface fonts have no letters for, given to egui.
+    pub(crate) fn cover(&mut self, ctx: &Context, seen: &[char]) {
+        let mut added = false;
+        self.scripts(ctx, seen, &mut added);
+        if added {
+            ctx.set_fonts(self.defs.clone());
+            ctx.request_repaint();
+        }
+    }
+
+    fn scripts(&mut self, ctx: &Context, seen: &[char], added: &mut bool) {
+        if self.tried.len() != SCRIPTS.len() {
+            self.tried = vec![false; SCRIPTS.len()];
+        }
+        for c in seen {
+            let Some(n) = script_of(*c) else { continue };
+            match self.tried.get_mut(n) {
+                Some(tried) if !*tried => *tried = true,
+                _ => continue,
+            }
+            if ctx.fonts_mut(|fonts| fonts.has_glyph(&FontId::proportional(14.0), *c)) {
+                continue;
+            }
+            let library = self.library();
+            let names = SCRIPTS.get(n).map(|script| script.fonts).unwrap_or_default();
+            let Some(found) = names.iter().find(|name| library.has(name)) else { continue };
+            let Some(face) = library.face(found, false, false).filter(|face| self.script_bytes.saturating_add(face.data.len()) <= MAX_SCRIPT_BYTES)
+            else {
+                continue;
+            };
+            // Its bold face, where it has one of its own, for bold text.
+            let heavy = library
+                .face(found, true, false)
+                .filter(|heavy| (heavy.data.len(), heavy.index) != (face.data.len(), face.index))
+                .filter(|heavy| self.script_bytes.saturating_add(face.data.len()).saturating_add(heavy.data.len()) <= MAX_SCRIPT_BYTES);
+            let name = format!("script-{n}");
+            let heavy_name = heavy.map(|heavy| {
+                let name = format!("script-{n}-bold");
+                self.script_bytes += heavy.data.len();
+                let mut data = FontData::from_owned(heavy.data);
+                data.index = heavy.index;
+                self.defs.font_data.insert(name.clone(), Arc::new(data));
+                name
+            });
+            self.script_bytes += face.data.len();
+            let mut data = FontData::from_owned(face.data);
+            data.index = face.index;
+            self.defs.font_data.insert(name.clone(), Arc::new(data));
+            // Behind every family there is, the interface's, the bold one and each message
+            // font's: the letters are drawn in it whatever look the text has, bold text in its
+            // bold face first.
+            let bold = FontFamily::Name("bold".into());
+            for (family, fonts) in self.defs.families.iter_mut() {
+                if *family == bold
+                    && let Some(heavy) = &heavy_name
+                {
+                    fonts.push(heavy.clone());
+                }
+                fonts.push(name.clone());
+            }
+            *added = true;
         }
     }
 
@@ -148,6 +246,21 @@ impl Faces {
         });
         self.known.insert(which, given.clone());
         given
+    }
+}
+
+/// Every text of `blocks`, its runs' and those of its tables' cells.
+fn each_text(blocks: &[Block], depth: usize, out: &mut dyn FnMut(&str)) {
+    for block in blocks {
+        match block {
+            Block::Para(p) => p.runs.iter().for_each(|run| out(&run.text)),
+            Block::Table(t) if depth < MAX_DEPTH => {
+                for cell in t.rows.iter().flatten() {
+                    each_text(&cell.blocks, depth + 1, out);
+                }
+            }
+            _ => {}
+        }
     }
 }
 

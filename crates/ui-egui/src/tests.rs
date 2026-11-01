@@ -4016,3 +4016,82 @@ fn text_of_many_lines_is_wrapped_and_read_the_way_each_paragraph_is() {
     let state = area_frame(&ctx, &mut text, vec![key(Key::ArrowUp, none)]);
     assert!(state.cursor < 200 && state.cursor > 100 && (state.caret_x - below).abs() < 12.0, "{} {} {}", state.cursor, state.caret_x, below);
 }
+
+#[test]
+fn text_written_from_the_right_is_selected_where_it_is_seen_and_copied_as_it_is_read() {
+    use egui::{Event, Modifiers, PointerButton};
+    // Each letter has its place, a word written from the right going leftwards.
+    let html = "<p dir=rtl>\u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{5e2}\u{5d5}\u{5dc}\u{5dd} and more</p>";
+    let doc = openmailclient_formats::html::parse(html);
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let frame = |events: Vec<Event>| {
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 300.0))), events, ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            body::draw(ui, &doc, &theme::Tokens::named(false), &pictures::Pictures::patient(), &faces::Faces::default());
+        });
+        output.textures_delta.clear();
+        output.platform_output.commands.iter().find_map(|c| match c {
+            egui::OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+    };
+    frame(Vec::new());
+    let press = |at: egui::Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    // From the right end of the line to its left end: everything, copied in the order stored.
+    let (right, left) = (pos2(499.0, 12.0), pos2(150.0, 12.0));
+    frame(vec![Event::PointerMoved(right), press(right, true)]);
+    frame(vec![Event::PointerMoved(pos2(400.0, 12.0))]);
+    frame(vec![Event::PointerMoved(left)]);
+    frame(vec![press(left, false)]);
+    let copied = frame(vec![Event::Copy]);
+    assert_eq!(copied.as_deref(), Some("\u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{5e2}\u{5d5}\u{5dc}\u{5dd} and more"), "{copied:?}");
+    // Part of the way from the right: the start of what is stored, the first word read first.
+    let middle = pos2(440.0, 12.0);
+    frame(vec![Event::PointerMoved(right), press(right, true)]);
+    frame(vec![Event::PointerMoved(pos2(470.0, 12.0))]);
+    frame(vec![Event::PointerMoved(middle)]);
+    frame(vec![press(middle, false)]);
+    let part = frame(vec![Event::Copy]).unwrap_or_default();
+    assert!(part.starts_with('\u{5e9}') && part.chars().count() < 18, "{part:?}");
+    // A press elsewhere lets go of it: nothing more is copied.
+    let away = pos2(250.0, 250.0);
+    frame(vec![Event::PointerMoved(away), press(away, true)]);
+    frame(vec![press(away, false)]);
+    assert_eq!(frame(vec![Event::Copy]), None);
+}
+
+#[test]
+fn an_arabic_word_that_changes_its_look_part_way_is_joined_across_the_change() {
+    use egui::text::{LayoutJob, TextFormat};
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    // "مرح" plain and "با" bold: one word, two looks.
+    let mut job = LayoutJob::default();
+    let plain = TextFormat { font_id: egui::FontId::proportional(14.0), ..Default::default() };
+    let bold_look = TextFormat { font_id: egui::FontId::new(14.0, egui::FontFamily::Name("bold".into())), ..Default::default() };
+    job.append("\u{645}\u{631}\u{62D}", 0.0, plain.clone());
+    job.append("\u{628}\u{627} \u{645}\u{631}", 0.0, bold_look);
+    let chars: Vec<char> = job.text.chars().collect();
+    let mut out = Vec::new();
+    let mut can = false;
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        can = ui.ctx().fonts_mut(|f| ['\u{FEA3}', '\u{FE92}', '\u{FE8E}'].iter().all(|c| f.has_glyph(&plain.font_id, *c)));
+        let sections: Vec<usize> = chars.iter().enumerate().map(|(n, _)| usize::from(n >= 3)).collect();
+        out = body::joined_across(ui, &job, &chars, &sections);
+    });
+    output.textures_delta.clear();
+    assert_eq!(out.len(), chars.len());
+    if can {
+        // Hah begins a joined form, beh goes on from it and alef ends the word.
+        assert_eq!(&out[2..5], &['\u{FEA3}', '\u{FE92}', '\u{FE8E}'], "{out:?}");
+    }
+    // A word in one look is left to the shaper.
+    assert_eq!(&out[6..], &chars[6..]);
+    // The first word's own letters before the change take their shapes too.
+    assert_ne!(out[0], chars[0]);
+    // A character of each script the interface fonts may lack, once.
+    let mut seen = Vec::new();
+    faces::scripts_in("Devanagari \u{928}\u{92E} Thai \u{E2A}\u{E27} \u{939} \u{4E2D}", &mut seen);
+    assert_eq!(seen, vec!['\u{928}', '\u{E2A}', '\u{4E2D}']);
+}

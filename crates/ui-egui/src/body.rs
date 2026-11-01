@@ -1016,6 +1016,43 @@ fn sections_of(job: &LayoutJob) -> Vec<usize> {
     out
 }
 
+/// `chars` with the letters of each Arabic word that changes its look part way (bold, colour,
+/// a link) given the shapes they have where they stand. The text shaper is handed one look at
+/// a time and would end each part as if the word ended there; the letters of such a word are
+/// joined here, each to a shape that every look of the word can draw, and the shaper draws
+/// them as they come. As many characters come back as went in.
+pub(crate) fn joined_across(ui: &Ui, job: &LayoutJob, chars: &[char], sections: &[usize]) -> Vec<char> {
+    let mut out = chars.to_vec();
+    let mut at = 0usize;
+    while at < chars.len() {
+        let from = at;
+        while chars.get(at).is_some_and(|c| script::joins(*c)) {
+            at += 1;
+        }
+        if at == from {
+            at += 1;
+            continue;
+        }
+        let looks: Vec<usize> = {
+            let mut looks: Vec<usize> = sections.get(from..at).unwrap_or_default().to_vec();
+            looks.dedup();
+            looks
+        };
+        if looks.len() < 2 {
+            continue;
+        }
+        let fonts: Vec<FontId> = looks.iter().filter_map(|n| job.sections.get(*n)).map(|s| s.format.font_id.clone()).collect();
+        let run = chars.get(from..at).unwrap_or_default();
+        let shapes = ui.ctx().fonts_mut(|f| script::joined(run, &mut |c| fonts.iter().all(|font| f.has_glyph(font, c))));
+        if let Some(slots) = out.get_mut(from..at) {
+            for (slot, c) in slots.iter_mut().zip(shapes) {
+                *slot = c;
+            }
+        }
+    }
+    out
+}
+
 /// The most characters and the most words of a paragraph whose order is worked out; a longer
 /// one is drawn as it is stored.
 const MAX_TURNED_CHARS: usize = 60_000;
@@ -1067,6 +1104,113 @@ pub(crate) struct Turned {
     /// The tabs in the order they are met line by line from the left: for each, which of the
     /// text's tabs it is.
     pub(crate) tabs: Vec<usize>,
+    /// For each piece of each line, true when its characters are seen from the right: the
+    /// first of them at its right.
+    pub(crate) backwards: Vec<Vec<bool>>,
+}
+
+/// Where each character of a paragraph drawn in another order than it is stored is seen,
+/// counted from where the paragraph is drawn: the line it is on, and its left and right. A
+/// piece whose letters were each drawn as one glyph goes by the glyphs; one whose letters were
+/// joined into fewer is shared out evenly.
+pub(crate) fn char_spots(galley: &egui::Galley, turned: &Turned) -> Vec<Option<(usize, f32, f32)>> {
+    let count = turned.rows.iter().flatten().map(|(.., (_, to))| *to).max().unwrap_or(0).min(MAX_TURNED_CHARS);
+    let mut out = vec![None; count];
+    for (n, (row, pieces)) in galley.rows.iter().zip(&turned.rows).enumerate() {
+        for (i, (from, to, (first, end))) in pieces.iter().enumerate() {
+            let len = end.saturating_sub(*first);
+            if len == 0 {
+                continue;
+            }
+            let backwards = turned.backwards.get(n).and_then(|row| row.get(i)).copied().unwrap_or(false);
+            let glyphs: Vec<(f32, f32)> = row
+                .glyphs
+                .iter()
+                .map(|g| (row.pos.x + g.pos.x, row.pos.x + g.pos.x + g.advance_width))
+                .filter(|(l, r)| (l + r) / 2.0 >= *from - 0.01 && (l + r) / 2.0 < *to + 0.01)
+                .collect();
+            let even = (to - from) / len as f32;
+            for k in 0..len {
+                let seen = if backwards { len - 1 - k } else { k };
+                let spot = match glyphs.get(seen).filter(|_| glyphs.len() == len) {
+                    Some(at) => *at,
+                    None => (from + even * seen as f32, from + even * (seen + 1) as f32),
+                };
+                if let Some(slot) = out.get_mut(first + k) {
+                    *slot = Some((n, spot.0, spot.1));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The place between two characters nearest to `at`, counted from where the paragraph is
+/// drawn: how many of the stored characters are before it. A click in the half of a letter
+/// that is read first is before it; one past either end of a line is at the line's start or
+/// its end as its paragraph (`rtl` when from the right) is read.
+pub(crate) fn turned_hit(galley: &egui::Galley, spots: &[Option<(usize, f32, f32)>], turned: &Turned, rtl: bool, at: Vec2) -> Option<usize> {
+    let n = galley.rows.iter().position(|row| at.y < row.pos.y + row.size.y).unwrap_or(galley.rows.len().checked_sub(1)?);
+    let on_row = || spots.iter().enumerate().filter_map(|(i, s)| s.filter(|s| s.0 == n).map(|s| (i, s.1, s.2)));
+    let (first, last) = (on_row().map(|s| s.0).min()?, on_row().map(|s| s.0).max()?);
+    let (most_left, most_right) =
+        (on_row().map(|s| s.1.min(s.2)).fold(f32::INFINITY, f32::min), on_row().map(|s| s.1.max(s.2)).fold(f32::NEG_INFINITY, f32::max));
+    if at.x < most_left {
+        return Some(if rtl { last + 1 } else { first });
+    }
+    if at.x > most_right {
+        return Some(if rtl { first } else { last + 1 });
+    }
+    let mut best: Option<(usize, f32)> = None;
+    for (index, spot) in spots.iter().enumerate() {
+        let Some((row, left, right)) = spot else { continue };
+        if *row != n {
+            continue;
+        }
+        let away = if at.x < *left {
+            left - at.x
+        } else if at.x > *right {
+            at.x - right
+        } else {
+            0.0
+        };
+        if best.is_none_or(|(_, b)| away < b) {
+            let backwards = turned_backwards(turned, n, index);
+            let before = (at.x < (left + right) / 2.0) != backwards;
+            best = Some((if before { index } else { index + 1 }, away));
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
+/// Whether the character `index` of line `n` is in a piece seen from the right.
+fn turned_backwards(turned: &Turned, n: usize, index: usize) -> bool {
+    let Some(pieces) = turned.rows.get(n) else { return false };
+    pieces
+        .iter()
+        .position(|(.., (from, to))| index >= *from && index < *to)
+        .and_then(|i| turned.backwards.get(n).and_then(|row| row.get(i)))
+        .copied()
+        .unwrap_or(false)
+}
+
+/// What is selected in a paragraph drawn in another order than it is stored: which paragraph,
+/// and from where to where in its stored text. One at a time, in the whole window.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct TurnedPick {
+    pub(crate) para: egui::Id,
+    pub(crate) anchor: usize,
+    pub(crate) cursor: usize,
+}
+
+impl TurnedPick {
+    pub(crate) fn id() -> egui::Id {
+        egui::Id::new("openmailclient-turned-selection")
+    }
+
+    pub(crate) fn range(&self) -> (usize, usize) {
+        (self.anchor.min(self.cursor), self.anchor.max(self.cursor))
+    }
 }
 
 /// Whether the text shaper takes `text` to be written from right to left: it goes by the
@@ -1102,6 +1246,7 @@ pub(crate) fn turned(ui: &Ui, para: &Para, job: &LayoutJob) -> Option<Turned> {
     }
     let levels = script::levels(&job.text, Some(para.rtl));
     let sections = sections_of(job);
+    let shaped = joined_across(ui, job, &chars, &sections);
     let part = |c: char| match c {
         '\n' => Part::Break,
         c if c.is_whitespace() => Part::Blank,
@@ -1132,7 +1277,7 @@ pub(crate) fn turned(ui: &Ui, para: &Para, job: &LayoutJob) -> Option<Turned> {
             texts.push(("\n".to_string(), 0.0));
             continue;
         }
-        let text = spelled(chars.get(word.chars.0..word.chars.1)?, word.level);
+        let text = spelled(shaped.get(word.chars.0..word.chars.1)?, word.level);
         let mut alone = LayoutJob::default();
         alone.append(&text, lead, from.format.clone());
         word.wide = ui.painter().layout_job(alone).size().x;
@@ -1164,6 +1309,7 @@ pub(crate) fn turned(ui: &Ui, para: &Para, job: &LayoutJob) -> Option<Turned> {
     let mut out = LayoutJob { text: String::new(), sections: Vec::new(), ..job.clone() };
     out.wrap.max_width = f32::INFINITY;
     let mut rows = Vec::with_capacity(lines.len());
+    let mut backwards = Vec::with_capacity(lines.len());
     let mut pictures = Vec::new();
     let mut tabs = Vec::new();
     // A tab is a piece of its own: it has a look of its own (`tab_format`).
@@ -1197,11 +1343,13 @@ pub(crate) fn turned(ui: &Ui, para: &Para, job: &LayoutJob) -> Option<Turned> {
             Align::Max => -wide,
         };
         let mut row = Vec::with_capacity(line.len());
+        let mut back = Vec::with_capacity(line.len());
         for i in script::order(&stand_ins, &depth, u8::from(para.rtl)) {
             let at = line.get(i).copied()?;
             let (word, (text, lead)) = (words.get(at)?, texts.get(at)?);
             section_of_its_own(&mut out, text, *lead, job.sections.get(word.section)?.format.clone());
             row.push((x, x + word.wide, word.chars));
+            back.push(word.level % 2 == 1);
             x += word.wide;
             last_section = word.section;
             if let Ok(nth) = holders.binary_search(&at) {
@@ -1212,11 +1360,81 @@ pub(crate) fn turned(ui: &Ui, para: &Para, job: &LayoutJob) -> Option<Turned> {
             }
         }
         rows.push(row);
+        backwards.push(back);
         if n + 1 < lines.len() {
             section_of_its_own(&mut out, "\n", 0.0, job.sections.get(last_section)?.format.clone());
         }
     }
-    Some(Turned { job: out, rows, pictures, tabs })
+    Some(Turned { job: out, rows, pictures, tabs, backwards })
+}
+
+/// Selecting in a paragraph drawn in another order than it is stored: a press starts it, a
+/// drag carries it on (with Shift a press carries it on too), a double-click takes a word and
+/// a triple-click the paragraph. What is selected is lit where each letter is seen, and is
+/// copied in the order it is stored, which is the order it is read in.
+fn select_turned(ui: &Ui, response: &egui::Response, galley: &egui::Galley, turned: &Turned, stored: &[char], rtl: bool, pos: egui::Pos2) {
+    let id = TurnedPick::id();
+    let before: Option<TurnedPick> = ui.data(|d| d.get_temp(id));
+    let mut pick = before;
+    let spots = char_spots(galley, turned);
+    let mine = pick.is_some_and(|p| p.para == response.id);
+    let pressed = ui.input(|i| i.pointer.any_pressed());
+    let shift = ui.input(|i| i.modifiers.shift);
+    if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+        let hit = || turned_hit(galley, &spots, turned, rtl, pointer - pos);
+        if pressed && response.hovered() {
+            if let Some(at) = hit() {
+                pick = Some(match pick.filter(|_| mine && shift) {
+                    Some(p) => TurnedPick { cursor: at, ..p },
+                    None => TurnedPick { para: response.id, anchor: at, cursor: at },
+                });
+            }
+        } else if pressed && mine && !shift {
+            // A press anywhere else lets go of it.
+            pick = None;
+        } else if response.dragged()
+            && mine
+            && let (Some(p), Some(at)) = (pick.as_mut(), hit())
+        {
+            p.cursor = at;
+        }
+    }
+    if response.double_clicked()
+        && let Some(p) = pick.as_mut().filter(|p| p.para == response.id)
+    {
+        let at = p.cursor.min(stored.len());
+        let word = |c: &char| c.is_alphanumeric() || *c == '_' || *c == '\u{0640}';
+        let from = stored.get(..at).unwrap_or_default().iter().rposition(|c| !word(c)).map_or(0, |n| n + 1);
+        let to = stored.get(at..).unwrap_or_default().iter().position(|c| !word(c)).map_or(stored.len(), |n| at + n);
+        (p.anchor, p.cursor) = (from, to);
+    }
+    if response.triple_clicked()
+        && let Some(p) = pick.as_mut().filter(|p| p.para == response.id)
+    {
+        (p.anchor, p.cursor) = (0, stored.len());
+    }
+    if let Some(p) = pick.filter(|p| p.para == response.id) {
+        let (from, to) = p.range();
+        let fill = ui.visuals().selection.bg_fill;
+        for (row, left, right) in spots.iter().skip(from).take(to.saturating_sub(from)).flatten() {
+            if let Some(line) = galley.rows.get(*row) {
+                let rect = Rect::from_min_max(pos2(pos.x + left, pos.y + line.pos.y), pos2(pos.x + right, pos.y + line.pos.y + line.size.y));
+                ui.painter().rect_filled(rect, 0.0, fill);
+            }
+        }
+        if from < to && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy | egui::Event::Cut))) {
+            let text: String = stored.get(from..to.min(stored.len())).unwrap_or_default().iter().collect();
+            ui.ctx().copy_text(text);
+        }
+    }
+    if pick != before {
+        ui.data_mut(|d| match pick {
+            Some(p) => {
+                d.insert_temp(id, p);
+            }
+            None => d.remove::<TurnedPick>(id),
+        });
+    }
 }
 
 /// Whether a section of a text to lay out is the space that holds a picture's place
@@ -1382,6 +1600,7 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
     let (job, ends, placed, leaders) = job_and_leaders(ui, para, runs, look, spot.width);
     // Right-to-left writing is drawn in another order than it is stored.
     let turned = turned(ui, para, &job).map(|turned| (ui.painter().layout_job(turned.job.clone()), turned));
+    let stored: Option<Vec<char>> = turned.as_ref().map(|_| job.text.chars().collect());
     let (galley, turned) = match turned {
         // One line drawn for each that was made, or the text is drawn as it is stored.
         Some((galley, turned)) if galley.rows.len() == turned.rows.len() => (galley, Some(turned)),
@@ -1491,9 +1710,9 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
             edges(ui, at, &sides, look, look.text());
         }
     }
-    if let Some(turned) = &turned {
+    if let (Some(turned), Some(stored)) = (&turned, &stored) {
         draw_leaders(ui, &galley, &leaders, Some(&turned.tabs), pos, look.text());
-        // Selecting would copy the letters in the order they are drawn: not offered yet.
+        select_turned(ui, &response, &galley, turned, stored, para.rtl, pos);
         ui.painter().galley(pos, galley, look.text());
     } else {
         draw_leaders(ui, &galley, &leaders, None, pos, look.text());
