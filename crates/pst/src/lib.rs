@@ -558,6 +558,10 @@ impl Store for PstStore {
         self.e_hidden(folder)
     }
 
+    fn put_hidden(&mut self, folder: FolderId, id: Option<ItemId>, item: Item) -> Result<ItemId, StoreError> {
+        self.e_put_hidden(folder, id, item)
+    }
+
     fn folder_props(&mut self, folder: FolderId) -> Result<PropBag, StoreError> {
         self.e_folder_props(folder)
     }
@@ -638,6 +642,8 @@ mod tests_ansi;
 mod tests_carry;
 #[cfg(test)]
 mod tests_edit;
+#[cfg(test)]
+mod tests_hidden;
 #[cfg(test)]
 mod tests_journal;
 #[cfg(test)]

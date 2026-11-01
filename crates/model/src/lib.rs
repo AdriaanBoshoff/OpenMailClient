@@ -18,6 +18,7 @@ pub mod reminder;
 pub mod rtf;
 pub mod task;
 pub mod time;
+pub mod view_def;
 pub mod zone;
 
 pub use memstore::MemStore;
@@ -751,6 +752,11 @@ pub trait Store {
     /// keeps no such items.
     fn hidden(&mut self, _folder: FolderId) -> Result<Vec<(ItemId, Result<Item, StoreError>)>, StoreError> {
         Ok(Vec::new())
+    }
+    /// Put a hidden item in a folder (a view, say): in place of the hidden item `id` when
+    /// that is given, else as a new one. Gives its id. Kept with the store's other changes.
+    fn put_hidden(&mut self, _folder: FolderId, _id: Option<ItemId>, _item: Item) -> Result<ItemId, StoreError> {
+        Err(StoreError::ReadOnly)
     }
     /// A folder's own properties as they are kept, those the model has no place for among
     /// them. Empty in a store that keeps none.

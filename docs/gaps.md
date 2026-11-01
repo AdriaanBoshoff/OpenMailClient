@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 152 · 2026-11-01 · ranked: the top of the list is what hurts most.
+**Status:** revision 153 · 2026-11-01 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 153 · 2026-11-01 — M5.31: each folder's own view, arranged, its columns and reading pane, kept in the data file as Outlook keeps views and in the settings.
 - 152 · 2026-11-01 — M5.30: the Scheduling Assistant, each person's free and busy times from the calendar server or their free/busy address and times suggested.
 - 151 · 2026-11-01 — M5.29: the Calendar printed a day, a week or a month to a page and in Calendar Details Style, People as cards and as a telephone directory.
 - 150 · 2026-10-30 — M5.28: right-to-left text selected and copied, Arabic joined across a change of look, every script drawn.

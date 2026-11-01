@@ -72,6 +72,8 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         },
         "folderPane": s.folder_pane,
         "listColumns": s.list_columns.iter().map(|f| f.name()).collect::<Vec<_>>(),
+        "folderViews": s.folder_views.iter().map(|(k, v)| (k.clone(), v.to_json())).collect::<serde_json::Map<_, _>>(),
+        "folderViewsUnsaved": s.views_unsaved,
         "toDoBar": crate::cmd::todo_bar::MODULES.iter().zip(&s.todo_bar).map(|(m, p)| (m.name().to_ascii_lowercase(), p.to_json())).collect::<serde_json::Map<_, _>>(),
         "favorites": s.favorites,
         "animations": s.animate,
@@ -199,6 +201,22 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         if let Some(columns) = columns {
             s.list_columns = columns;
         }
+    }
+    if let Some(v) = all.get("folderViews") {
+        let views: Option<Vec<(String, crate::folder_view::FolderView)>> = v.as_object().map(|all| {
+            all.iter()
+                .take(crate::folder_view::MAX_KEPT)
+                .filter_map(|(k, v)| crate::folder_view::FolderView::from_json(v).map(|v| (k.chars().take(4096).collect(), v)))
+                .collect()
+        });
+        took(views.is_some());
+        s.folder_views.extend(views.unwrap_or_default());
+    }
+    if let Some(v) = all.get("folderViewsUnsaved") {
+        let keys: Option<Vec<String>> =
+            v.as_array().map(|all| all.iter().take(crate::folder_view::MAX_KEPT).filter_map(|k| k.as_str().map(str::to_string)).collect());
+        took(keys.is_some());
+        s.views_unsaved.extend(keys.unwrap_or_default().into_iter().filter(|k| s.folder_views.contains_key(k)));
     }
     if let Some(v) = all.get("folderPane") {
         took(v.is_boolean());

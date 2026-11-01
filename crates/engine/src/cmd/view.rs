@@ -49,6 +49,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: columns,
         },
         CommandSpec {
+            id: "view.resetView",
+            label: "Reset View",
+            tab: "View",
+            group: "Current View",
+            shortcut: "",
+            params: "; the open folder's list arranged by date, newest first, with the first columns and the reading pane at the right, kept as its view",
+            enabled: has_folder,
+            run: reset_view,
+        },
+        CommandSpec {
             id: "view.readingPane",
             label: "Reading Pane",
             tab: "View",
@@ -137,6 +147,7 @@ fn sort_by(s: &mut Session, p: &Value) -> CmdResult {
     };
     s.sort = key;
     s.reload_rows()?;
+    crate::folder_view::keep(s);
     ok()
 }
 
@@ -186,12 +197,21 @@ fn columns(s: &mut Session, p: &Value) -> CmdResult {
     }
     s.list_columns = now;
     s.print_list.columns = s.list_columns.clone();
+    crate::folder_view::keep(s);
     Ok(serde_json::json!({ "columns": s.list_columns.iter().map(|f| f.name()).collect::<Vec<_>>() }))
 }
 
 fn reverse_sort(s: &mut Session, _: &Value) -> CmdResult {
     s.sort_desc = !s.sort_desc;
     s.reload_rows()?;
+    crate::folder_view::keep(s);
+    ok()
+}
+
+fn reset_view(s: &mut Session, _: &Value) -> CmdResult {
+    crate::folder_view::FolderView::default().show(s);
+    s.reload_rows()?;
+    crate::folder_view::keep(s);
     ok()
 }
 
@@ -202,6 +222,7 @@ fn reading_pane(s: &mut Session, p: &Value) -> CmdResult {
         "off" => ReadingPane::Off,
         other => return Err(EngineError::BadParams(format!("\"{other}\" is not right, bottom or off"))),
     };
+    crate::folder_view::keep(s);
     ok()
 }
 

@@ -14,6 +14,7 @@ pub mod attachments;
 pub mod autocomplete;
 pub mod catalog;
 pub mod cmd;
+pub mod folder_view;
 pub mod io;
 pub mod jobs;
 pub mod links;
@@ -50,6 +51,8 @@ mod tests_calendar_file;
 mod tests_carddav;
 #[cfg(test)]
 mod tests_columns;
+#[cfg(test)]
+mod tests_folder_view;
 #[cfg(test)]
 mod tests_free_busy;
 #[cfg(test)]
@@ -385,6 +388,12 @@ pub struct Session {
     pub search: String,
     pub unread_only: bool,
     pub reading_pane: ReadingPane,
+    /// Each folder's own view, by [`folder_view::key`], as the settings keep them.
+    pub folder_views: std::collections::BTreeMap<String, folder_view::FolderView>,
+    /// The folders whose data files have been asked for their view this run.
+    pub views_looked: std::collections::HashSet<String>,
+    /// Those of `folder_views` changed here and not yet written into their data files.
+    pub views_unsaved: std::collections::BTreeSet<String>,
     pub folder_pane: bool,
     /// Whether pictures that move in a message are played (`view.animations`); else each
     /// stands still on its first frame.
@@ -557,6 +566,9 @@ impl Session {
             search: String::new(),
             unread_only: false,
             reading_pane: ReadingPane::Right,
+            folder_views: std::collections::BTreeMap::new(),
+            views_looked: std::collections::HashSet::new(),
+            views_unsaved: std::collections::BTreeSet::new(),
             folder_pane: true,
             animate: true,
             downloaded: remote::Downloaded::default(),
@@ -762,6 +774,7 @@ impl Session {
         self.open = None;
         self.search.clear();
         self.previews.clear();
+        folder_view::open(self, store, folder);
         self.reload_rows()
     }
 

@@ -201,7 +201,7 @@ fn has_store(s: &Session) -> bool {
 }
 
 fn can_save(s: &Session) -> bool {
-    s.stores.iter().any(|st| st.unsaved() && !st.saving())
+    s.stores.iter().enumerate().any(|(i, st)| (st.unsaved() || crate::folder_view::unsaved_in(s, i)) && !st.saving())
 }
 
 fn is_saving(s: &Session) -> bool {
@@ -316,8 +316,13 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
             Some(st) if st.saving() && wait => {
                 return Err(EngineError::BadParams(format!("{} is being saved already", st.display_name())));
             }
-            Some(st) if st.unsaved() && !st.saving() => {}
+            // Views not yet written count as a change when a save is asked for.
+            Some(st) if (st.unsaved() || crate::folder_view::unsaved_in(s, idx)) && !st.saving() => {}
             _ => continue,
+        }
+        crate::folder_view::write_into(s, idx);
+        if s.stores.get(idx).is_none_or(|st| !st.unsaved()) {
+            continue;
         }
         let (keep, onto) = (s.keep_original, s.save_in_place);
         if let Some(store) = s.stores.get_mut(idx) {

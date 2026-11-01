@@ -82,6 +82,12 @@ pub(crate) enum Op {
         folder: u64,
         parent: u64,
     },
+    /// A hidden item put in a folder, as node `nid`: a new one, or in place of that one.
+    PutHidden {
+        folder: u64,
+        nid: u32,
+        item: Item,
+    },
 }
 
 /// What changed in a message.
@@ -387,6 +393,12 @@ impl Op {
                 e.u64(*folder);
                 e.u64(*parent);
             }
+            Self::PutHidden { folder, nid, item } => {
+                e.u8(10);
+                e.u64(*folder);
+                e.u32(*nid);
+                e.item(item, 0)?;
+            }
         }
         (e.0.len() <= MAX_RECORD).then_some(e.0)
     }
@@ -418,6 +430,7 @@ impl Op {
             7 => Self::DeleteFolder { folder: d.u64()? },
             8 => Self::MoveFolder { folder: d.u64()?, parent: d.u64()? },
             9 => Self::CreateFolderOf { parent: d.u64()?, name: d.string()?, class: d.string()? },
+            10 => Self::PutHidden { folder: d.u64()?, nid: d.u32()?, item: d.item(0)? },
             _ => return None,
         };
         d.0.is_empty().then_some(op)

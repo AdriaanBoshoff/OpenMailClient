@@ -152,7 +152,17 @@ pub(crate) struct Edits {
     limbo: Vec<(Entry, Item)>,
     /// The next index for the node of a new folder or message.
     next: u32,
+    /// Hidden items put in folders, new or in place of what is stored.
+    hidden: Vec<HiddenPut>,
     pub(crate) dirty: bool,
+}
+
+/// A hidden item put in a folder: the folder's node, its own and what it is.
+#[derive(Clone)]
+struct HiddenPut {
+    folder: u32,
+    nid: u32,
+    item: Item,
 }
 
 impl Edits {
@@ -343,7 +353,46 @@ impl PstStore {
             Op::RenameFolder { folder, name } => self.e_rename_folder(FolderId(folder), &name),
             Op::DeleteFolder { folder } => self.e_delete_folder(FolderId(folder)),
             Op::MoveFolder { folder, parent } => self.e_move_folder(FolderId(folder), FolderId(parent)),
+            Op::PutHidden { folder, nid, item } => self.hidden_as(FolderId(folder), nid, item),
         }
+    }
+
+    /// Put a hidden item in a folder: in place of the one `id` names, which it holds, or
+    /// as a new one. It is written with the folder's table of hidden items when saved.
+    pub(crate) fn e_put_hidden(&mut self, folder: FolderId, id: Option<ItemId>, item: Item) -> Result<ItemId, StoreError> {
+        let at = self.edits()?.at(folder)?;
+        let fnid = self.edits()?.folders.get(at).map(|f| f.nid).ok_or(StoreError::NoFolder)?;
+        let nid = match id {
+            Some(id) => {
+                let nid = u32::try_from(id.0).ok().filter(|n| n & 0x1F == TYPE_ASSOC_MESSAGE).ok_or(StoreError::NoItem)?;
+                let put = self.edits()?.hidden.iter().any(|h| h.nid == nid && h.folder == fnid);
+                let stored = put || self.table_of(fnid & !0x1F | TYPE_ASSOC).is_some_and(|(_, rows)| rows.iter().any(|r| r.id == nid));
+                if !stored {
+                    return Err(StoreError::NoItem);
+                }
+                nid
+            }
+            None => self.edits()?.fresh(TYPE_ASSOC_MESSAGE)?,
+        };
+        let op = Op::PutHidden { folder: folder.0, nid, item: if self.journal.on() { item.clone() } else { Item::default() } };
+        self.hidden_as(folder, nid, item)?;
+        self.log(&op);
+        Ok(ItemId(u64::from(nid)))
+    }
+
+    fn hidden_as(&mut self, folder: FolderId, nid: u32, item: Item) -> Result<(), StoreError> {
+        if nid & 0x1F != TYPE_ASSOC_MESSAGE {
+            return Err(StoreError::NoItem);
+        }
+        let edits = self.edits()?;
+        let at = edits.at(folder)?;
+        let fnid = edits.folders.get(at).map(|f| f.nid).ok_or(StoreError::NoFolder)?;
+        // A node the journal names is not given to another.
+        edits.next = edits.next.max((nid >> 5).saturating_add(1));
+        edits.hidden.retain(|h| h.nid != nid);
+        edits.hidden.push(HiddenPut { folder: fnid, nid, item });
+        edits.dirty = true;
+        Ok(())
     }
 
     fn edits(&mut self) -> Result<&mut Edits, StoreError> {
@@ -363,7 +412,7 @@ impl PstStore {
                 was.insert(nid, Was { parent: info.parent.and_then(|p| nid_of(p.0)), name: info.name.clone(), has_children: info.has_children });
                 folders.push(EFolder { info, nid, new: false, items: None, had: Vec::new() });
             }
-            let mut edits = Edits { folders, was, limbo: Vec::new(), next: top.saturating_add(1).max(0x1_0000), dirty: false };
+            let mut edits = Edits { folders, was, limbo: Vec::new(), next: top.saturating_add(1).max(0x1_0000), hidden: Vec::new(), dirty: false };
             // What the file says of subfolders may be stale; the list is what counts.
             edits.mark_parents();
             for f in &edits.folders {
@@ -711,6 +760,12 @@ impl PstStore {
         for nid in &dead {
             tables.insert(edits.and_then(|e| e.was.get(nid)).and_then(|w| w.parent).unwrap_or(root));
         }
+        // Hidden items put in folders that stay, and those folders, whose tables of hidden
+        // items are written anew.
+        let hidden: Vec<&HiddenPut> = edits.map(|e| e.hidden.iter().filter(|h| !dead.contains(&h.folder)).collect()).unwrap_or_default();
+        let hidden_by: HashMap<u32, &HiddenPut> = hidden.iter().map(|h| (h.nid, *h)).collect();
+        let hidden_folders: HashSet<u32> = hidden.iter().map(|h| h.folder).collect();
+        let mut hidden_cells: HashMap<u32, Vec<Raw>> = HashMap::new();
         #[allow(unused_mut)]
         let mut put_ids: HashSet<u32> = put.iter().map(|p| p.0).collect();
         #[cfg(test)]
@@ -757,8 +812,19 @@ impl PstStore {
             if gone.contains(&nid) {
                 continue;
             }
+            if let Some(h) = hidden_by.get(&nid) {
+                o.w.near(e.data, e.sub);
+                let (data, sub, cells) = o.message(&h.item, 0)?;
+                o.w.node(nid, h.folder, data, sub);
+                hidden_cells.insert(nid, cells);
+                continue;
+            }
             let ty = nid & 0x1F;
             let folder = nid & !0x1F | TYPE_FOLDER;
+            // Written last, with the hidden items put in it.
+            if ty == TYPE_ASSOC && hidden_folders.contains(&folder) {
+                continue;
+            }
             if edits.is_some() {
                 // Written last, with what this save changed queued in it.
                 if nid == NID_NAME_TO_ID_MAP || nid == NID_SEARCH_MANAGEMENT_QUEUE {
@@ -808,8 +874,40 @@ impl PstStore {
             }
             if f.new {
                 o.pc_node(f.nid, parent_of(f), &folder_cells(f))?;
-                o.tc_node(f.nid & !0x1F | TYPE_ASSOC, ASSOC, &[])?;
+                if !hidden_folders.contains(&f.nid) {
+                    o.tc_node(f.nid & !0x1F | TYPE_ASSOC, ASSOC, &[])?;
+                }
             }
+        }
+        // Hidden items new to the file, then the tables of hidden items that changed
+        // ([MS-PST] 2.4.4.6): each row as it was under what its item has now.
+        for h in hidden.iter().filter(|h| !self.ndb.nbt.contains_key(&h.nid)) {
+            let (data, sub, cells) = o.message(&h.item, 0)?;
+            o.w.node(h.nid, h.folder, data, sub);
+            hidden_cells.insert(h.nid, cells);
+        }
+        for folder in &hidden_folders {
+            let table = folder & !0x1F | TYPE_ASSOC;
+            let (columns, rows) = self.table_of(table).unwrap_or_else(|| (ASSOC.to_vec(), Vec::new()));
+            let mut rows: Vec<Row> = rows
+                .into_iter()
+                .map(|r| match hidden_cells.get(&r.id) {
+                    Some(now) => {
+                        let mut cells: BTreeMap<u16, Raw> = r.cells.into_iter().map(|c| (c.id, c)).collect();
+                        show(&mut cells, &columns, now);
+                        Row { id: r.id, cells: cells.into_values().collect() }
+                    }
+                    None => r,
+                })
+                .collect();
+            for h in hidden.iter().filter(|h| h.folder == *folder) {
+                if !rows.iter().any(|r| r.id == h.nid) {
+                    let cells = hidden_cells.get(&h.nid).map(|now| now.iter().filter_map(|c| cell_for(&columns, c)).collect()).unwrap_or_default();
+                    rows.push(Row { id: h.nid, cells });
+                }
+            }
+            self.near(&mut o, table);
+            o.tc_node(table, &columns, &rows)?;
         }
         // The tables of messages that changed ([MS-PST] 2.4.4.5).
         for f in folders.iter().filter(|f| f.contents_changed()) {
@@ -1004,11 +1102,19 @@ impl PstStore {
     /// 2.4.4.6), in its order. None for a folder the file does not have yet.
     pub(crate) fn e_hidden(&mut self, folder: FolderId) -> Result<Vec<(ItemId, Result<Item, StoreError>)>, StoreError> {
         let nid = nid_of(folder.0).ok_or(StoreError::NoFolder)?;
-        let Some((_, rows)) = self.table_of(nid & !0x1F | TYPE_ASSOC) else { return Ok(Vec::new()) };
-        let mut out = Vec::with_capacity(rows.len().min(MAX_HIDDEN));
-        for row in rows.into_iter().take(MAX_HIDDEN) {
+        let put: Vec<HiddenPut> = self.edits.as_ref().map(|e| e.hidden.iter().filter(|h| h.folder == nid).cloned().collect()).unwrap_or_default();
+        let rows = self.table_of(nid & !0x1F | TYPE_ASSOC).map(|(_, rows)| rows).unwrap_or_default();
+        let mut out = Vec::with_capacity(rows.len().min(MAX_HIDDEN).saturating_add(put.len()));
+        for row in rows.iter().take(MAX_HIDDEN) {
             let id = ItemId(u64::from(row.id));
-            out.push((id, self.file_load(id)));
+            match put.iter().find(|h| h.nid == row.id) {
+                Some(h) => out.push((id, Ok(h.item.clone()))),
+                None => out.push((id, self.file_load(id))),
+            }
+        }
+        // Those put in that the file does not have yet, after the rest.
+        for h in put.into_iter().filter(|h| !rows.iter().any(|r| r.id == h.nid)) {
+            out.push((ItemId(u64::from(h.nid)), Ok(h.item)));
         }
         Ok(out)
     }

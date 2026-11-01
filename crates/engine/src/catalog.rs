@@ -72,7 +72,7 @@ pub const FEATURES: &[Feature] = &[
     // Mail: View
     f("Mail", "View", "Current View", "Change View", ""),
     f("Mail", "View", "Current View", "View Settings", ""),
-    f("Mail", "View", "Current View", "Reset View", ""),
+    f("Mail", "View", "Current View", "Reset View", "view.resetView"),
     f("Mail", "View", "Messages", "Show as Conversations", ""),
     f("Mail", "View", "Arrangement", "Arrange By", "view.sortBy"),
     f("Mail", "View", "Arrangement", "Reverse Sort", "view.reverseSort"),
