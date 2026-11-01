@@ -29,13 +29,15 @@ pub(crate) struct State {
     /// How far the line is moved to the left for the cursor to be seen.
     scroll: f32,
     /// What an input method is putting together, shown at the cursor until it is done.
-    preedit: String,
+    pub(crate) preedit: String,
     undo: Vec<(String, usize)>,
     redo: Vec<(String, usize)>,
     /// True while one character is typed after another: they are taken back together.
     typing: bool,
     /// When something was last done, for the cursor to blink from.
-    touched: f64,
+    pub(crate) touched: f64,
+    /// Where the cursor is wanted across a text of many lines, while it goes up and down.
+    pub(crate) goal: Option<f32>,
 }
 
 /// What a field remembers, for a test to look at.
@@ -118,7 +120,7 @@ impl<'a> LineEdit<'a> {
 /// A character as a field shows it. A mark that turns the text after it round is shown as a
 /// dot and turns nothing: what is being typed over cannot be disguised, and can be seen to be
 /// taken out. Anything else that has no shape is a blank.
-fn shown(c: char) -> char {
+pub(crate) fn shown(c: char) -> char {
     match c {
         '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => '\u{00B7}',
         c if c.is_control() => ' ',
@@ -126,11 +128,13 @@ fn shown(c: char) -> char {
     }
 }
 
-/// What is typed or pasted, as a field takes it: one line, and none of the marks that turn
-/// text round.
-fn taken(text: &str, room: usize) -> Vec<char> {
+/// What is typed or pasted, as a field takes it: one line, or many when `lines` (each ended
+/// by a line feed alone), and none of the marks that turn text round.
+pub(crate) fn taken(text: &str, room: usize, lines: bool) -> Vec<char> {
+    let text = if lines { text.replace("\r\n", "\n").replace('\r', "\n") } else { text.to_string() };
     text.chars()
         .filter_map(|c| match c {
+            '\n' | '\t' if lines => Some(c),
             '\n' | '\t' => Some(' '),
             '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => None,
             c if c.is_control() => None,
@@ -141,6 +145,7 @@ fn taken(text: &str, room: usize) -> Vec<char> {
 }
 
 /// A line as it is seen.
+#[derive(Clone)]
 pub(crate) struct Line {
     pub(crate) job: LayoutJob,
     /// For each character of the text, where it starts and where it ends as it is read, from
@@ -159,7 +164,7 @@ impl Line {
     }
 
     /// The cursor that is nearest to `x`.
-    fn at(&self, x: f32) -> usize {
+    pub(crate) fn at(&self, x: f32) -> usize {
         let mut best = (0, f32::INFINITY);
         for cursor in 0..=self.edges.len() {
             let away = (self.caret(cursor) - x).abs();
@@ -173,10 +178,16 @@ impl Line {
 
 /// Put a line in the order it is seen in and say where each of its characters is.
 /// `measure` gives the width of a piece of text as the toolkit draws it.
-pub(crate) fn line(chars: &[char], font: &FontId, color: Color32, mut measure: impl FnMut(&str) -> f32) -> Line {
+pub(crate) fn line(chars: &[char], font: &FontId, color: Color32, measure: impl FnMut(&str) -> f32) -> Line {
+    line_as(chars, font, color, measure, None)
+}
+
+/// As `line`, read from the right when `rtl` says so, or as its first letter that has a way
+/// says when it does not: a line of a paragraph wrapped is read the way its paragraph is.
+pub(crate) fn line_as(chars: &[char], font: &FontId, color: Color32, mut measure: impl FnMut(&str) -> f32, rtl: Option<bool>) -> Line {
     let chars: Vec<char> = chars.iter().map(|c| shown(*c)).collect();
     let text: String = chars.iter().collect();
-    let rtl = script::first_strong(&text).unwrap_or(false);
+    let rtl = rtl.unwrap_or_else(|| script::first_strong(&text).unwrap_or(false));
     let levels = script::levels(&text, Some(rtl));
     // Pieces: characters that stand equally deep and are of one kind, as in `seen_line`.
     let mut pieces: Vec<(usize, usize, u8, u8)> = Vec::new();
@@ -221,7 +232,7 @@ fn is_word(c: char) -> bool {
 }
 
 /// Where the word before `at` starts.
-fn word_back(chars: &[char], at: usize) -> usize {
+pub(crate) fn word_back(chars: &[char], at: usize) -> usize {
     let mut at = at.min(chars.len());
     while at > 0 && !chars.get(at - 1).is_some_and(|c| is_word(*c)) {
         at -= 1;
@@ -233,7 +244,7 @@ fn word_back(chars: &[char], at: usize) -> usize {
 }
 
 /// Where the word after `at` ends.
-fn word_on(chars: &[char], at: usize) -> usize {
+pub(crate) fn word_on(chars: &[char], at: usize) -> usize {
     let mut at = at.min(chars.len());
     while at < chars.len() && !chars.get(at).is_some_and(|c| is_word(*c)) {
         at += 1;
@@ -245,7 +256,7 @@ fn word_on(chars: &[char], at: usize) -> usize {
 }
 
 /// The word that `at` is in or just after: where it starts and where it ends.
-fn word_at(chars: &[char], at: usize) -> (usize, usize) {
+pub(crate) fn word_at(chars: &[char], at: usize) -> (usize, usize) {
     let (mut from, mut to) = (at.min(chars.len()), at.min(chars.len()));
     while from > 0 && chars.get(from - 1).is_some_and(|c| is_word(*c)) {
         from -= 1;
@@ -257,29 +268,31 @@ fn word_at(chars: &[char], at: usize) -> (usize, usize) {
 }
 
 /// The text of a field while it is worked on.
-struct Edit<'s> {
-    chars: Vec<char>,
-    state: &'s mut State,
-    limit: usize,
-    changed: bool,
+pub(crate) struct Edit<'s> {
+    pub(crate) chars: Vec<char>,
+    pub(crate) state: &'s mut State,
+    pub(crate) limit: usize,
+    pub(crate) changed: bool,
+    /// True when it is text of many lines.
+    pub(crate) lines: bool,
 }
 
 impl Edit<'_> {
-    fn selected(&self) -> (usize, usize) {
+    pub(crate) fn selected(&self) -> (usize, usize) {
         (self.state.cursor.min(self.state.anchor), self.state.cursor.max(self.state.anchor))
     }
 
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         self.chars.iter().collect()
     }
 
-    fn copy(&self) -> Option<String> {
+    pub(crate) fn copy(&self) -> Option<String> {
         let (from, to) = self.selected();
         self.chars.get(from..to).filter(|s| !s.is_empty()).map(|s| s.iter().collect())
     }
 
     /// Remember the text as it is, to be gone back to.
-    fn step(&mut self, typing: bool) {
+    pub(crate) fn step(&mut self, typing: bool) {
         if !(typing && self.state.typing) {
             self.state.undo.push((self.text(), self.state.cursor));
             if self.state.undo.len() > UNDO_STEPS {
@@ -299,10 +312,10 @@ impl Edit<'_> {
         (self.state.cursor, self.state.anchor) = (from, from);
     }
 
-    fn insert(&mut self, text: &str) {
+    pub(crate) fn insert(&mut self, text: &str) {
         let (from, to) = self.selected();
         let room = self.limit.saturating_sub(self.chars.len().saturating_sub(to - from));
-        let new = taken(text, room);
+        let new = taken(text, room, self.lines);
         if new.is_empty() && from == to {
             return;
         }
@@ -315,14 +328,14 @@ impl Edit<'_> {
         self.changed = true;
     }
 
-    fn delete(&mut self, from: usize, to: usize) {
+    pub(crate) fn delete(&mut self, from: usize, to: usize) {
         if from < to {
             self.step(false);
             self.cut(from, to);
         }
     }
 
-    fn go(&mut self, to: usize, select: bool) {
+    pub(crate) fn go(&mut self, to: usize, select: bool) {
         self.state.cursor = to.min(self.chars.len());
         if !select {
             self.state.anchor = self.state.cursor;
@@ -331,7 +344,7 @@ impl Edit<'_> {
     }
 
     /// One step through the text as it is stored: `on` is towards its end.
-    fn walk(&mut self, on: bool, word: bool, select: bool) {
+    pub(crate) fn walk(&mut self, on: bool, word: bool, select: bool) {
         let (from, to) = self.selected();
         let cursor = self.state.cursor;
         let target = match (from != to && !select, on, word) {
@@ -346,7 +359,7 @@ impl Edit<'_> {
         self.go(target, select);
     }
 
-    fn swap(&mut self, back: bool) {
+    pub(crate) fn swap(&mut self, back: bool) {
         let now = (self.text(), self.state.cursor);
         let (take, give) = if back { (&mut self.state.undo, &mut self.state.redo) } else { (&mut self.state.redo, &mut self.state.undo) };
         let Some((text, cursor)) = take.pop() else { return };
@@ -379,7 +392,7 @@ impl egui::Widget for LineEdit<'_> {
             response.request_focus();
         }
         let focused = response.has_focus() || pointer;
-        let mut edit = Edit { chars: text.chars().collect(), state: &mut state, limit, changed: false };
+        let mut edit = Edit { chars: text.chars().collect(), state: &mut state, limit, changed: false, lines: false };
         edit.state.cursor = edit.state.cursor.min(edit.chars.len());
         edit.state.anchor = edit.state.anchor.min(edit.chars.len());
         if response.gained_focus() && !pointer {
@@ -411,7 +424,7 @@ impl egui::Widget for LineEdit<'_> {
                         if !new.is_empty() {
                             edit.delete(from, to);
                         }
-                        edit.state.preedit = taken(&new, 200).into_iter().collect();
+                        edit.state.preedit = taken(&new, 200, false).into_iter().collect();
                     }
                     Event::Ime(ImeEvent::Commit(new)) => {
                         edit.state.preedit.clear();

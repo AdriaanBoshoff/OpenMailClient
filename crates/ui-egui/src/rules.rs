@@ -232,12 +232,11 @@ fn parts(ui: &mut Ui, t: &crate::theme::Tokens, salt: &str, list: &mut Vec<Part>
                 }
                 Fill::Text => {
                     ui.add(
-                        egui::TextEdit::multiline(&mut p.text)
-                            .id(id)
+                        crate::text_area::TextArea::new(&mut p.text, id)
                             .desired_width(260.0)
                             .desired_rows(3)
                             .char_limit(8000)
-                            .hint_text("What the reply says"),
+                            .hint("What the reply says"),
                     );
                 }
                 Fill::Folder => {

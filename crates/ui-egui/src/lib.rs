@@ -32,6 +32,7 @@ mod signatures;
 pub use reminders::Sound;
 mod ribbon;
 mod tasks;
+mod text_area;
 pub mod theme;
 mod themes;
 /// The ending of a theme file's name (`ui.saveTheme`, `ui.openTheme`).

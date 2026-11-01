@@ -90,12 +90,10 @@ impl MailUi {
                 );
                 ui.add_space(4.0);
                 ui.add(
-                    egui::TextEdit::multiline(&mut e.text)
-                        .id_salt("signature-text")
+                    crate::text_area::TextArea::new(&mut e.text, egui::Id::new("signature-text"))
                         .desired_rows(6)
-                        .desired_width(f32::INFINITY)
                         .char_limit(signatures::MAX_TEXT)
-                        .hint_text("Regards,\n{name}\n{email}"),
+                        .hint("Regards,\n{name}\n{email}"),
                 );
                 ui.label(
                     egui::RichText::new("{name} and {email} are filled with those of the account a message goes from.")

@@ -1184,12 +1184,7 @@ impl MailUi {
             }
             ui.separator();
             ScrollArea::vertical().id_salt("compose-body").auto_shrink(false).show(ui, |ui| {
-                let edit = egui::TextEdit::multiline(&mut body)
-                    .font(font(13.5))
-                    .frame(egui::Frame::NONE)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(16)
-                    .id(egui::Id::new(("compose", "body")));
+                let edit = crate::text_area::TextArea::new(&mut body, egui::Id::new(("compose", "body"))).font(font(13.5)).bare().desired_rows(16);
                 if ui.add(edit).changed() {
                     acts.push(("compose.setField", json!({ "field": "body", "value": body })));
                 }

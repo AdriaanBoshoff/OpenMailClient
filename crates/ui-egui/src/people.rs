@@ -983,7 +983,7 @@ impl MailUi {
                     });
                     right.add_space(8.0);
                     right.label(egui::RichText::new("Notes").font(bold(12.5)).color(t.text));
-                    right.add(egui::TextEdit::multiline(&mut form.notes).desired_rows(6).desired_width(f32::INFINITY).char_limit(200_000));
+                    right.add(crate::text_area::TextArea::new(&mut form.notes, egui::Id::new("contact-notes")).desired_rows(6).char_limit(200_000));
                 });
             });
             if let Some(said) = &form.said {
@@ -1051,7 +1051,7 @@ impl MailUi {
             ui.add(egui::TextEdit::multiline(&mut form.members).desired_rows(8).desired_width(f32::INFINITY).char_limit(1_000_000));
             ui.add_space(6.0);
             ui.label(egui::RichText::new("Notes").font(font(12.0)).color(t.text_dim));
-            ui.add(egui::TextEdit::multiline(&mut form.notes).desired_rows(3).desired_width(f32::INFINITY).char_limit(200_000));
+            ui.add(crate::text_area::TextArea::new(&mut form.notes, egui::Id::new("group-notes")).desired_rows(3).char_limit(200_000));
             if let Some(said) = &form.said {
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(one_line(said)).font(font(12.5)).color(t.danger));

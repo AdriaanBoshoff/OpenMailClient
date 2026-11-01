@@ -3918,3 +3918,101 @@ fn a_line_read_from_the_right_is_set_at_the_right_of_its_cell() {
     assert!(x >= 40.0 && end <= 340.5, "{:?}", got[5]);
     assert_eq!(got[6], (40.0, 0.0), "no room");
 }
+
+/// One frame of a box of many lines, 300 wide, with the keyboard in it.
+fn area_frame(ctx: &egui::Context, text: &mut String, events: Vec<egui::Event>) -> line_edit::State {
+    let id = egui::Id::new("area under test");
+    let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0))), events, ..Default::default() };
+    let mut output = ctx.run_ui(input, |ui| {
+        if ui.memory(|m| m.focused().is_none()) {
+            ui.memory_mut(|m| m.request_focus(id));
+        }
+        let area = text_area::TextArea::new(text, id).desired_width(300.0).desired_rows(4);
+        ui.put(Rect::from_min_size(pos2(20.0, 20.0), vec2(300.0, 200.0)), area);
+    });
+    output.textures_delta.clear();
+    text_area::state(ctx, id).unwrap_or_default()
+}
+
+#[test]
+fn text_of_many_lines_is_wrapped_and_read_the_way_each_paragraph_is() {
+    use egui::{Event, Key, Modifiers};
+    let ten = |piece: &str| piece.chars().count() as f32 * 10.0;
+    let wrapped = |text: &str, room: f32| -> Vec<(usize, usize, bool)> {
+        let chars: Vec<char> = text.chars().collect();
+        text_area::wrap(&chars, room, &font(13.0), Color32::WHITE, ten).into_iter().map(|(from, to, _, last)| (from, to, last)).collect()
+    };
+    // Broken after a blank, the blank kept on the line above; a word wider than the room is
+    // broken where it no longer fits.
+    assert_eq!(wrapped("aa bb cc", 50.0), [(0, 6, false), (6, 8, true)]);
+    assert_eq!(wrapped("aa bb cc", 1e9), [(0, 8, true)]);
+    assert_eq!(wrapped("abcdefgh", 30.0), [(0, 3, false), (3, 6, false), (6, 8, true)]);
+    assert_eq!(wrapped("", 50.0), [(0, 0, true)]);
+    // Every line of a paragraph written from the right is read from the right, the one that
+    // holds other writing alone too.
+    let chars: Vec<char> = "\u{5d0}\u{5d1} ab".chars().collect();
+    let lines = text_area::wrap(&chars, 30.0, &font(13.0), Color32::WHITE, ten);
+    assert_eq!(lines.len(), 2);
+    let (_, _, latin, _) = &lines[1];
+    // "ab" alone on its line, read from the right, ends where it would in such a line.
+    assert_eq!(latin.edges, [(0.0, 10.0), (10.0, 20.0)]);
+    let (_, _, hebrew, _) = &lines[0];
+    assert_eq!(hebrew.edges[0], (30.0, 20.0));
+    // Hostile: nothing to wrap to, no end to the room, a word as long as a book.
+    for room in [0.0, -5.0, f32::NAN, f32::INFINITY, 1.0] {
+        for text in ["", "\n", "a b c", &"x".repeat(5000), &"\u{627}\u{644} ".repeat(500), "\u{202e}\u{2067}ab\u{2069}"] {
+            let chars: Vec<char> = text.chars().collect();
+            for (from, to, line, _) in text_area::wrap(&chars, room, &font(13.0), Color32::WHITE, ten) {
+                assert!(from <= to && to <= chars.len() && line.edges.len() == to - from);
+            }
+        }
+    }
+
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let none = Modifiers::NONE;
+    let mut text = String::new();
+    area_frame(&ctx, &mut text, Vec::new());
+    let state = area_frame(&ctx, &mut text, vec![Event::Text("abc".into()), key(Key::Enter, none), Event::Text("de".into())]);
+    assert_eq!((text.as_str(), state.cursor), ("abc\nde", 6));
+    // Up keeps to where the cursor was seen, and down goes back to it.
+    let state = area_frame(&ctx, &mut text, vec![key(Key::ArrowUp, none)]);
+    assert_eq!(state.cursor, 2);
+    let state = area_frame(&ctx, &mut text, vec![key(Key::ArrowDown, none)]);
+    assert_eq!(state.cursor, 6);
+    let state = area_frame(&ctx, &mut text, vec![key(Key::Home, none)]);
+    assert_eq!(state.cursor, 4);
+    let state = area_frame(
+        &ctx,
+        &mut text,
+        vec![key(Key::Home, Modifiers::COMMAND), key(Key::End, Modifiers::COMMAND | Modifiers::SHIFT), Event::Text("x".into())],
+    );
+    assert_eq!((text.as_str(), state.cursor), ("x", 1));
+    // What is pasted keeps its lines, each ended by a line feed alone.
+    area_frame(&ctx, &mut text, vec![Event::Paste("1\r\n2\r3".into())]);
+    assert_eq!(text, "x1\n2\n3");
+    area_frame(&ctx, &mut text, vec![key(Key::Z, Modifiers::COMMAND)]);
+    assert_eq!(text, "x");
+
+    // A paragraph written from the right stands at the right, and the cursor goes on at the
+    // left of what was typed.
+    area_frame(&ctx, &mut text, vec![key(Key::A, Modifiers::COMMAND), key(Key::Delete, none)]);
+    let mut last = f32::INFINITY;
+    for letter in ["\u{5e9}", "\u{5dc}", "\u{5d5}", "\u{5dd}"] {
+        let state = area_frame(&ctx, &mut text, vec![Event::Text(letter.into())]);
+        assert!(state.caret_x < last && state.caret_x > 200.0, "{}", state.caret_x);
+        last = state.caret_x;
+    }
+    // The arrows go the way the eye does: right is back towards the first letter.
+    let state = area_frame(&ctx, &mut text, vec![key(Key::ArrowRight, none)]);
+    assert!(state.cursor == 3 && state.caret_x > last);
+    // A second paragraph of other writing stands at the left again.
+    let state = area_frame(&ctx, &mut text, vec![key(Key::End, Modifiers::COMMAND), key(Key::Enter, none), Event::Text("ok".into())]);
+    assert!(state.caret_x < 40.0, "{}", state.caret_x);
+    // A line too long for the box is wrapped, and the cursor is on the line below.
+    text.clear();
+    let state = area_frame(&ctx, &mut text, vec![Event::Text("word ".repeat(40))]);
+    let below = state.caret_x;
+    let state = area_frame(&ctx, &mut text, vec![key(Key::ArrowUp, none)]);
+    assert!(state.cursor < 200 && state.cursor > 100 && (state.caret_x - below).abs() < 12.0, "{} {} {}", state.cursor, state.caret_x, below);
+}

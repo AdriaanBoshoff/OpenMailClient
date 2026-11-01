@@ -1366,11 +1366,8 @@ Kept in step with a calendar server at each Send/Receive"
             ui.add_space(6.0);
             ui.label(egui::RichText::new("Notes").color(t.text_dim));
             let alone = form.occurrence.is_some();
-            ui.add_enabled(
-                !alone,
-                egui::TextEdit::multiline(&mut form.notes).id_salt("appt-notes").desired_rows(3).desired_width(f32::INFINITY).char_limit(64_000),
-            )
-            .on_disabled_hover_text("An occurrence has the notes of its series; switch to the whole series to change them");
+            ui.add_enabled(!alone, crate::text_area::TextArea::new(&mut form.notes, egui::Id::new("appt-notes")).desired_rows(3).char_limit(64_000))
+                .on_disabled_hover_text("An occurrence has the notes of its series; switch to the whole series to change them");
             if let Some(m) = form.meeting.as_ref().filter(|m| !m.received && m.invited && !m.attendees.is_empty()) {
                 ui.add_space(6.0);
                 egui::CollapsingHeader::new(

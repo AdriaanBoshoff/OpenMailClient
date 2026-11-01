@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 148 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 149 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 149 · 2026-10-30 — M5.27: right-to-left text read the right way while a message's body is typed.
 - 148 · 2026-10-30 — M5.26: on paper, a table or a bordered block stands beside a picture at the side.
 - 147 · 2026-10-30 — M5.25: an attached object that is no storage kept as a file Outlook lists.
 - 146 · 2026-10-30 — M5.24: the window's place on a second screen kept.

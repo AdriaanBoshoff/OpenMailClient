@@ -918,11 +918,10 @@ impl MailUi {
                         });
                     ui.add_space(8.0);
                     ui.add(
-                        egui::TextEdit::multiline(&mut form.notes)
+                        crate::text_area::TextArea::new(&mut form.notes, egui::Id::new("task-notes"))
                             .desired_rows(7)
-                            .desired_width(f32::INFINITY)
                             .char_limit(200_000)
-                            .hint_text("Notes"),
+                            .hint("Notes"),
                     );
                     ui.add_space(6.0);
                     egui::CollapsingHeader::new(egui::RichText::new("Details").font(bold(12.5)).color(t.text)).id_salt("task-details").show(

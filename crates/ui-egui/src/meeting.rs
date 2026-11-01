@@ -277,11 +277,7 @@ impl MailUi {
             ui.label(egui::RichText::new("A few words to the organizer").font(crate::font(12.5)).color(t.text_dim));
             ui.add_enabled(
                 a.send,
-                egui::TextEdit::multiline(&mut a.comment)
-                    .id(egui::Id::new("answer-comment"))
-                    .desired_rows(5)
-                    .desired_width(f32::INFINITY)
-                    .char_limit(MAX_COMMENT),
+                crate::text_area::TextArea::new(&mut a.comment, egui::Id::new("answer-comment")).desired_rows(5).char_limit(MAX_COMMENT),
             );
             if !a.error.is_empty() {
                 crate::dialog::callout(ui, &t, t.danger, |ui| {
