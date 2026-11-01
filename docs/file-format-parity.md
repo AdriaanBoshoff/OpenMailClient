@@ -102,9 +102,12 @@ hold the writer to these.
 
 Not seen: node 0xC01 (Outlook makes it itself; its layout is in no specification); a file that
 lacks what Outlook asks for and whose table names a hidden item that is not there is saved as
-stored, and stays as Outlook refuses it; an attached object that is not a real storage shows
-as no attachment; no Outlook-written 512-byte-page `.pst` has been saved into. Each has a row in
+stored, and stays as Outlook refuses it; no Outlook-written 512-byte-page `.pst` has been saved into. Each has a row in
 ROADMAP, Do later.
+
+An attachment said to be an object of another program (attach method 6) whose bytes are no
+storage ([MS-CFB] 2.2) would be listed by Outlook as no attachment; the `.pst` and `.msg` writers
+keep it as the file it is (method 1), its bytes unchanged (M5.25).
 
 **4K pages (M3c.2).** A data file with wVer 36, the kind newer versions of Outlook make, is in
 no specification. What is written was measured on the few small Outlook-written `.ost` files kept

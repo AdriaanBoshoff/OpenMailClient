@@ -1287,7 +1287,11 @@ impl PstStore {
                 kept.remove(&nid);
             }
             let size = u32::try_from(new.data.len()).unwrap_or(u32::MAX);
-            let contents = if new.props.i32(pid::ATTACH_METHOD) == Some(6) && !new.data.is_empty() {
+            if new.props.i32(pid::ATTACH_METHOD) == Some(6) && !new.is_object() {
+                // No storage: kept as a file, which Outlook lists (`Out::attachment`).
+                props.insert(pid::ATTACH_METHOD, int(pid::ATTACH_METHOD, 1));
+            }
+            let contents = if new.is_object() {
                 // PtypObject: the subnode that holds the object, then its size ([MS-PST] 2.3.3.5).
                 let used = kept.keys().filter(|n| *n & 0x1F == NID_TYPE_OBJECT).map(|n| n >> 5).max().unwrap_or(0);
                 let mut subs = Subs::new(used.saturating_add(1));

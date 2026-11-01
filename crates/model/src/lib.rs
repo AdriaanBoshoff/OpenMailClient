@@ -248,6 +248,13 @@ impl Attachment {
         Self { props, data, embedded: None }
     }
 
+    /// Whether this is an object of another program (attach method 6) whose bytes are a
+    /// storage, as such an object must be ([MS-OXCMSG] 2.2.2.9). One that is not would be
+    /// listed by Outlook as no attachment at all, so the writers keep it as a file instead.
+    pub fn is_object(&self) -> bool {
+        self.embedded.is_none() && self.props.i32(pid::ATTACH_METHOD) == Some(6) && is_compound_file(&self.data)
+    }
+
     pub fn name(&self) -> String {
         for id in [pid::ATTACH_LONG_FILENAME, pid::ATTACH_FILENAME, pid::DISPLAY_NAME] {
             if let Some(s) = self.props.str(id)
@@ -790,6 +797,12 @@ pub trait Store {
     fn move_folder(&mut self, _folder: FolderId, _parent: FolderId) -> Result<(), StoreError> {
         Err(StoreError::ReadOnly)
     }
+}
+
+/// Whether `data` begins as a compound file does: its signature and a header's worth of
+/// bytes ([MS-CFB] 2.2: the header is 512 bytes and begins D0 CF 11 E0 A1 B1 1A E1).
+pub fn is_compound_file(data: &[u8]) -> bool {
+    data.len() >= 512 && data.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])
 }
 
 #[cfg(test)]

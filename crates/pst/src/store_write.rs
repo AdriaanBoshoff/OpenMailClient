@@ -700,13 +700,18 @@ impl<W: Read + Write + Seek> Out<W> {
             let size = cells.iter().find(|c| c.id == pid::MESSAGE_SIZE).and_then(|c| crate::ndb::u32_at(&c.data, 0)).map_or(0, |n| n as usize);
             props.insert(pid::ATTACH_DATA, object(NID_EMBEDDED, size));
             size
-        } else if a.props.i32(pid::ATTACH_METHOD) == Some(6) && !a.data.is_empty() {
+        } else if a.is_object() {
             // An object of another program is kept as an object too, its storage as bytes.
             let most = self.w.max_data();
             let nid = subs.object(&mut self.w, a.data.chunks(most))?;
             props.insert(pid::ATTACH_DATA, object(nid, a.data.len()));
             a.data.len()
         } else {
+            // An object whose bytes are no storage is kept as the file it is, so that Outlook
+            // lists it (as an object it lists nothing).
+            if a.embedded.is_none() && a.props.i32(pid::ATTACH_METHOD) == Some(6) {
+                props.insert(pid::ATTACH_METHOD, int(pid::ATTACH_METHOD, 1));
+            }
             props.insert(pid::ATTACH_DATA, Raw { id: pid::ATTACH_DATA, ty: X, data: a.data.clone() });
             0
         };

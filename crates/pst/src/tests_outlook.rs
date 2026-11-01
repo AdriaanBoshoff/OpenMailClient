@@ -176,7 +176,7 @@ fn sizes_are_what_is_stored_and_rows_say_the_same() {
                 let (data, sub) = *ndb.subnodes(sub).unwrap().get(&named).unwrap();
                 match int(&list, pid::ATTACH_METHOD) {
                     Some(6) => {
-                        assert_eq!((named & 0x1F, said, ndb.data(data).unwrap().len()), (0x09, 7, 7));
+                        assert_eq!((named & 0x1F, said, ndb.data(data).unwrap().len()), (0x09, 512, 512));
                         objects += 1;
                     }
                     _ => {
@@ -188,7 +188,7 @@ fn sizes_are_what_is_stored_and_rows_say_the_same() {
                 }
             }
         }
-        assert_eq!((files_seen, objects, inside), (4, 1, 1));
+        assert_eq!((files_seen, objects, inside), (5, 1, 1));
     }
 }
 

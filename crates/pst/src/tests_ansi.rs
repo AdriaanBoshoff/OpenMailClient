@@ -168,7 +168,7 @@ fn changes_to_an_ansi_file_are_kept_and_it_stays_one() {
     assert_eq!(back.ndb.ver, Ver::Ansi);
     same_mailbox(&want, &whole(&mut back));
     let got = back.load(inbox.id, first).unwrap();
-    assert_eq!((got.subject().as_str(), got.attachments.len()), ("Zahlen für März", 4));
+    assert_eq!((got.subject().as_str(), got.attachments.len()), ("Zahlen für März", 5));
     assert_eq!(got.recipients[0].str(pid::DISPLAY_NAME), Some("Алексей"));
     assert!(got.categories.contains(&"Blau \u{2713}".to_string()));
     assert_eq!(back.load(inbox.id, second).unwrap().subject(), "\u{6771}\u{4eac} report");

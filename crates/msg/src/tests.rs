@@ -214,13 +214,15 @@ fn an_attached_object_of_another_program_round_trips_as_its_storage() {
     let again = read(&write(&back).unwrap()).unwrap();
     assert_eq!(listing(&again.attachments[0].data), listing(&object));
 
-    // Bytes that are not a compound file are still kept, as plain data.
+    // Bytes that are not a compound file are still kept, as the file they are: Outlook lists
+    // an object that is not a storage as no attachment.
     let mut odd = Item::new_mail();
     let mut a = Attachment::file("Odd", "", b"not a compound file".to_vec());
     a.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
     odd.attachments.push(a);
     let back = read(&write(&odd).unwrap()).unwrap();
     assert_eq!(back.attachments[0].data, b"not a compound file");
+    assert_eq!(back.attachments[0].props.i32(pid::ATTACH_METHOD), Some(1));
 }
 
 /// A presentation stream ([MS-OLEDS] 2.3.4) of a standard format, with a target device of `device` bytes.

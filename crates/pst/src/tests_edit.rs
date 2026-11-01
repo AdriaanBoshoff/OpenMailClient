@@ -122,7 +122,7 @@ fn changes_are_kept_when_saved() {
     assert!(back.list(made).unwrap().iter().any(|s| s.id == in_made.0));
     let read = back.load(inbox.id, first).unwrap();
     assert!(read.is_read() && read.flag() == Flag::Complete && read.categories.contains(&"Blue Category".to_string()));
-    assert_eq!(read.attachments.len(), 4);
+    assert_eq!(read.attachments.len(), 5);
     assert_eq!(back.load(inbox.id, new_id).unwrap().attachments.len(), 1);
     // The deleted folder's nodes and the deleted message are not in the new file.
     assert!(!back.ndb.nbt.contains_key(&(calendar.id.0 as u32)) && !back.ndb.nbt.contains_key(&(old_sent.0 as u32)));
@@ -136,7 +136,7 @@ fn changes_are_kept_when_saved() {
     let want = whole(&mut back);
     let mut third = saved(&mut back);
     same_mailbox(&want, &whole(&mut third));
-    assert_eq!(third.load(again, first).unwrap().attachments.len(), 4);
+    assert_eq!(third.load(again, first).unwrap().attachments.len(), 5);
 }
 
 #[test]
@@ -331,7 +331,7 @@ fn a_file_put_in_again_keeps_what_is_stored_on_it_and_what_cannot_be_read_stays(
     let mut item = mail("Worked on", false);
     item.attachments.push(Attachment::file("report.txt", "text/plain", b"first draft".to_vec()));
     item.attachments.push(Attachment::file("figures.bin", "", (0..30_000u32).map(|i| (i % 249) as u8).collect()));
-    let mut sheet = Attachment::file("Sheet", "", vec![0xD0, 0xCF, 0x11, 0xE0, 1, 2, 3]);
+    let mut sheet = Attachment::file("Sheet", "", crate::tests_store::storage(1, 512));
     sheet.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
     item.attachments.push(sheet);
     let id = store.add(inbox.id, item).unwrap();
@@ -347,7 +347,7 @@ fn a_file_put_in_again_keeps_what_is_stored_on_it_and_what_cannot_be_read_stays(
     let grown: Vec<u8> = (0..50_000u32).map(|i| (i % 241) as u8).collect();
     item.attachments[1].data = grown.clone();
     item.attachments[1].props.set_str(pid::ATTACH_MIME_TAG, "application/octet-stream");
-    item.attachments[2].data = vec![0xD0, 0xCF, 0x11, 0xE0, 9, 9, 9, 9, 9];
+    item.attachments[2].data = crate::tests_store::storage(9, 520);
     store.update(inbox.id, id, item).unwrap();
     let mut store = saved(&mut store);
     assert_eq!(
@@ -359,7 +359,7 @@ fn a_file_put_in_again_keeps_what_is_stored_on_it_and_what_cannot_be_read_stays(
     // The size of the whole attachment: the twenty bytes and its other properties.
     assert_eq!(got.attachments[0].props.i32(pid::ATTACH_SIZE), Some(120));
     assert_eq!((got.attachments[1].data == grown, got.attachments[1].props.str(pid::ATTACH_MIME_TAG)), (true, Some("application/octet-stream")));
-    assert_eq!((got.attachments[2].data.len(), got.attachments[2].props.i32(pid::ATTACH_METHOD)), (9, Some(6)));
+    assert_eq!((got.attachments[2].data.len(), got.attachments[2].props.i32(pid::ATTACH_METHOD)), (520, Some(6)));
     // Another name and other contents: nothing says it is the file that was there.
     let mut item = got.clone();
     item.attachments[0].data = b"another file".to_vec();
@@ -368,7 +368,14 @@ fn a_file_put_in_again_keeps_what_is_stored_on_it_and_what_cannot_be_read_stays(
     let mut store = saved(&mut store);
     assert_eq!(stored_attachments(&mut store, id)[0], ("other.txt".to_string(), Some(vec![9, 0, 0, 0]), 0));
     // An object carried through a save of the list has its bytes still.
-    assert_eq!(store.load(inbox.id, id).unwrap().attachments[2].data, [0xD0, 0xCF, 0x11, 0xE0, 9, 9, 9, 9, 9]);
+    assert_eq!(store.load(inbox.id, id).unwrap().attachments[2].data, crate::tests_store::storage(9, 520));
+    // Put in again with bytes that are no storage, the object is kept as the file it is now.
+    let mut item = store.load(inbox.id, id).unwrap();
+    item.attachments[2].data = b"plain bytes now".to_vec();
+    store.update(inbox.id, id, item).unwrap();
+    let mut store = saved(&mut store);
+    let got = store.load(inbox.id, id).unwrap();
+    assert_eq!((got.attachments[2].data.as_slice(), got.attachments[2].props.i32(pid::ATTACH_METHOD)), (&b"plain bytes now"[..], Some(1)));
 
     // The second attachment cannot be read: the message shows two. One of those is taken
     // away and the message is saved; the one nobody saw is still there afterwards.

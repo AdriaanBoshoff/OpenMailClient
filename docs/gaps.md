@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 146 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 147 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 147 · 2026-10-30 — M5.25: an attached object that is no storage kept as a file Outlook lists.
 - 146 · 2026-10-30 — M5.24: the window's place on a second screen kept.
 - 145 · 2026-10-30 — M5.23: an attachment shown in the reading pane on a click, tables from comma-separated files.
 - 144 · 2026-10-30 — M5.22: right-to-left lines set from the right of their cell in the list, the header and the folder pane.

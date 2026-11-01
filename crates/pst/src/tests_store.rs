@@ -77,9 +77,14 @@ pub(super) fn mailbox() -> MemStore {
     carrier.props.set(pid::ATTACH_METHOD, PropValue::Int32(5));
     carrier.embedded = Some(Box::new(inner));
     first.attachments.push(carrier);
-    let mut object = Attachment::file("Sheet", "", vec![0xD0, 0xCF, 0x11, 0xE0, 9, 9, 9]);
+    let mut object = Attachment::file("Sheet", "", storage(9, 512));
     object.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
     first.attachments.push(object);
+    // Said to be an object, but its bytes are no storage: kept as the file it is, which
+    // Outlook lists (as an object it lists nothing).
+    let mut odd = Attachment::file("odd.bin", "", b"not a storage".to_vec());
+    odd.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
+    first.attachments.push(odd);
     s.push_item(inbox, first);
 
     s.push_item(inbox, mail("Read already", true));
@@ -89,6 +94,13 @@ pub(super) fn mailbox() -> MemStore {
     s.push_item(deep, long);
     s.push_item(sent, mail("Sent before", true));
     s
+}
+
+/// Bytes that begin as a storage does ([MS-CFB] 2.2), `len` of them.
+pub(super) fn storage(fill: u8, len: usize) -> Vec<u8> {
+    let mut bytes = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    bytes.resize(len, fill);
+    bytes
 }
 
 /// Every folder of a store by its path of names, with what it holds.
@@ -169,8 +181,13 @@ pub(super) fn same(want: &Item, got: &Item, at: &str) {
     for (w, g) in want.attachments.iter().zip(&got.attachments) {
         assert_eq!(g.name(), w.name(), "{at}");
         assert!(g.data == w.data, "{at}: the bytes of {}", w.name());
-        for (id, v) in w.props.iter().filter(|(id, _)| *id != pid::ATTACH_SIZE) {
+        // An object whose bytes are no storage comes back as the file it is.
+        let as_file = w.embedded.is_none() && w.props.i32(pid::ATTACH_METHOD) == Some(6) && !w.is_object();
+        for (id, v) in w.props.iter().filter(|(id, _)| *id != pid::ATTACH_SIZE && !(as_file && *id == pid::ATTACH_METHOD)) {
             assert_eq!(g.props.get(id), Some(v), "{at}: attachment property {id:#06x}");
+        }
+        if as_file {
+            assert_eq!(g.props.i32(pid::ATTACH_METHOD), Some(1), "{at}: {}", w.name());
         }
         assert!(g.props.i32(pid::RENDERING_POSITION).is_some() && g.props.i32(pid::ATTACH_SIZE).is_some());
         match (&w.embedded, &g.embedded) {

@@ -272,6 +272,11 @@ fn write_message(cf: &mut Cf, base: &Path, item: &Item, top: bool, names: &mut N
                 write_message(cf, &sub, inner, false, names)?;
             }
             (None, None) => {
+                // An object whose bytes are no storage goes as the file it is: Outlook lists
+                // an object that is not a storage as no attachment.
+                if a.props.i32(pid::ATTACH_METHOD) == Some(6) {
+                    set(&mut props, pid::ATTACH_METHOD, PropValue::Int32(1));
+                }
                 set(&mut props, pid::ATTACH_SIZE, PropValue::Int32(i32::try_from(a.data.len()).unwrap_or(i32::MAX)));
                 props.push((pid::ATTACH_DATA, PropValue::Binary(a.data.clone())));
             }
