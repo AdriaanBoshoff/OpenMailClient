@@ -1562,30 +1562,48 @@ impl<'f, 'l> Flow<'f, 'l> {
                 break;
             }
             let step = 1usize;
-            // Only plain paragraphs stand beside a picture; anything else starts below it.
+            // A plain paragraph's lines go round a picture at one side. A table, a rule or a
+            // bordered block stands beside it whole, in the room it leaves, as in the window,
+            // when that room is wide enough; else it starts below the picture.
+            let (mut bx, mut bw) = (x, width);
             if !matches!(block, Block::Para(p) if p.frame.is_none()) {
-                at = self.below_aside(at);
+                let (from, to) = self.between_asides(x, width, at);
+                let narrower = from > x + 0.01 || to < x + width - 0.01;
+                if narrower && to - from >= MIN_BESIDE.max(width * 0.3) {
+                    (bx, bw) = (from, to - from);
+                } else {
+                    at = self.below_aside(at);
+                }
             }
+            // What stands beside the pictures leaves them standing for what comes after it.
+            let beside = (bx, bw) != (x, width);
+            let standing = if beside { std::mem::take(&mut self.asides) } else { Vec::new() };
             if let Some((frame, count)) = boxed_run(list.get(i..).unwrap_or_default(), 0) {
-                at = self.framed(list.get(i..i.saturating_add(count)).unwrap_or_default(), frame, x, width, at, i == 0, depth, 0);
+                at = self.framed(list.get(i..i.saturating_add(count)).unwrap_or_default(), frame, bx, bw, at, i == 0, depth, 0);
                 i += count.max(1);
+                if beside {
+                    self.asides = standing;
+                }
                 continue;
             }
             match block {
-                Block::Para(para) => at = self.para(para, x, width, at, i == 0),
+                Block::Para(para) => at = self.para(para, bx, bw, at, i == 0),
                 Block::Rule => {
                     let tall = 13.0 * PX;
                     at = self.room(at, tall);
                     let y = at.y + tall / 2.0;
-                    self.rule(at.page, (x, y), (x + width, y), PX, GREY, Line::Solid);
+                    self.rule(at.page, (bx, y), (bx + bw, y), PX, GREY, Line::Solid);
                     at.y += tall;
                 }
                 Block::Table(table) => {
                     if i > 0 && !table.snug && at.y > self.top() + 0.01 {
                         at.y += 6.0 * PX;
                     }
-                    at = self.table(table, x, width, at, depth);
+                    at = self.table(table, bx, bw, at, depth);
                 }
+            }
+            if beside {
+                self.asides = standing;
             }
             i += step;
         }

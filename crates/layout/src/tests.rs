@@ -674,7 +674,9 @@ fn text_stands_beside_a_picture_at_one_side() {
         ])
     };
     let find = |page: &Page, text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap().clone();
-    for then in [
+    // A paragraph that asks to start below it goes under it; a table or a bordered block
+    // stands beside it while there is room, as Outlook wraps them.
+    for (n, then) in [
         Block::Para(Para { clear: true, ..para("below") }),
         Block::Table(Table { rows: vec![vec![cell("below")]], ..Table::default() }),
         Block::Para(Para {
@@ -689,16 +691,39 @@ fn text_stands_beside_a_picture_at_one_side() {
             })),
             ..para("below")
         }),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let printed = print(&tall(then), Paper::A4);
         let page = &printed.pages[0];
         let picture = &page.pictures[0];
         assert_eq!((picture.width, picture.height), (60.0, 120.0));
         let (one, two, below, end) = (find(page, "one"), find(page, "two"), find(page, "below"), find(page, "end"));
         assert!(near(one.x, left + 66.0) && near(two.x, left + 66.0) && two.y > one.y && two.y < picture.y + 120.0);
-        assert!(below.x < left + 20.0 && below.y - 9.6 >= picture.y + 120.0 - 0.01, "{} {}", below.x, below.y);
-        assert!(near(end.x, left) && end.y > below.y);
+        if n == 0 {
+            assert!(below.x < left + 20.0 && below.y - 9.6 >= picture.y + 120.0 - 0.01, "{} {}", below.x, below.y);
+            assert!(near(end.x, left) && end.y > below.y);
+        } else {
+            // Beside it, under "two", and what follows still beside it while it lasts.
+            assert!(below.x >= left + 66.0 - 0.01 && below.y > two.y && below.y < picture.y + 120.0, "{n}: {} {}", below.x, below.y);
+            assert!(end.y > below.y && (end.y - 9.6 >= picture.y + 120.0 - 0.01 || end.x >= left + 66.0 - 0.01), "{n}: {} {}", end.x, end.y);
+        }
     }
+    // On a page too narrow beside it, the table goes below the picture.
+    let wide = doc(vec![
+        Block::Para(Para { runs: vec![side("huge", Float::Left), run("one")], ..Para::default() }),
+        Block::Table(Table { rows: vec![vec![cell("under")]], ..Table::default() }),
+    ]);
+    let printed = print(&wide, Paper::A4);
+    for page in &printed.pages {
+        if let (Some(picture), Some(under)) =
+            (page.pictures.first(), page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == "under"))
+        {
+            assert!(under.y - 9.6 >= picture.y + picture.height - 0.01 || under.x < left + 20.0, "{} {}", under.x, under.y);
+        }
+    }
+    within(&printed, Paper::A4);
     // Blocks that end beside a picture end under it: a cell is as tall as its picture, and
     // the next cell's text does not stand beside a picture that is not its own.
     let floated = Cell {
