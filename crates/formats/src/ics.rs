@@ -14,7 +14,9 @@ use openmailclient_model::recur::{self, End, Freq, Recurrence, Rule};
 use openmailclient_model::zone::{Daylight, Era, Rule as ZoneRule, Zone};
 use openmailclient_model::{Item, time};
 
+mod free_busy;
 mod todo;
+pub use free_busy::{FreeBusy, free_busy_request, read_free_busy, write_free_busy};
 pub use todo::Todo;
 
 /// Largest file read, in bytes.

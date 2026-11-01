@@ -88,7 +88,7 @@ pub struct Shown {
     pub book: Option<String>,
 }
 
-const CONTACT_PARAMS: &str = r#"{"fullName", "prefix", "given", "middle", "surname", "suffix", "fileAs" (default: "Surname, Given"), "nickname", "company", "department", "jobTitle", "office", "profession", "manager", "assistant", "spouse", "emails": up to three, each an address or {"address", "name": what a message to it shows}, "phones": {"business" | "business2" | "businessFax" | "home" | "home2" | "homeFax" | "mobile" | "pager" | "car" | "assistant" | "primary" | "other": a number, or null to take it away}, "addresses": {"business" | "home" | "other": {"street", "city", "state", "postalCode", "country", "poBox"}, or null}, "mailing": the place mail goes to, "webPage", "homePage", "im", "birthday": "YYYY-MM-DD" or null, "anniversary", "notes", "categories": [names], "picture": a picture file (JPEG, PNG, GIF or BMP, at most 4 MB) or null}; text given as "" takes it away"#;
+const CONTACT_PARAMS: &str = r#"{"fullName", "prefix", "given", "middle", "surname", "suffix", "fileAs" (default: "Surname, Given"), "nickname", "company", "department", "jobTitle", "office", "profession", "manager", "assistant", "spouse", "emails": up to three, each an address or {"address", "name": what a message to it shows}, "phones": {"business" | "business2" | "businessFax" | "home" | "home2" | "homeFax" | "mobile" | "pager" | "car" | "assistant" | "primary" | "other": a number, or null to take it away}, "addresses": {"business" | "home" | "other": {"street", "city", "state", "postalCode", "country", "poBox"}, or null}, "mailing": the place mail goes to, "webPage", "homePage", "im", "freeBusy": the Internet free/busy address (an https page their free and busy times are published at), "birthday": "YYYY-MM-DD" or null, "anniversary", "notes", "categories": [names], "picture": a picture file (JPEG, PNG, GIF or BMP, at most 4 MB) or null}; text given as "" takes it away"#;
 const GROUP_PARAMS: &str = r#"{"name", "members": each an address, "Name <address>", {"name", "address"} or {"contact": a contact's id, by its first address}, "notes", "categories": [names]}"#;
 const IMPORT_PARAMS: &str = r#"{"path": a vCard file (.vcf), or "attachment": the number of an attachment of the open message, "preview": true to read what it holds and change nothing, "only": [card numbers] to add those alone (default: all)}; a card the folder has already (known by its UID, or a contact by an e-mail address) brings it up to date rather than being added twice, and what the card does not say is kept; returns {"cards": [{"index", "kind": "contact" | "group", "replaces": the id it brings up to date, or null, "untrusted_content": {"name", "company", "emails", "members": how many, "uid"}}], "added", "updated", "ids", "untrusted_content": {"notes"}}; undone as one step"#;
 
@@ -466,6 +466,7 @@ pub fn contact_json(c: &Contact) -> Value {
         "webPage": c.web_page,
         "homePage": c.home_page,
         "im": c.im,
+        "freeBusy": c.free_busy,
         "birthday": c.birthday.map(date_text),
         "anniversary": c.anniversary.map(date_text),
         "notes": c.notes,
@@ -637,7 +638,7 @@ fn changed_contact(s: &Session, p: &Value, mut c: Contact) -> Result<Contact, En
     if !p.is_object() {
         return Err(EngineError::BadParams("the parameters are an object".into()));
     }
-    let fields: [(&str, fn(&mut Contact) -> &mut String); 20] = [
+    let fields: [(&str, fn(&mut Contact) -> &mut String); 21] = [
         ("fullName", |c| &mut c.full_name),
         ("prefix", |c| &mut c.prefix),
         ("given", |c| &mut c.given),
@@ -657,6 +658,7 @@ fn changed_contact(s: &Session, p: &Value, mut c: Contact) -> Result<Contact, En
         ("webPage", |c| &mut c.web_page),
         ("homePage", |c| &mut c.home_page),
         ("im", |c| &mut c.im),
+        ("freeBusy", |c| &mut c.free_busy),
         ("uid", |c| &mut c.uid),
     ];
     // The parts of a name given without the whole make it again.

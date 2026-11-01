@@ -28,6 +28,7 @@ mod preview;
 mod progress;
 mod reminders;
 mod rules;
+mod scheduling;
 mod signatures;
 pub use reminders::Sound;
 mod ribbon;

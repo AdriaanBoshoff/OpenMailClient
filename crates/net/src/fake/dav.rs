@@ -68,6 +68,7 @@ impl DavCalendar {
 pub const PRINCIPAL: &str = "/dav/principals/pat/";
 pub const HOME: &str = "/dav/calendars/pat/";
 pub const BOOK_HOME: &str = "/dav/addressbooks/pat/";
+pub const OUTBOX: &str = "/dav/calendars/pat/outbox/";
 
 impl State {
     /// A calendar of the fake CalDAV server by its path.
@@ -221,9 +222,12 @@ fn respond(r: &Request, s: &mut State) -> Vec<u8> {
             }
         }
         "PROPFIND" if path == "/dav/" || path == PRINCIPAL => {
-            let props = format!(
+            let mut props = format!(
                 "<d:current-user-principal><d:href>{PRINCIPAL}</d:href></d:current-user-principal><c:calendar-home-set><d:href>{HOME}</d:href></c:calendar-home-set><card:addressbook-home-set><d:href>{BOOK_HOME}</d:href></card:addressbook-home-set>"
             );
+            if s.dav_outbox {
+                props.push_str(&format!("<c:schedule-outbox-URL><d:href>{OUTBOX}</d:href></c:schedule-outbox-URL>"));
+            }
             answer(207, "", &multistatus(&ok(path, &props), None))
         }
         "PROPFIND" if path == HOME || path == BOOK_HOME => {
@@ -246,11 +250,36 @@ fn respond(r: &Request, s: &mut State) -> Vec<u8> {
             }
             None => answer(404, "", ""),
         },
+        "POST" if path == OUTBOX && s.dav_outbox => schedule(r, s),
         "REPORT" => report(r, s),
         "PUT" => put(r, s),
         "DELETE" => delete(r, s),
         _ => answer(405, "", ""),
     }
+}
+
+/// A free/busy request posted to the outbox ([RFC 6638] 5), answered for each attendee with
+/// what `free_busy` holds of them.
+fn schedule(r: &Request, s: &State) -> Vec<u8> {
+    let mut inner = String::new();
+    for line in r.body.lines() {
+        let Some(rest) = line.strip_prefix("ATTENDEE") else { continue };
+        let Some((_, to)) = rest.split_once(':') else { continue };
+        let address = to.trim().trim_start_matches("mailto:");
+        let mine = s.free_busy.iter().find(|(a, _)| a.eq_ignore_ascii_case(address));
+        let (status, data) = match mine {
+            Some((_, data)) => ("2.0;Success", format!("<c:calendar-data>{}</c:calendar-data>", escape(data))),
+            None => ("3.7;Invalid calendar user", String::new()),
+        };
+        inner.push_str(&format!(
+            "<c:response><c:recipient><d:href>mailto:{}</d:href></c:recipient><c:request-status>{status}</c:request-status>{data}</c:response>",
+            escape(address)
+        ));
+    }
+    let body = format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<c:schedule-response xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\">{inner}</c:schedule-response>"
+    );
+    answer(200, "", &body)
 }
 
 /// What a calendar is, as a PROPFIND of it says.

@@ -51,6 +51,8 @@ mod tests_carddav;
 #[cfg(test)]
 mod tests_columns;
 #[cfg(test)]
+mod tests_free_busy;
+#[cfg(test)]
 mod tests_import;
 #[cfg(test)]
 mod tests_meeting;
@@ -438,6 +440,11 @@ pub struct Session {
     /// A second zone whose hours the Calendar's day and week views show beside its own
     /// (`calendar.secondTimeZone`).
     pub second_zone: Option<Zone>,
+    /// The hours and weekdays worked, which the Scheduling Assistant suggests times in
+    /// (`calendar.workTime`).
+    pub work: openmailclient_model::free_busy::Work,
+    /// What the Scheduling Assistant last found (`calendar.freeBusy`).
+    pub scheduling: Option<cmd::free_busy::Scheduling>,
     /// "Now" as UTC FILETIME ticks. Set by the host; tests pin it.
     pub now: i64,
     pub user_name: String,
@@ -572,6 +579,8 @@ impl Session {
             system_zone: Zone::utc(),
             zone_chosen: None,
             second_zone: None,
+            work: openmailclient_model::free_busy::Work::default(),
+            scheduling: None,
             region: openmailclient_model::time::Region::default(),
             previews: std::collections::HashMap::new(),
             now: openmailclient_model::time::from_unix(i64::try_from(unix).unwrap_or(0)),

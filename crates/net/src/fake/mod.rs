@@ -13,7 +13,7 @@ mod pop3;
 mod smtp;
 
 use crate::{About, Connector, End, Endpoint, Fingerprint, NetError, Protocol, Security, Seen, Stream, pipe};
-pub use dav::{BOOK_HOME as DAV_BOOK_HOME, DavCalendar, DavObject, HOME as DAV_HOME, PRINCIPAL as DAV_PRINCIPAL};
+pub use dav::{BOOK_HOME as DAV_BOOK_HOME, DavCalendar, DavObject, HOME as DAV_HOME, OUTBOX as DAV_OUTBOX, PRINCIPAL as DAV_PRINCIPAL};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A message held by the fake server.
@@ -142,6 +142,11 @@ pub struct State {
     pub dav_well_known: bool,
     /// A PUT is answered without the new ETag, as some servers answer it.
     pub dav_no_etag: bool,
+    /// The principal has a scheduling outbox ([RFC 6638] 2.1), at `OUTBOX`.
+    pub dav_outbox: bool,
+    /// What the outbox answers of each person asked for, by address: the calendar data of a
+    /// VFREEBUSY reply. Anyone else is not known (3.7).
+    pub free_busy: Vec<(String, String)>,
 }
 
 impl Default for State {
@@ -174,6 +179,8 @@ impl Default for State {
             dav_page: None,
             dav_well_known: true,
             dav_no_etag: false,
+            dav_outbox: true,
+            free_busy: Vec::new(),
         }
     }
 }

@@ -199,6 +199,7 @@ pub(crate) struct ContactForm {
     pub mailing: Option<Place>,
     pub web_page: String,
     pub im: String,
+    pub free_busy: String,
     pub birthday: String,
     pub anniversary: String,
     pub categories: String,
@@ -236,6 +237,7 @@ impl ContactForm {
             mailing: c.mailing,
             web_page: c.web_page.clone(),
             im: c.im.clone(),
+            free_busy: c.free_busy.clone(),
             birthday: day_text(c.birthday),
             anniversary: day_text(c.anniversary),
             categories: c.categories.join(", "),
@@ -265,6 +267,7 @@ impl ContactForm {
             "addresses": PLACES.iter().zip(&self.addresses).map(|(at, a)| (at.name().to_string(), a.param())).collect::<serde_json::Map<_, _>>(),
             "webPage": self.web_page,
             "im": self.im,
+            "freeBusy": self.free_busy,
             "birthday": if self.birthday.trim().is_empty() { Value::Null } else { json!(self.birthday.trim()) },
             "anniversary": if self.anniversary.trim().is_empty() { Value::Null } else { json!(self.anniversary.trim()) },
             "categories": self.categories.split([',', ';']).map(str::trim).filter(|c| !c.is_empty()).collect::<Vec<_>>(),
@@ -934,6 +937,7 @@ impl MailUi {
                         }
                         field(ui, "Web Page", &mut form.web_page, "web", "https://");
                         field(ui, "IM Address", &mut form.im, "im", "");
+                        field(ui, "Internet Free/Busy", &mut form.free_busy, "free-busy", "https://");
                         for (kind, number) in PHONES.iter().zip(form.phones.iter_mut()) {
                             let label = if *kind == Phone::BusinessFax { kind.label().to_string() } else { format!("{} Phone", kind.label()) };
                             field(ui, &label, number, kind.name(), "");

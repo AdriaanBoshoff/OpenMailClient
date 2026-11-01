@@ -443,6 +443,17 @@ impl AppointmentForm {
     }
 
     /// Start and end as typed, when both read as times.
+    /// The meeting moved to `start` and `end` (UTC ticks), typed as its zone shows them.
+    fn move_to(&mut self, start: i64, end: i64, here: &Zone) {
+        let zone = self.typed_in(here);
+        let (a, b) = (zone.civil(start), zone.civil(end));
+        self.all_day = false;
+        self.start_date = ymd(&a);
+        self.start_time = hm(&a);
+        self.end_date = ymd(&b);
+        self.end_time = hm(&b);
+    }
+
     fn span(&self, here: &Zone) -> Option<(i64, i64)> {
         let offset = &self.typed_in(here);
         let start =
@@ -467,6 +478,8 @@ enum Ask {
     CancelMeeting,
     /// One asked answers: accept, tentative or decline.
     Respond(&'static str),
+    /// Everyone's free and busy times looked up, for the Scheduling Assistant.
+    LookUp,
 }
 
 impl MailUi {
@@ -1223,6 +1236,7 @@ Kept in step with a calendar server at each Send/Receive"
             (Some(_), None, true) => "Meeting",
         };
         let icon = if is_meeting { Icon::NewMeeting } else { Icon::NewAppointment };
+        let looking = self.session.jobs.iter().any(|j| j.what.starts_with("Looking up free and busy times"));
         let mut switch = false;
         let shown = crate::dialog::Dialog::new("appointment", title, icon).show(ctx, &t, |ui| {
             // Opened on one occurrence: this one alone, or the whole series, with no question first.
@@ -1368,6 +1382,17 @@ Kept in step with a calendar server at each Send/Receive"
             let alone = form.occurrence.is_some();
             ui.add_enabled(!alone, crate::text_area::TextArea::new(&mut form.notes, egui::Id::new("appt-notes")).desired_rows(3).char_limit(64_000))
                 .on_disabled_hover_text("An occurrence has the notes of its series; switch to the whole series to change them");
+            if form.inviting && !form.received() {
+                ui.add_space(6.0);
+                egui::CollapsingHeader::new(egui::RichText::new("Scheduling Assistant").font(font(12.0)).color(t.text))
+                    .id_salt("appt-scheduling")
+                    .default_open(self.session.scheduling.is_some())
+                    .show(ui, |ui| match crate::scheduling::assistant(ui, &t, self.session.scheduling.as_ref(), form.span(off), off, looking) {
+                        Some(crate::scheduling::Pick::Look) => ask = Some(Ask::LookUp),
+                        Some(crate::scheduling::Pick::Use(s, e)) => form.move_to(s, e, off),
+                        None => {}
+                    });
+            }
             if let Some(m) = form.meeting.as_ref().filter(|m| !m.received && m.invited && !m.attendees.is_empty()) {
                 ui.add_space(6.0);
                 egui::CollapsingHeader::new(
@@ -1488,6 +1513,21 @@ Kept in step with a calendar server at each Send/Receive"
             Some(Ask::Respond(response)) => {
                 let id = form.id;
                 self.execute("calendar.respond", &json!({ "id": id, "response": response }))
+            }
+            Some(Ask::LookUp) => {
+                let mut p = json!({ "attendees": crate::meeting::lines_param(&form.asked), "days": 7, "wait": false });
+                if let Some((s, e)) = form.span(off).filter(|(s, e)| e > s) {
+                    p["start"] = json!(ymd(&off.civil(s)));
+                    p["length"] = json!(((e - s) / MINUTE).clamp(1, 24 * 60));
+                }
+                if let Some(id) = form.id {
+                    p["id"] = json!(id);
+                }
+                // The window stays open while the times are looked up.
+                let looked = self.execute("calendar.freeBusy", &p);
+                form.said = looked.err();
+                self.appointment = Some(form);
+                return;
             }
         };
         if let Err(e) = result {

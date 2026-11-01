@@ -136,7 +136,7 @@ fn is_mine(s: &Session, address: &str) -> bool {
 }
 
 /// Oneself as the organizer of a meeting: the first account, or the session's name.
-fn me(s: &Session) -> Attendee {
+pub(super) fn me(s: &Session) -> Attendee {
     match super::send::account_for(s, "") {
         Some(a) => Attendee::new(&a.display_name, &a.email, Role::Required),
         None => Attendee::new(&s.user_name, &s.user_email, Role::Required),

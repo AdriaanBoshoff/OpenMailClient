@@ -88,6 +88,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "autoComplete": s.autocomplete.to_json(),
         "timeZone": s.zone_chosen,
         "secondTimeZone": s.second_zone.as_ref().map(|z| z.name().to_string()),
+        "workTime": super::free_busy::work_json(s.work),
         "dataFiles": files,
         "accounts": s.accounts.iter().map(crate::accounts::Account::to_settings).collect::<Vec<_>>(),
     });
@@ -315,6 +316,13 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(zone.is_some());
         if let Some(z) = zone {
             s.second_zone = z;
+        }
+    }
+    if let Some(v) = all.get("workTime") {
+        let work = super::free_busy::work_param(openmailclient_model::free_busy::Work::default(), v).ok();
+        took(work.is_some());
+        if let Some(w) = work {
+            s.work = w;
         }
     }
     if let Some(v) = all.get("newMail") {

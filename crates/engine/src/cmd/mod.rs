@@ -9,6 +9,7 @@ mod calendar_file;
 pub(crate) mod compose;
 mod file;
 mod folder;
+pub mod free_busy;
 pub(crate) mod imap_sync;
 mod import;
 mod link;
@@ -81,6 +82,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(update::commands());
         v.extend(calendar_file::commands());
         v.extend(meeting::commands());
+        v.extend(free_busy::commands());
         v.extend(caldav::commands());
         v.extend(reminders::commands());
         v.extend(todo_bar::commands());

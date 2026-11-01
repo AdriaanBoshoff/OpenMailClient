@@ -238,3 +238,49 @@ fn hostile_answers_are_errors_not_crashes() {
     assert!(dav.changes(PERSONAL, "<inject/>").is_ok_and(|s| s == Sync::Lost), "a token is put in the XML escaped");
     let _ = DAV_HOME;
 }
+
+#[test]
+fn people_s_free_and_busy_times_are_asked_of_the_scheduling_outbox() {
+    let fake = Fake::default();
+    let reply = "BEGIN:VCALENDAR\r\nMETHOD:REPLY\r\nBEGIN:VFREEBUSY\r\nATTENDEE:mailto:sam@example.test\r\nFREEBUSY:20261012T090000Z/PT1H\r\nEND:VFREEBUSY\r\nEND:VCALENDAR\r\n";
+    fake.state().free_busy.push(("sam@example.test".into(), reply.into()));
+    let login = login();
+    let mut dav = Dav::new(&fake, &login, url("https://dav.example.test/"), None);
+    let outbox = dav.schedule_outbox().unwrap();
+    assert_eq!(outbox.as_deref(), Some(crate::fake::DAV_OUTBOX));
+    let ask = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VFREEBUSY\r\nATTENDEE:mailto:sam@example.test\r\nATTENDEE:mailto:nobody@example.test\r\nEND:VFREEBUSY\r\nEND:VCALENDAR\r\n";
+    let answered = dav.free_busy(crate::fake::DAV_OUTBOX, ask.as_bytes()).unwrap();
+    assert_eq!(answered.len(), 2);
+    assert_eq!(answered[0].recipient, "sam@example.test");
+    let lf = reply.replace("\r\n", "\n");
+    assert!(answered[0].answered() && answered[0].data.as_deref() == Some(lf.as_str()), "XML reads a line end as LF alone");
+    assert!(!answered[1].answered() && answered[1].data.is_none());
+    assert!(fake.state().heard.iter().any(|l| l.starts_with("POST /dav/calendars/pat/outbox/")));
+
+    // A server that schedules nothing has no outbox.
+    fake.state().dav_outbox = false;
+    let mut dav = Dav::new(&fake, &login, url("https://dav.example.test/"), None);
+    assert_eq!(dav.schedule_outbox().unwrap(), None);
+    assert!(dav.free_busy(crate::fake::DAV_OUTBOX, ask.as_bytes()).is_err());
+
+    // Hostile answers to the request are errors, or leave out what cannot be taken.
+    let wrap = |body: &str| format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len()).into_bytes();
+    let asked = |bytes: &[u8]| {
+        let fake = Fake::script(bytes);
+        Dav::new(&fake, &login, url("https://dav.example.test/"), None).free_busy("/outbox/", b"x")
+    };
+    assert!(asked(&wrap("<html/>")).is_err());
+    let deep =
+        format!("<c:schedule-response xmlns:c=\"urn:ietf:params:xml:ns:caldav\">{}{}</c:schedule-response>", "<a>".repeat(100), "</a>".repeat(100));
+    assert!(asked(&wrap(&deep)).is_err());
+    assert!(asked(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n").is_err());
+    let odd = asked(&wrap(&format!(
+        "<c:schedule-response xmlns:c=\"urn:ietf:params:xml:ns:caldav\" xmlns:d=\"DAV:\"><c:response><c:request-status>2.0</c:request-status></c:response><c:response><c:recipient><d:href>mailto:{}</d:href></c:recipient></c:response>{}</c:schedule-response>",
+        "a".repeat(5000),
+        "<c:response><c:recipient><d:href>mailto:x@y</d:href></c:recipient></c:response>".repeat(900)
+    )))
+    .unwrap();
+    assert_eq!(odd.len(), 500 - 2);
+    assert!(odd.iter().all(|r| r.recipient == "x@y" && !r.answered()));
+    assert!(dav.free_busy("/outbox/\r\nX: y", b"x").is_err());
+}

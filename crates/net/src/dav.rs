@@ -632,6 +632,33 @@ impl<'a> Dav<'a> {
         }
     }
 
+    /// The scheduling outbox of the account's principal ([RFC 6638] 2.1), found as
+    /// `calendars` finds the principal; `None` when the server schedules nothing.
+    pub fn schedule_outbox(&mut self) -> Result<Option<String>, NetError> {
+        let start = self.at.path.clone();
+        let mut principal = self.principal(&start, start == "/")?;
+        if principal.is_none() {
+            principal = self.principal(Holds::Events.well_known(), true).ok().flatten();
+        }
+        let Some(principal) = principal else { return Ok(None) };
+        let (_, reply) = self.propfind(&principal, "0", "<c:schedule-outbox-URL/>", false)?;
+        if reply.code != 207 {
+            return Ok(None);
+        }
+        let (all, _) = multistatus(&reply.body)?;
+        Ok(all.into_iter().find_map(|r| r.props.outbox).and_then(|h| self.path_of(&h)))
+    }
+
+    /// When people are free and busy: a VFREEBUSY request posted to the outbox ([RFC 6638]
+    /// 5), and what the server answers of each of them (10.2).
+    pub fn free_busy(&self, outbox: &str, request: &[u8]) -> Result<Vec<Scheduled>, NetError> {
+        let reply = self.send("POST", outbox, None, &[], Some(("text/calendar; charset=utf-8; method=REQUEST", request)))?;
+        match reply.code {
+            200 => schedule_response(&reply.body),
+            code => Err(NetError::Refused(format!("{} answered {code} when asked when people are free", self.who()))),
+        }
+    }
+
     fn a(&self) -> &'static str {
         match self.holds {
             Holds::Events => "an",
@@ -642,6 +669,56 @@ impl<'a> Dav<'a> {
     fn gone(&self) -> NetError {
         NetError::Refused(format!("the {} is not on the server any more", self.holds.collection()))
     }
+}
+
+/// What a scheduling server says of one person asked about ([RFC 6638] 10.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Scheduled {
+    /// Their address, without its `mailto:`.
+    pub recipient: String,
+    /// Its request status (RFC 5545 3.8.8.3): `2.0` and those after it are answers.
+    pub status: String,
+    /// The VFREEBUSY reply, when there is one.
+    pub data: Option<String>,
+}
+
+impl Scheduled {
+    pub fn answered(&self) -> bool {
+        self.status.trim_start().starts_with('2')
+    }
+}
+
+/// People answered of at most, in one schedule-response.
+const MAX_SCHEDULED: usize = 500;
+
+/// A CALDAV:schedule-response ([RFC 6638] 10.2), read as `multistatus` is.
+fn schedule_response(body: &[u8]) -> Result<Vec<Scheduled>, NetError> {
+    let bad = |why: &str| NetError::protocol(format!("the server's answer is not one that is read: {why}"));
+    let text = std::str::from_utf8(body).map_err(|_| bad("it is not UTF-8"))?;
+    let text = text.trim_start_matches('\u{feff}');
+    if !crate::find::shallow(text.as_bytes(), MAX_DEPTH) {
+        return Err(bad("its elements are nested too deeply"));
+    }
+    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let doc = roxmltree::Document::parse_with_options(text, options).map_err(|e| bad(&e.to_string()))?;
+    let root = doc.root_element();
+    if !root.has_tag_name((CALDAV, "schedule-response")) {
+        return Err(bad("it is not a schedule-response"));
+    }
+    let text_of = |n: roxmltree::Node<'_, '_>| n.text().map(str::trim).unwrap_or("").to_string();
+    let mut out = Vec::new();
+    for r in root.children().filter(|c| c.has_tag_name((CALDAV, "response"))).take(MAX_SCHEDULED) {
+        let Some(recipient) = child(r, CALDAV, "recipient").and_then(|n| child(n, DAV, "href")).map(text_of) else { continue };
+        let recipient =
+            recipient.get(..7).filter(|p| p.eq_ignore_ascii_case("mailto:")).map_or(recipient.as_str(), |_| recipient.get(7..).unwrap_or(""));
+        if recipient.is_empty() || recipient.len() > MAX_NAME {
+            continue;
+        }
+        let status = child(r, CALDAV, "request-status").map(text_of).unwrap_or_default().chars().take(MAX_NAME).collect();
+        let data = child(r, CALDAV, "calendar-data").and_then(|n| n.text()).map(str::to_string);
+        out.push(Scheduled { recipient: recipient.to_string(), status, data });
+    }
+    Ok(out)
 }
 
 /// Where a calendar server of an address's domain may be ([RFC 6764] 6): what its
@@ -814,6 +891,8 @@ struct Props {
     homes: Vec<String>,
     /// Address book homes, kept apart: a server that answers both is asked for one.
     book_homes: Vec<String>,
+    /// Where scheduling requests are posted ([RFC 6638] 2.1).
+    outbox: Option<String>,
     data: Option<String>,
 }
 
@@ -890,6 +969,7 @@ fn multistatus(body: &[u8]) -> Result<(Vec<Response>, Option<String>), NetError>
                     (CALDAV, "calendar-home-set") => props.homes = hrefs(p),
                     (CALDAV, "calendar-data") | (CARDDAV, "address-data") => props.data = p.text().map(str::to_string),
                     (CARDDAV, "addressbook-home-set") => props.book_homes = hrefs(p),
+                    (CALDAV, "schedule-outbox-URL") => props.outbox = hrefs(p).into_iter().next(),
                     _ => {}
                 }
             }

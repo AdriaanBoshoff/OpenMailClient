@@ -110,6 +110,9 @@ mod lid {
     pub const ONE_OFF_MEMBERS: u32 = 0x8054;
     pub const MEMBERS: u32 = 0x8055;
     pub const IM_ADDRESS: u32 = 0x8062;
+    /// PidLidFreeBusyLocation ([MS-OXPROPS] 2.134): where their free and busy times are
+    /// published on the internet.
+    pub const FREE_BUSY_LOCATION: u32 = 0x80D8;
     pub const BIRTHDAY_LOCAL: u32 = 0x80DE;
     pub const ANNIVERSARY_LOCAL: u32 = 0x80DF;
     /// The first property of each e-mail address: Email1 at 0x8080, Email2 at 0x8090, Email3 at
@@ -359,6 +362,9 @@ pub struct Contact {
     pub web_page: String,
     pub home_page: String,
     pub im: String,
+    /// The Internet free/busy address: a page their free and busy times are published at
+    /// (vCard FBURL, RFC 6350 6.9.1).
+    pub free_busy: String,
     /// Day numbers (days since 1970-01-01) of the birthday and anniversary.
     pub birthday: Option<i64>,
     pub anniversary: Option<i64>,
@@ -464,6 +470,7 @@ impl Contact {
             web_page: named_text(item, lid::HTML),
             home_page: text(item, tag::HOME_PAGE),
             im: named_text(item, lid::IM_ADDRESS),
+            free_busy: named_text(item, lid::FREE_BUSY_LOCATION),
             notes: cut(&item.body_text(), MAX_NOTES),
             categories: item.categories.clone(),
             uid: uid_of(item).unwrap_or_default(),
@@ -677,6 +684,7 @@ impl Contact {
             (&mut self.web_page, &newer.web_page),
             (&mut self.home_page, &newer.home_page),
             (&mut self.im, &newer.im),
+            (&mut self.free_busy, &newer.free_busy),
             (&mut self.notes, &newer.notes),
             (&mut self.uid, &newer.uid),
         ] {
@@ -743,6 +751,7 @@ impl Contact {
         put(item, tag::BUSINESS_HOME_PAGE, &self.web_page);
         put_named(item, lid::HTML, &self.web_page);
         put_named(item, lid::IM_ADDRESS, &self.im);
+        put_named(item, lid::FREE_BUSY_LOCATION, &self.free_busy);
         // Filed as asked; Outlook knows the usual choices by an id of their own.
         let filed = self.filed_as();
         put_named(item, lid::FILE_UNDER, &filed);
@@ -1045,6 +1054,7 @@ mod tests {
             categories: vec!["Friends".into()],
             web_page: "https://example.com".into(),
             im: "ada@chat.example".into(),
+            free_busy: "https://example.org/ada.vfb".into(),
             picture: Some(vec![0x89, b'P', b'N', b'G', 1, 2, 3]),
             uid: "urn:uuid:1234".into(),
             ..Contact::default()

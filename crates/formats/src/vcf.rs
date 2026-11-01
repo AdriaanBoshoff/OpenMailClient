@@ -508,6 +508,7 @@ fn card_of(props: &[Prop], notes: &mut Vec<String>) -> Card {
                     c.home_page = url;
                 }
             }
+            "FBURL" if c.free_busy.is_empty() => c.free_busy = text(p),
             "BDAY" => match date(&text(p)) {
                 Some(d) => c.birthday = Some(d),
                 None => note(notes, "a birthday with no year, or not a date, was left out"),
@@ -727,6 +728,9 @@ pub fn write_contact(out: &mut String, c: &Contact, uid: &str, now: i64) {
         line(out, &format!("URL;TYPE=HOME:{}", escape(c.home_page.trim())));
     }
     pair(out, "X-MS-IMADDRESS", &c.im);
+    if !c.free_busy.trim().is_empty() {
+        line(out, &format!("FBURL:{}", escape(c.free_busy.trim())));
+    }
     if let Some(d) = c.birthday {
         line(out, &format!("BDAY:{}", date_text(d)));
     }
@@ -828,6 +832,7 @@ mod tests {
             web_page: "https://example.com/zoe".into(),
             home_page: "https://example.org".into(),
             im: "zoe@chat.example".into(),
+            free_busy: "https://example.com/zoe/freebusy.ifb".into(),
             manager: "Boss".into(),
             picture: Some((0u8..=255).cycle().take(3000).collect()),
             uid: "abc-123".into(),
