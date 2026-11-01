@@ -21,6 +21,7 @@ pub mod outgoing;
 pub mod outlook;
 pub mod pictures;
 pub mod print;
+pub mod print_more;
 pub mod printers;
 pub mod reminders;
 pub mod remote;
@@ -63,6 +64,8 @@ mod tests_pictures;
 mod tests_preview;
 #[cfg(test)]
 mod tests_print;
+#[cfg(test)]
+mod tests_print_more;
 #[cfg(test)]
 mod tests_receive;
 #[cfg(test)]
@@ -448,6 +451,13 @@ pub struct Session {
     pub page_setup: openmailclient_layout::Setup,
     /// What is printed: the open message, or the folder's list. `file.pageSetup` changes it.
     pub print_style: print::Style,
+    /// What the Calendar prints in; `None` for the style its view is.
+    pub print_calendar_style: Option<print::Style>,
+    /// What People prints in.
+    pub print_people_style: print::Style,
+    /// The days and appointments a print of the Calendar was last gathered for
+    /// (`print_more::gather`).
+    pub print_calendar: Option<print_more::Gathered>,
     /// What Table Style prints of a list: its columns, its headings, which rows.
     pub print_list: print::Listing,
     /// The columns of the message list's single-line view, from the left; never none.
@@ -591,6 +601,9 @@ impl Session {
             update_dir: None,
             certificates: accounts::Shown::default(),
             print_style: print::Style::default(),
+            print_calendar_style: None,
+            print_people_style: print::Style::Card,
+            print_calendar: None,
             print_list: print::Listing::default(),
             list_columns: print::Field::LIST.to_vec(),
             previewing: None,

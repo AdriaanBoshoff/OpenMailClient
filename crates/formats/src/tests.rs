@@ -311,6 +311,10 @@ fn tables_keep_their_width_their_place_and_their_cell_sizes() {
     assert_eq!((t.width, t.align, t.rows[0][0].width, t.rows[0][1].width), (TableWidth::Percent(50), Align::Left, 4096, 0));
     // One column and nothing to draw: still only layout.
     assert!(matches!(parse("<table width=\"100%\"><tr><td>a<tr><td>b</table>").blocks.first(), Some(Block::Para(_))));
+    // A cell's height is the least it takes, capped; one in a unit or none is kept as pixels.
+    let t = table("<table border=1><tr><td height=40>a<td style=\"height:3em\">b<td height=900000>c<td height=\"50%\">d</table>");
+    let tall: Vec<u16> = t.rows[0].iter().map(|c| c.tall).collect();
+    assert_eq!((tall[0], tall[1], tall[2]), (40, 48, 2_000), "{tall:?}");
 
     let rtf = crate::rtf::parse(
         b"{\\rtf1 \\trowd\\cellx4200\\cellx6000\\intbl a\\cell b\\cell\\row\\trowd\\cellx-50\\cellx99999999\\intbl c\\cell d\\cell e\\cell\\row}",

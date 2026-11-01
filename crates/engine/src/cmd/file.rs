@@ -149,7 +149,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "Ctrl+P",
-            params: r#"{"path": target ending in .pdf, or "printer": the name of a printer file.printers lists, to print on it, with "copies" (1 to 99, default 1), "from" and "to" (the pages printed, from 1; default all of them) and "wait": false to print on a thread of its own (the window does); "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"; and, for this print only, anything file.pageSetup takes: "style", "paper", "orientation", "margins", "header", "footer", "details", "headerFooter", "bodyOnly"}; "style" is "memo" (the open message) or "table" (the folder's list as it is shown, a message to a row, with the names of the columns on every page, and with "columns", "groups" and "rows" as file.pageSetup takes them); returns {"path", "pages", "truncated", "links", "style"}, or with a printer {"printer", "pages", "copies", ...} once it is sent, or {"started"} when it does not wait"#,
+            params: r#"{"path": target ending in .pdf, or "printer": the name of a printer file.printers lists, to print on it, with "copies" (1 to 99, default 1), "from" and "to" (the pages printed, from 1; default all of them) and "wait": false to print on a thread of its own (the window does); "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"; and, for this print only, anything file.pageSetup takes: "style", "paper", "orientation", "margins", "header", "footer", "details", "headerFooter", "bodyOnly"}; "style" is "memo" (the open message) or "table" (the folder's list as it is shown, a message to a row, with the names of the columns on every page, and with "columns", "groups" and "rows" as file.pageSetup takes them); for the Calendar "daily" (a day to a page, hour by hour), "weeklyAgenda" (a week to a page), "monthly" (a month to a page) or "calendarDetails" (each appointment with its notes), with "start" and "end" (YYYY-MM-DD, at most 400 days; default: the days shown, or in a month's view its month); for People "card" or "phoneDirectory"; the default is the style kept for the module shown; returns {"path", "pages", "truncated", "links", "style"}, or with a printer {"printer", "pages", "copies", ...} once it is sent, or {"started"} when it does not wait"#,
             enabled: printable,
             run: print,
         },
@@ -179,7 +179,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "",
-            params: r#"{"paper": "a4", "letter", "legal", "a3", "a5", "b5", "executive" or "tabloid", "orientation": "portrait" or "landscape", "margins": millimetres, one number for every edge or {"top", "right", "bottom", "left"}, "header" and "footer": a text for the middle, or {"left", "center", "right"}; in them [Page], [Pages], [Page of Pages], [Date], [Time], [User] and [Subject] are filled in, "details": false to leave out the owner's name and the message's From, Sent, To and Subject at the head (in Table Style the folder's name), "headerFooter": false to print no header or footer (what they say is kept), "bodyOnly": true for both, "style": "memo" or "table"; for Table Style "columns": "default" or the columns from the left, of who (From, or To in a folder of outgoing mail), from, to, subject, date, size, notes, categories, importance, flag, attachment, preview; "groups": false to leave out the heading over each group of the list as it is arranged; "rows": "all" or "selected" for the messages selected (not kept between runs); "reset": true to start from the default}; nothing asked for changes nothing; returns the setup"#,
+            params: r#"{"paper": "a4", "letter", "legal", "a3", "a5", "b5", "executive" or "tabloid", "orientation": "portrait" or "landscape", "margins": millimetres, one number for every edge or {"top", "right", "bottom", "left"}, "header" and "footer": a text for the middle, or {"left", "center", "right"}; in them [Page], [Pages], [Page of Pages], [Date], [Time], [User] and [Subject] are filled in, "details": false to leave out the owner's name and the message's From, Sent, To and Subject at the head (in Table Style the folder's name), "headerFooter": false to print no header or footer (what they say is kept), "bodyOnly": true for both, "style": as file.print takes it, kept for the module whose items it prints (the Calendar follows its view until one is chosen); for Table Style "columns": "default" or the columns from the left, of who (From, or To in a folder of outgoing mail), from, to, subject, date, size, notes, categories, importance, flag, attachment, preview; "groups": false to leave out the heading over each group of the list as it is arranged; "rows": "all" or "selected" for the messages selected (not kept between runs); "reset": true to start from the default}; nothing asked for changes nothing; returns the setup"#,
             enabled: always,
             run: page_setup,
         },
@@ -638,9 +638,10 @@ fn save_all_attachments(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"count": paths.len(), "untrusted_content": {"paths": paths}}))
 }
 
-/// There is something to print: a message that is open, or a folder whose list is shown.
+/// There is something to print: a message that is open, a folder whose list is shown, or the
+/// Calendar or People.
 fn printable(s: &Session) -> bool {
-    has_selection(s) || s.current.is_some()
+    has_selection(s) || s.current.is_some() || matches!(s.module, crate::Module::Calendar | crate::Module::People)
 }
 
 /// Which links a print lists, as the parameters ask.
@@ -676,9 +677,10 @@ fn print_preview(s: &mut Session, p: &Value) -> CmdResult {
         }
     };
     let setup = crate::print::setup_with(&s.page_setup, p)?;
-    let style = crate::print::style_with(s.print_style, p)?;
+    let style = crate::print::style_with(crate::print::style_now(s), p)?;
     let listing = crate::print::listing_with(&s.print_list, p)?;
     let links = print_links(p)?;
+    crate::print_more::gather(s, style, p)?;
     let laid = crate::print::laid_as(s, style, &setup, &listing, links)?;
     let pages = laid.printed.pages.len();
     if page > pages {
@@ -707,9 +709,10 @@ fn print(s: &mut Session, p: &Value) -> CmdResult {
         return Err(EngineError::BadParams("printing writes a PDF file: the path must end in .pdf".into()));
     }
     let setup = crate::print::setup_with(&s.page_setup, p)?;
-    let style = crate::print::style_with(s.print_style, p)?;
+    let style = crate::print::style_with(crate::print::style_now(s), p)?;
     let listing = crate::print::listing_with(&s.print_list, p)?;
     let links = print_links(p)?;
+    crate::print_more::gather(s, style, p)?;
     let printed = crate::print::pdf_as(s, style, &setup, &listing, links)?;
     io::write_atomic(path, &printed.file)?;
     s.status = format!("Printed {} page{} to {}", printed.pages, if printed.pages == 1 { "" } else { "s" }, path.display());
@@ -770,11 +773,12 @@ fn page_param(p: &Value, key: &str) -> Result<Option<usize>, EngineError> {
 /// Print what the session shows on a printer of this system.
 fn print_on(s: &mut Session, p: &Value) -> CmdResult {
     let setup = crate::print::setup_with(&s.page_setup, p)?;
-    let style = crate::print::style_with(s.print_style, p)?;
+    let style = crate::print::style_with(crate::print::style_now(s), p)?;
     let listing = crate::print::listing_with(&s.print_list, p)?;
     let links = print_links(p)?;
     // The printer is known to be one before anything is laid out.
     printer_named(s, p)?;
+    crate::print_more::gather(s, style, p)?;
     let laid = crate::print::laid_as(s, style, &setup, &listing, links)?;
     let title = crate::print::title(s, style);
     print_laid(s, p, laid, title, style.name())
@@ -841,16 +845,30 @@ fn page_setup(s: &mut Session, p: &Value) -> CmdResult {
     let reset = p_bool(p, "reset") == Some(true);
     let from = if reset { openmailclient_layout::Setup::default() } else { s.page_setup.clone() };
     let setup = crate::print::setup_with(&from, p)?;
-    let style = crate::print::style_with(if reset { crate::print::Style::default() } else { s.print_style }, p)?;
     let listing = crate::print::listing_with(&if reset { crate::print::Listing::default() } else { s.print_list.clone() }, p)?;
-    if setup != s.page_setup || style != s.print_style || listing != s.print_list {
+    // A style is kept for the module whose items it prints; a reset starts each from its own.
+    let kept = (s.print_style, s.print_calendar_style, s.print_people_style);
+    if reset {
+        (s.print_style, s.print_calendar_style, s.print_people_style) = (crate::print::Style::default(), None, crate::print::Style::Card);
+    }
+    let style = match crate::print::style_with(crate::print::style_now(s), p) {
+        Ok(style) => style,
+        Err(e) => {
+            (s.print_style, s.print_calendar_style, s.print_people_style) = kept;
+            return Err(e);
+        }
+    };
+    if p.get("style").is_some_and(|v| !v.is_null()) {
+        crate::print::keep_style(s, style);
+    }
+    let changed = kept != (s.print_style, s.print_calendar_style, s.print_people_style);
+    if setup != s.page_setup || changed || listing != s.print_list {
         s.page_setup = setup;
-        s.print_style = style;
         s.print_list = listing;
         s.status = "Page setup changed".to_string();
     }
     let mut out = crate::print::setup_json(&s.page_setup);
-    out["style"] = json!(s.print_style.name());
+    out["style"] = json!(crate::print::style_now(s).name());
     crate::print::listing_json(&s.print_list, &mut out);
     Ok(out)
 }

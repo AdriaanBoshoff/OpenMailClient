@@ -48,7 +48,8 @@ pub(crate) struct Preview {
     print: bool,
 }
 
-type Of = (Option<u64>, Option<(usize, FolderId)>, (usize, usize), Style, Setup, Listing);
+/// What a preview was laid out for; the last part is what the Calendar or People shows.
+type Of = (Option<u64>, Option<(usize, FolderId)>, (usize, usize), Style, Setup, Listing, String);
 
 impl Preview {
     /// Show the page at the size `asked`: "fit", "in" or "out" for a step, or hundredths of
@@ -127,18 +128,30 @@ impl MailUi {
             return;
         }
         let t = self.tokens.clone();
-        let style = self.session.print_style;
+        let style = print::style_now(&self.session);
         let listed = (self.session.rows.len(), self.session.rows.iter().filter(|row| !row.read).count());
         let listing = self.session.print_list.clone();
-        let of = (self.session.selected, self.session.current, listed, style, self.session.page_setup.clone(), listing.clone());
+        let s = &self.session;
+        let elsewhere = format!(
+            "{:?} {} {:?} {} {}",
+            s.module,
+            s.calendar.day,
+            s.calendar.view,
+            s.calendar.items.iter().map(|(id, a)| id ^ a.start as u64 ^ a.end as u64).fold(0u64, |a, b| a.rotate_left(5) ^ b),
+            s.people.items.len()
+        );
+        let of = (self.session.selected, self.session.current, listed, style, self.session.page_setup.clone(), listing.clone(), elsewhere);
         if pv.of.as_ref() != Some(&of) {
             pv.of = Some(of);
             pv.laid = None;
             pv.shown = None;
         }
         if pv.laid.is_none() {
+            // The Calendar's days are read for the print before it is laid out.
+            let gathered = openmailclient_engine::print_more::gather(&mut self.session, style, &Value::Null);
             let s = &self.session;
-            pv.laid = Some(print::laid_as(s, style, &s.page_setup, &s.print_list, Links::default()).map_err(|e| e.to_string()));
+            pv.laid =
+                Some(gathered.and_then(|()| print::laid_as(s, style, &s.page_setup, &s.print_list, Links::default())).map_err(|e| e.to_string()));
         }
         let pages = pv.pages();
         pv.page = pv.page.min(pages.saturating_sub(1));
@@ -219,7 +232,7 @@ impl MailUi {
                         ui.add_space(6.0);
                         crate::dialog::heading(ui, &t, "What to print");
                         ui.horizontal(|ui| {
-                            for one in Style::ALL {
+                            for one in Style::of(self.session.module).iter().copied() {
                                 if ui.selectable_label(style == one, one.label()).clicked() && style != one {
                                     changes.push(json!({ "style": one.name() }));
                                 }

@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 150 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 151 · 2026-11-01 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -54,7 +54,7 @@
    (a placeholder). List numbers follow what an override changes (`\lfolevel`) and a highlight is one of the sixteen marker colours (M3b.27). OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (on screen they are downloaded when asked for, M4.10; on paper their place is named),
-   right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, a printer's own settings (trays, two-sided; it prints on any printer the system has, with copies and pages, M1.10),
+   right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), a printer's own settings (trays, two-sided; it prints on any printer the system has, with copies and pages, M1.10),
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **Tasks** has its views and the To-Do List with flagged mail beside the tasks (M5.9), and reminders come up for appointments, tasks and flagged mail (M5.10), and to-dos in calendar files are read into Tasks and Tasks saved as one (M5.11); tasks are kept in step with a CalDAV server's task lists (M5.12); the To-Do Bar stands beside every module (M5.12); tasks recur, made and changed in their window, and move on to their next occurrence once done (M5.17); a task is given to someone by mail, accepted or declined, and kept up to date from them (M5.18). People has its five views, contacts and groups and vCard files (M5.8); contacts are kept in step with a CardDAV server, and the Address Book, Check Names and Mail Merge are there (M5.11). The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6) and meetings, invitations sent, answered and called off (M5.7), answered with a comment or without telling (M5.12); the Scheduling Assistant is a do-later in ROADMAP.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 151 · 2026-11-01 — M5.29: the Calendar printed a day, a week or a month to a page and in Calendar Details Style, People as cards and as a telephone directory.
 - 150 · 2026-10-30 — M5.28: right-to-left text selected and copied, Arabic joined across a change of look, every script drawn.
 - 149 · 2026-10-30 — M5.27: right-to-left text read the right way while a message's body is typed.
 - 148 · 2026-10-30 — M5.26: on paper, a table or a bordered block stands beside a picture at the side.

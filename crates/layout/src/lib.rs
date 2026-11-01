@@ -24,7 +24,7 @@ mod memo;
 
 pub use fonts::{Fonts, Loaded};
 pub use list::{Column, Listed, MAX_ROWS, Row, list};
-pub use memo::{Memo, memo};
+pub use memo::{Memo, memo, sheets};
 pub use openmailclient_formats::rich::{Line, Picture, Rgb};
 
 /// Points in a millimetre.

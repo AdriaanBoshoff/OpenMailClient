@@ -219,6 +219,9 @@ struct TableBuild {
     cell: Option<CellBuild>,
 }
 
+/// The most pixels of height a table cell may ask for.
+const MAX_CELL_TALL: u16 = 2_000;
+
 struct CellBuild {
     saved: Fmt,
     open_len: usize,
@@ -232,6 +235,7 @@ struct CellBuild {
     rows: u16,
     edges: Option<Edges>,
     radius: u16,
+    tall: u16,
 }
 
 struct ParaHead {
@@ -640,6 +644,10 @@ impl Builder {
                 let css = self.sheet.declarations(name, attrs);
                 let css_width = css_value(&css, "width");
                 let asked = css_width.as_deref().or_else(|| attr(attrs, "width")).unwrap_or("");
+                // The height it asks for is the least it has: what it holds may make it taller.
+                let css_height = css_value(&css, "height");
+                let size = self.fmt.style.size.unwrap_or(BASE_PT);
+                let tall = css_height.as_deref().or_else(|| attr(attrs, "height")).and_then(|v| cell_tall(v, size)).unwrap_or(0);
                 // Its padding, all four sides or each of them (CSS 2.1 section 8.4).
                 let padding = self.css_padding.take();
                 // What a cell holds stands in the middle of it unless the cell or its row says otherwise.
@@ -652,6 +660,7 @@ impl Builder {
                     cell.radius = radius;
                     cell.background = background;
                     cell.width = pixels(asked).unwrap_or(0);
+                    cell.tall = tall;
                     cell.share = percent(asked).unwrap_or(0);
                     cell.padding = padding;
                     cell.valign = place.or(row_valign).unwrap_or(VAlign::Middle);
@@ -1172,6 +1181,7 @@ impl Builder {
             rows: 1,
             edges: None,
             radius: 0,
+            tall: 0,
         });
         self.sinks.push(Vec::new());
         self.gap = false;
@@ -1199,6 +1209,7 @@ impl Builder {
                 rows: cell.rows,
                 edges: cell.edges,
                 radius: cell.radius,
+                tall: cell.tall,
             });
         }
     }
@@ -1476,6 +1487,17 @@ fn align(v: &str) -> Option<Align> {
 fn pixels(v: &str) -> Option<u16> {
     let n = v.trim().trim_end_matches("px").trim_end().parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 1.0)?;
     Some(n.round().min(MAX_PICTURE_SIDE) as u16)
+}
+
+/// A cell's least height in pixels, in any unit a length is written in; text sizes count
+/// from `size`, in points (CSS 2.1 section 4.3.2). A percentage or a word is not one.
+fn cell_tall(v: &str, size: f32) -> Option<u16> {
+    let v = v.trim();
+    if v.ends_with('%') || !v.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    let px = font_size(&v.to_ascii_lowercase(), size)? * 4.0 / 3.0;
+    (px >= 1.0).then(|| px.round().min(f32::from(MAX_CELL_TALL)) as u16)
 }
 
 /// A share of the room in hundredths, 1 to 100, as `25%` gives it.

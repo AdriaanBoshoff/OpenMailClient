@@ -55,6 +55,8 @@ fn json_path(p: &Value) -> Result<&Path, EngineError> {
 pub fn current(s: &Session, ui: Option<&Value>) -> Value {
     let mut setup = crate::print::setup_json(&s.page_setup);
     setup["style"] = json!(s.print_style.name());
+    setup["calendarStyle"] = json!(s.print_calendar_style.map(|style| style.name()));
+    setup["peopleStyle"] = json!(s.print_people_style.name());
     // Which rows are printed is of the moment, and is not kept.
     setup["columns"] = json!(s.print_list.columns.iter().map(|f| f.name()).collect::<Vec<_>>());
     setup["groups"] = json!(s.print_list.groups);
@@ -146,11 +148,18 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
                 }
             }
         }
-        if setup.get("style").is_some() {
-            let style = crate::print::style_with(s.print_style, setup);
-            took(style.is_ok());
-            if let Ok(style) = style {
-                s.print_style = style;
+        // A style is kept only for the module whose items it prints.
+        for (key, module) in [("style", crate::Module::Mail), ("calendarStyle", crate::Module::Calendar), ("peopleStyle", crate::Module::People)] {
+            match setup.get(key) {
+                None => {}
+                Some(Value::Null) if module == crate::Module::Calendar => s.print_calendar_style = None,
+                Some(v) => {
+                    let style = v.as_str().and_then(crate::print::Style::named).filter(|style| style.module() == module);
+                    took(style.is_some());
+                    if let Some(style) = style {
+                        crate::print::keep_style(s, style);
+                    }
+                }
             }
         }
         // The printer chosen last; whether it is still there is seen when printing.

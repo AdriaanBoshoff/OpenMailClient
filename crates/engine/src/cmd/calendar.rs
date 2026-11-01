@@ -387,8 +387,10 @@ fn today(s: &mut Session, _: &Value) -> CmdResult {
     ok()
 }
 
-pub(super) fn date_param(s: &Session, p: &Value, key: &str) -> Result<Option<i64>, EngineError> {
+pub(crate) fn date_param(s: &Session, p: &Value, key: &str) -> Result<Option<i64>, EngineError> {
     match p_str(p, key) {
+        // A date that is there but not written as one is an error, not no date.
+        None if p.get(key).is_some_and(|v| !v.is_null()) => Err(EngineError::BadParams(format!("\"{key}\" is a date written YYYY-MM-DD"))),
         None => Ok(None),
         Some(text) => calendar::parse_local(text, &s.zone)
             .map(|t| Some(calendar::day_of(t, &s.zone)))

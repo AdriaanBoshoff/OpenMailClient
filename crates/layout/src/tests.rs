@@ -197,6 +197,24 @@ fn a_table_stands_in_columns_inside_its_lines() {
 }
 
 #[test]
+fn a_cell_is_at_least_as_tall_as_it_asks() {
+    let mut tall = cell("a");
+    tall.tall = 80;
+    let table = Table { rows: vec![vec![tall, cell("b")], vec![cell("c"), cell("d")]], border: true, ..Table::default() };
+    let printed = print(&doc(vec![Block::Table(table)]), Paper::A4);
+    let page = &printed.pages[0];
+    let find = |text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap();
+    // 80 pixels are 60 points: the next row starts that far below the first.
+    let (a, c) = (find("a"), find("c"));
+    assert!((c.y - a.y - 60.0).abs() < 0.01, "{}", c.y - a.y);
+    // On a page with less room than that, it is no taller than the page.
+    let mut huge = cell("x");
+    huge.tall = 2_000;
+    let printed = print(&doc(vec![Block::Table(Table { rows: vec![vec![huge]], ..Table::default() })]), SMALL);
+    assert_eq!(printed.pages.len(), 1);
+}
+
+#[test]
 fn a_table_longer_than_a_page_goes_on_with_its_lines_and_frames() {
     let rows: Vec<Vec<Cell>> = (0..60).map(|i| vec![cell(&format!("r{i}")), cell("v")]).collect();
     let edge = Edge { width: 4, color: Some([0, 0, 90]), line: Line::Double };

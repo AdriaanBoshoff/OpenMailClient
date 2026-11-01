@@ -465,6 +465,9 @@ pub struct Cell {
     pub radius: u16,
     /// The cell's own border; `None` is what the table gives its cells.
     pub edges: Option<Edges>,
+    /// The least height it stands in, in pixels, padding and all; 0 where it asks for none and
+    /// is as tall as what it holds.
+    pub tall: u16,
 }
 
 impl Doc {

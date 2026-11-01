@@ -1,5 +1,5 @@
 //! Printing: the open message laid out in Memo Style, or the folder's list in Table Style,
-//! and written as a PDF file.
+//! and written as a PDF file. The Calendar's and People's styles are in `print_more`.
 
 use openmailclient_fonts::Library;
 use openmailclient_formats::links::{self, Concern};
@@ -11,7 +11,7 @@ use openmailclient_pdf::{Piece, Said, Stroke, Writer};
 use serde_json::{Value, json};
 
 use crate::pictures::{self, Pixels};
-use crate::{EngineError, attachments};
+use crate::{EngineError, Module, attachments};
 
 /// Pictures printed with one message, and the bytes of them all, decoded.
 const MAX_PICTURES: usize = 64;
@@ -55,25 +55,41 @@ pub enum Style {
     Memo,
     /// The folder's list as it is shown, a message to a row.
     Table,
+    /// The Calendar a day to a page, hour by hour.
+    Daily,
+    /// The Calendar a week to a page, its days in two columns.
+    WeeklyAgenda,
+    /// The Calendar a month to a page, as a grid of its weeks.
+    Monthly,
+    /// Each day's appointments one under another, with all they say.
+    CalendarDetails,
+    /// People as cards, two columns of them, under the letters they are filed by.
+    Card,
+    /// People's names and telephone numbers, under the letters they are filed by.
+    PhoneDirectory,
 }
 
 impl Style {
-    pub const ALL: [Style; 2] = [Style::Memo, Style::Table];
+    pub const ALL: [Style; 8] =
+        [Style::Memo, Style::Table, Style::Daily, Style::WeeklyAgenda, Style::Monthly, Style::CalendarDetails, Style::Card, Style::PhoneDirectory];
 
-    /// By name, in any letter case, with or without "style" after it.
+    /// By name, in any letter case, with or without spaces and "style" after it.
     pub fn named(name: &str) -> Option<Style> {
-        let name = name.trim().to_ascii_lowercase();
-        match name.strip_suffix("style").map_or(name.as_str(), str::trim_end) {
-            "memo" => Some(Self::Memo),
-            "table" => Some(Self::Table),
-            _ => None,
-        }
+        let name: String = name.chars().filter(|c| !c.is_whitespace() && *c != '-' && *c != '_').collect::<String>().to_ascii_lowercase();
+        let name = name.strip_suffix("style").unwrap_or(&name);
+        Self::ALL.into_iter().find(|style| style.name().eq_ignore_ascii_case(name))
     }
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Memo => "memo",
             Self::Table => "table",
+            Self::Daily => "daily",
+            Self::WeeklyAgenda => "weeklyAgenda",
+            Self::Monthly => "monthly",
+            Self::CalendarDetails => "calendarDetails",
+            Self::Card => "card",
+            Self::PhoneDirectory => "phoneDirectory",
         }
     }
 
@@ -81,6 +97,30 @@ impl Style {
         match self {
             Self::Memo => "Memo Style",
             Self::Table => "Table Style",
+            Self::Daily => "Daily Style",
+            Self::WeeklyAgenda => "Weekly Agenda Style",
+            Self::Monthly => "Monthly Style",
+            Self::CalendarDetails => "Calendar Details Style",
+            Self::Card => "Card Style",
+            Self::PhoneDirectory => "Phone Directory Style",
+        }
+    }
+
+    /// The module whose items it prints: Mail's styles print Tasks too, as lists.
+    pub fn module(self) -> Module {
+        match self {
+            Self::Memo | Self::Table => Module::Mail,
+            Self::Daily | Self::WeeklyAgenda | Self::Monthly | Self::CalendarDetails => Module::Calendar,
+            Self::Card | Self::PhoneDirectory => Module::People,
+        }
+    }
+
+    /// The styles a module prints in.
+    pub fn of(module: Module) -> &'static [Style] {
+        match module {
+            Module::Calendar => &[Style::Daily, Style::WeeklyAgenda, Style::Monthly, Style::CalendarDetails],
+            Module::People => &[Style::Card, Style::PhoneDirectory],
+            Module::Mail | Module::Tasks => &[Style::Memo, Style::Table],
         }
     }
 }
@@ -89,7 +129,34 @@ impl Style {
 pub fn style_with(now: Style, p: &Value) -> Result<Style, EngineError> {
     match p.get("style") {
         None | Some(Value::Null) => Ok(now),
-        Some(v) => v.as_str().and_then(Style::named).ok_or_else(|| EngineError::BadParams("unknown style: memo or table".into())),
+        Some(v) => v.as_str().and_then(Style::named).ok_or_else(|| {
+            let names: Vec<&str> = Style::ALL.iter().map(|style| style.name()).collect();
+            EngineError::BadParams(format!("unknown style: {}", names.join(", ")))
+        }),
+    }
+}
+
+/// The style what the module shown prints in: the one chosen for it, or for a Calendar where
+/// none is chosen, the one its view is (a day, a week or a month).
+pub fn style_now(s: &crate::Session) -> Style {
+    use openmailclient_model::calendar::View;
+    match s.module {
+        Module::Calendar => s.print_calendar_style.unwrap_or(match s.calendar.view {
+            View::Day => Style::Daily,
+            View::WorkWeek | View::Week => Style::WeeklyAgenda,
+            View::Month => Style::Monthly,
+        }),
+        Module::People => s.print_people_style,
+        Module::Mail | Module::Tasks => s.print_style,
+    }
+}
+
+/// Keep `style` as the one its module prints in.
+pub fn keep_style(s: &mut crate::Session, style: Style) {
+    match style.module() {
+        Module::Calendar => s.print_calendar_style = Some(style),
+        Module::People => s.print_people_style = style,
+        Module::Mail | Module::Tasks => s.print_style = style,
     }
 }
 
@@ -654,7 +721,7 @@ pub struct Print {
 }
 
 /// The installed fonts, looked up once: reading them all takes a moment.
-fn library() -> &'static Library {
+pub(crate) fn library() -> &'static Library {
     pictures::lettering().library()
 }
 
@@ -801,6 +868,7 @@ pub fn title(s: &crate::Session, style: Style) -> String {
     match style {
         Style::Memo => s.open.as_ref().map(Item::subject).unwrap_or_default(),
         Style::Table => s.current_folder().map(|f| f.name.clone()).unwrap_or_default(),
+        _ => crate::print_more::title(s, style),
     }
 }
 
@@ -811,6 +879,7 @@ pub fn laid_as(s: &crate::Session, style: Style, setup: &Setup, listing: &Listin
     match style {
         Style::Memo => layout(s.open.as_ref().ok_or(StoreError::NoItem)?, &job, library()),
         Style::Table => list_layout(s, &job, library()),
+        _ => crate::print_more::layout(s, style, &job, library()),
     }
 }
 

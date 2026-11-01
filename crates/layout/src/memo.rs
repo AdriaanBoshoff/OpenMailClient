@@ -154,6 +154,30 @@ pub fn memo(memo: &Memo, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result<P
     Ok(Printed { pages, faces: fonts.faces().to_vec(), truncated: full || memo.body.truncated })
 }
 
+/// Sheets laid out one after another, each starting on a page of its own: a day, a week or a
+/// month of a calendar, each on its page. `sheets` is given the height of the room on a page
+/// for the body, in pixels, so that what it makes can fill the page.
+pub fn sheets(sheets: &dyn Fn(f32) -> Vec<Vec<Block>>, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result<Printed, LayoutError> {
+    let setup: Setup = setup.into();
+    let none = |_: &Picture| None;
+    let mut flow = Flow::new(fonts, &setup, Base { family: HEAD_FONT.into(), size: 9.0 }, &none);
+    let (x, width) = (flow.left(), flow.width());
+    let mut at = flow.start();
+    // From points to pixels: the layout's units are points, and a cell's height is in pixels.
+    let room = (flow.tall() * 96.0 / 72.0).max(0.0);
+    for (n, sheet) in sheets(room).iter().enumerate() {
+        if flow.full {
+            break;
+        }
+        if n > 0 {
+            at = flow.next_page(at);
+        }
+        at = flow.blocks(sheet, x, width, at, 0);
+    }
+    let (pages, full) = finish(flow, &setup)?;
+    Ok(Printed { pages, faces: fonts.faces().to_vec(), truncated: full })
+}
+
 /// The pages of a flow that is set, each with its header and footer; and whether there was
 /// more than may be printed.
 pub(crate) fn finish(mut flow: Flow, setup: &Setup) -> Result<(Vec<Page>, bool), LayoutError> {

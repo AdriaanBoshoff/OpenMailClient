@@ -392,6 +392,16 @@ impl<'f, 'l> Flow<'f, 'l> {
         self.room(At { page: 0, y: self.top() }, 0.0)
     }
 
+    /// The top of the page after the one `at` is on. Makes the page.
+    pub fn next_page(&mut self, at: At) -> At {
+        self.room(At { page: at.page.saturating_add(1), y: self.top() }, 0.0)
+    }
+
+    /// The height of the room for the body on a page.
+    pub fn tall(&self) -> f32 {
+        (self.bottom() - self.top()).max(0.0)
+    }
+
     fn page(&mut self, page: usize) -> Option<&mut Page> {
         self.pages.get_mut(page)
     }
@@ -1723,12 +1733,17 @@ impl<'f, 'l> Flow<'f, 'l> {
                 let inner = At { page: row_start.page, y: row_start.y + pad[0] };
                 let end = self.blocks(&cell.blocks, left + pad[3], (wide - pad[1] - pad[3]).max(6.0), inner, depth + 1);
                 let after = self.mark(row_start.page);
+                let mut end = At { page: end.page, y: end.y + pad[2] };
+                // A cell that asks for a height has it, as far as the page goes.
+                if cell.tall > 0 && end.page == row_start.page {
+                    end.y = end.y.max((row_start.y + px(cell.tall)).min(self.bottom()));
+                }
                 waiting.push(Waiting {
                     cell,
                     x: left,
                     width: wide,
                     start: row_start,
-                    end: At { page: end.page, y: end.y + pad[2] },
+                    end,
                     last_row: r.saturating_add(usize::from(cell.rows.max(1)) - 1).min(rows.saturating_sub(1)),
                     before,
                     after,
