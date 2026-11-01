@@ -91,7 +91,7 @@ impl Rule {
     }
 
     /// The rule of the week of its month day number `day` falls in, at `minute`.
-    fn of_day(day: i64, minute: u16) -> Self {
+    pub(crate) fn of_day(day: i64, minute: u16) -> Self {
         let c = time::civil(time::from_unix(day.saturating_mul(86_400)), 0);
         let last = day.saturating_add(7) >= next_month(c.year, c.month);
         let week = if last { 5 } else { u8::try_from((c.day.saturating_sub(1)) / 7 + 1).unwrap_or(5) };
@@ -351,9 +351,13 @@ impl Zone {
 
     /// A TZREG read; `None` when it is too short or its offsets cannot be.
     pub fn of_tzreg(b: &[u8]) -> Option<Self> {
+        Some(Self::of_tzreg_alone(b)?.known_as())
+    }
+
+    /// A TZREG read as it is, not taken for a zone known.
+    pub(crate) fn of_tzreg_alone(b: &[u8]) -> Option<Self> {
         let r = Reader(b);
-        let zone = Self::of_biases(r.i32(0)?, r.i32(4)?, r.i32(8)?, r.rule(14)?, r.rule(32)?)?;
-        Some(zone.known_as())
+        Self::of_biases(r.i32(0)?, r.i32(4)?, r.i32(8)?, r.rule(14)?, r.rule(32)?)
     }
 
     fn of_biases(bias: i32, standard: i32, daylight: i32, ends: Option<Rule>, begins: Option<Rule>) -> Option<Self> {

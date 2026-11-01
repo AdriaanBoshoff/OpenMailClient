@@ -18,6 +18,7 @@ pub mod reminder;
 pub mod rtf;
 pub mod task;
 pub mod time;
+pub mod tzif;
 pub mod view_def;
 pub mod zone;
 

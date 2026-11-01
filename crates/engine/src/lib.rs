@@ -95,9 +95,12 @@ mod tests_tasks;
 mod tests_todo_bar;
 #[cfg(test)]
 mod tests_update;
+#[cfg(test)]
+mod tests_zone_db;
 pub mod undo;
 pub mod update;
 pub mod watch;
+pub mod zone_db;
 
 use openmailclient_model::zone::Zone;
 use openmailclient_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
@@ -1058,7 +1061,7 @@ impl Session {
     /// was chosen.
     pub fn set_system_zone(&mut self, zone: Zone) {
         self.system_zone = zone;
-        self.zone = self.zone_chosen.as_deref().and_then(Zone::named).unwrap_or_else(|| self.system_zone.clone());
+        self.zone = self.zone_chosen.as_deref().and_then(zone_db::named).unwrap_or_else(|| self.system_zone.clone());
     }
 
     /// Dates are shown in the zone known as `name`, or in the system's again with `None`. An
@@ -1068,7 +1071,7 @@ impl Session {
             None => self.zone_chosen = None,
             Some(n) => {
                 let zone =
-                    Zone::named(n).ok_or_else(|| EngineError::BadParams("that is not a time zone known; calendar.timeZones lists them".into()))?;
+                    zone_db::named(n).ok_or_else(|| EngineError::BadParams("that is not a time zone known; calendar.timeZones lists them".into()))?;
                 // Kept by the name it is known by, whatever it was asked for by.
                 self.zone_chosen = Some(zone.name().to_string());
             }
@@ -1380,8 +1383,10 @@ impl Session {
 
 /// The time zone this machine keeps; hosts give it to [`Session::set_system_zone`]. Its rules
 /// are found from the offsets the system keeps through this year, and it is known by the name
-/// the system gives it.
+/// the system gives it; from then on every zone has its whole history from the system's zone
+/// database ([`zone_db`]).
 pub fn local_zone() -> openmailclient_model::zone::Zone {
+    zone_db::use_system();
     use chrono::TimeZone;
     use openmailclient_model::{time, zone::Zone};
     let now = time::from_unix(chrono::Utc::now().timestamp());
@@ -1389,7 +1394,7 @@ pub fn local_zone() -> openmailclient_model::zone::Zone {
     let found = Zone::from_system(now, offset_at);
     match system_zone_name() {
         // One known by that name, where it keeps the rules the system does.
-        Some(name) => match Zone::named(&name) {
+        Some(name) => match zone_db::named(&name) {
             // Its rules this year are what the system says; those of other years, the tz database's.
             Some(known) if known.bias == found.bias && known.same_in(&found, time::civil(now, found.offset_at(now)).year) => known,
             // Else what the system keeps, by the name it gives it.

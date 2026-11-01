@@ -828,7 +828,7 @@ pub(super) fn zone_param(v: &Value) -> Result<Option<Zone>, EngineError> {
     match v {
         Value::Null => Ok(None),
         Value::String(t) if t.trim().is_empty() || t.eq_ignore_ascii_case("none") => Ok(None),
-        Value::String(t) => Zone::named(t).map(Some).ok_or_else(|| {
+        Value::String(t) => crate::zone_db::named(t).map(Some).ok_or_else(|| {
             EngineError::BadParams(format!("\"{}\" is not a time zone known; calendar.timeZones lists them", t.chars().take(80).collect::<String>()))
         }),
         _ => Err(EngineError::BadParams("\"zone\" is a time zone's name, such as \"Europe/Berlin\", or null".into())),

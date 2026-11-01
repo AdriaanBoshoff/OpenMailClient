@@ -328,7 +328,7 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(v) = all.get("secondTimeZone") {
         let zone = match v {
             Value::Null => Some(None),
-            Value::String(name) => openmailclient_model::zone::Zone::named(name).map(Some),
+            Value::String(name) => crate::zone_db::named(name).map(Some),
             _ => None,
         };
         took(zone.is_some());
