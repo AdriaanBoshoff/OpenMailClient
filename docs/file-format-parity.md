@@ -16,7 +16,7 @@ writes for these checks stay local and are never committed.
 | To and Cc recipients, with type | read back the same | not checked | not checked |
 | Received and sent times | read back the same | read | same |
 | Read state, importance, follow-up flag | read back the same | read | same |
-| Categories (named property `Keywords`) | read back the same, after the fix below | read | same |
+| Categories (named property `Keywords`) | read back the same, after the fix below; Outlook finds them by name in a file saved whole and in one saved into in place, Unicode names too (M5.32) | read | same |
 | Plain text body | read back the same | read | same |
 | HTML body | Outlook reports an HTML item with the same text | not checked (Outlook stored its HTML as RTF) | not checked |
 | RTF body (compressed, [MS-OXRTFCP]) | an RTF-only message (stored form, not compressed by us) is shown as rich text with its formatting, once PidTagRtfInSync is set; without it Outlook shows an empty plain-text body | decoded for reading (text, preview, formatted body with its pictures and the places of its attachments; wrapped HTML or text taken back out); the bytes themselves are kept untouched | preserved: Outlook shows the HTML again |
