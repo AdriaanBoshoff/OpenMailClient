@@ -566,6 +566,10 @@ impl Store for PstStore {
         self.e_folder_props(folder)
     }
 
+    fn folder_named(&mut self, folder: FolderId) -> Result<Vec<(NamedKey, PropValue)>, StoreError> {
+        self.e_folder_named(folder)
+    }
+
     fn record_key(&mut self) -> Option<[u8; 16]> {
         // PidTagRecordKey of the message store ([MS-PST] 2.4.3.1).
         let (bag, _) = self.node_props(0x21).ok()?;

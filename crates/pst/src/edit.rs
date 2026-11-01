@@ -26,6 +26,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// The most named properties of one folder carried by a save or an export.
+const MAX_FOLDER_NAMED: usize = 4096;
+
 /// Node types ([MS-PST] 2.2.2.1).
 const TYPE_FOLDER: u32 = 0x02;
 const TYPE_MESSAGE: u32 = 0x04;
@@ -1120,7 +1123,7 @@ impl PstStore {
     }
 
     /// A folder's own properties as the file has them; none for a folder it does not have
-    /// yet. Named properties are left out: their names are the file's own.
+    /// yet. Named properties are left out: their ids are the file's own (`e_folder_named`).
     pub(crate) fn e_folder_props(&mut self, folder: FolderId) -> Result<PropBag, StoreError> {
         let nid = nid_of(folder.0).ok_or(StoreError::NoFolder)?;
         if !self.ndb.nbt.contains_key(&nid) {
@@ -1129,6 +1132,22 @@ impl PstStore {
         let (mut bag, _) = self.node_props(nid)?;
         bag.0.retain(|id, _| *id < 0x8000);
         Ok(bag)
+    }
+
+    /// A folder's own named properties as the file has them, by name ([MS-PST] 2.4.7): those
+    /// whose ids the file's name map names. None for a folder the file does not have yet.
+    pub(crate) fn e_folder_named(&mut self, folder: FolderId) -> Result<Vec<(NamedKey, PropValue)>, StoreError> {
+        let nid = nid_of(folder.0).ok_or(StoreError::NoFolder)?;
+        if !self.ndb.nbt.contains_key(&nid) {
+            return Ok(Vec::new());
+        }
+        let (bag, _) = self.node_props(nid)?;
+        Ok(bag
+            .iter()
+            .filter(|(id, _)| *id >= 0x8000)
+            .filter_map(|(id, v)| Some((self.names.get(usize::from(id - 0x8000))?.clone()?, v.clone())))
+            .take(MAX_FOLDER_NAMED)
+            .collect())
     }
 
     /// A table's columns and rows, the table's own bookkeeping left out; `None` when the

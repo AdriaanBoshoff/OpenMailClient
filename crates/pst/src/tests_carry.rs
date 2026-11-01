@@ -43,6 +43,9 @@ fn planted(leave_out: &[u32]) -> Vec<u8> {
     let one = entry(UID, u32::try_from(sent.id.0).unwrap());
     let multi = crate::ltp_write::encode(NAMES, &PropValue::MultiBinary(vec![vec![1, 2, 3], one]));
     props.push(multi);
+    // One of the Inbox's own by name: the first name the file's map has.
+    let (at, _) = plain.names.iter().enumerate().find(|(_, k)| k.is_some()).unwrap();
+    props.push(text(0x8000 + u16::try_from(at).unwrap(), "the folder's own, by name"));
     let hidden = vec![
         text(pid::MESSAGE_CLASS, "IPM.Configuration.Thing"),
         text(pid::SUBJECT, "hidden"),
@@ -129,6 +132,10 @@ fn an_ost_is_exported_with_its_hidden_items_and_folder_properties() {
             Some(PropValue::MultiBinary(list)) => assert_eq!(list[0], vec![1, 2, 3]),
             other => panic!("{other:?}"),
         }
+        // The named one under the id the new file gives its name.
+        let key = source.names.iter().flatten().next().unwrap().clone();
+        let named = back.folder_named(inbox.id).unwrap();
+        assert_eq!(named, vec![(key, PropValue::String("the folder's own, by name".into()))]);
         // The name and counts are those the writer gives, once each.
         assert_eq!(back.folder_props(inbox.id).unwrap().str(pid::DISPLAY_NAME), Some("Inbox"));
     }

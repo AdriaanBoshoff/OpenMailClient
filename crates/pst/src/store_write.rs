@@ -959,8 +959,15 @@ fn write_store_of<W: Read + Write + Seek>(
             continue;
         };
         renamed.bag(&mut bag);
+        // Its named properties under the ids this file gives their names.
+        let mut named = PropBag::default();
+        for (key, value) in store.folder_named(*id).unwrap_or_default() {
+            named.set(o.names.id_for(&key)?, value);
+        }
+        renamed.bag(&mut named);
         if let Some(f) = folders.get_mut(i + 1) {
             f.kept = raws(&bag).into_iter().filter(|(id, _)| !written_here(*id)).collect();
+            f.kept.extend(named.iter().map(|(id, v)| (id, encode(id, v))));
         }
     }
 

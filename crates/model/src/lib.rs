@@ -763,6 +763,11 @@ pub trait Store {
     fn folder_props(&mut self, _folder: FolderId) -> Result<PropBag, StoreError> {
         Ok(PropBag::default())
     }
+    /// A folder's own named properties, by name, as they are kept. Empty in a store that
+    /// keeps none.
+    fn folder_named(&mut self, _folder: FolderId) -> Result<Vec<(NamedKey, PropValue)>, StoreError> {
+        Ok(Vec::new())
+    }
     /// The id the store gives itself, which its entry ids carry ([MS-OXCDATA] 2.2.4.1),
     /// where it has one.
     fn record_key(&mut self) -> Option<[u8; 16]> {
