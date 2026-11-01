@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 144 · 2026-10-30 · ranked: the top of the list is what hurts most.
+**Status:** revision 145 · 2026-10-30 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 145 · 2026-10-30 — M5.23: an attachment shown in the reading pane on a click, tables from comma-separated files.
 - 144 · 2026-10-30 — M5.22: right-to-left lines set from the right of their cell in the list, the header and the folder pane.
 - 143 · 2026-10-30 — M5.21: the message list's columns chosen in the window and kept between runs, and Table Style printing them.
 - 142 · 2026-10-30 — M5.20: search folders worked out again after a save, through the Search Management Queue Outlook reads.

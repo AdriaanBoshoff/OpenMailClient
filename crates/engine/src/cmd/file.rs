@@ -134,6 +134,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: open_attachment,
         },
         CommandSpec {
+            id: "mail.previewAttachment",
+            label: "Preview Attachment",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"index": attachment number, or null to go back to the message}; shows the attachment in the reading pane, read here and never by another program: a picture, a text file, a web page (no script, nothing fetched), an attached message with its header, a calendar's events or contact cards; a program or script is not previewed; returns {"name", "kind": picture, text, page, message, calendar or contacts, "cut": more was in the file than is shown, "untrusted_content": {"head": [[label, value]], "text": what is shown, as plain text}} or {"previewing": false}"#,
+            enabled: has_selection,
+            run: preview_attachment,
+        },
+        CommandSpec {
             id: "file.print",
             label: "Print",
             tab: "File",
@@ -520,6 +530,36 @@ fn save_attachment(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// A copy of an attachment for the program the system opens it with, on the reader's word.
+/// The attachment shown in the reading pane in place of the message's body, or the body again.
+fn preview_attachment(s: &mut Session, p: &Value) -> CmdResult {
+    let selected = s.selected.ok_or(StoreError::NoItem)?;
+    let index = match p.get("index") {
+        None | Some(Value::Null) => {
+            s.previewing = None;
+            return Ok(json!({ "previewing": false }));
+        }
+        Some(v) => v
+            .as_u64()
+            .and_then(|i| usize::try_from(i).ok())
+            .ok_or_else(|| EngineError::BadParams("\"index\" is an attachment's number from 0".into()))?,
+    };
+    let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
+    let att =
+        item.attachments.get(index).filter(|a| attachments::is_file(a)).ok_or_else(|| {
+            EngineError::BadParams(format!("there is no attachment {index} to preview; the message has {}", item.attachments.len()))
+        })?;
+    let shown = crate::attachment_preview::preview(att, &s.zone, &s.region).map_err(EngineError::Format)?;
+    let text: String = shown.item.body_text().chars().take(4000).collect();
+    let name = attachments::file_name(att);
+    s.previewing = Some((selected, index));
+    Ok(json!({
+        "name": name,
+        "kind": shown.kind.name(),
+        "cut": shown.cut,
+        "untrusted_content": { "head": shown.head, "text": text },
+    }))
+}
+
 fn open_attachment(s: &mut Session, p: &Value) -> CmdResult {
     let index = usize::try_from(p_u64(p, "index").unwrap_or(0)).unwrap_or(usize::MAX);
     let item = s.open.as_ref().ok_or(StoreError::NoItem)?;

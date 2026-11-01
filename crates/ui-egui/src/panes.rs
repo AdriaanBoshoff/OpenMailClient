@@ -599,11 +599,14 @@ impl MailUi {
 
     fn reading_pane(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
+        // An attachment shown in place of the message's body, as Attachment Preview does.
+        let shown = self.attachment_shown();
         let doc = self.body_doc();
         // A meeting's request, answer or cancellation: what it is, and answered from here.
         let meeting_bar = self.meeting_bar();
         let mut meeting_acts: Vec<(&'static str, Value)> = Vec::new();
-        if let (Some(doc), Some((key, _)), Some(item)) = (&doc, &self.body_doc, self.session.open.as_ref()) {
+        let body_item = shown.as_ref().map(|p| &p.item).or(self.session.open.as_ref());
+        if let (Some(doc), Some((key, _)), Some(item)) = (&doc, &self.body_doc, body_item) {
             self.pictures.load(ui.ctx(), *key, doc, item, &self.session.downloaded);
             self.pictures.moving = self.session.animate;
             self.faces.load(ui.ctx(), *key, doc);
@@ -713,8 +716,26 @@ impl MailUi {
         let mut save_all = false;
         let mut download = false;
         let mut write_on = false;
+        let previewed = shown.as_ref().and(self.session.previewing.map(|p| p.1));
+        let mut preview_pick: Option<Option<usize>> = None;
         if !files.is_empty() {
             let mut ax = left;
+            // While an attachment is shown, the message is one click away, as the first chip.
+            if previewed.is_some() {
+                let label = "Message";
+                let w = text_width(&p, label, font(12.0)) + 36.0;
+                let chip = Rect::from_min_size(pos2(ax, y), vec2(w, 28.0));
+                let resp = ui.interact(chip, egui::Id::new("attachment-back"), Sense::click());
+                p.rect_filled(chip, 3.0, if resp.hovered() { t.hover } else { t.pane });
+                p.rect_stroke(chip, 3.0, (1.0, t.line), egui::StrokeKind::Inside);
+                icons::paint(&p, Rect::from_center_size(pos2(chip.left() + 14.0, chip.center().y), vec2(14.0, 14.0)), Icon::Mail, t.accent);
+                clip_text(&p, pos2(chip.left() + 26.0, chip.center().y - 8.0), w - 30.0, label, font(12.0), t.text);
+                if resp.clicked() {
+                    preview_pick = Some(None);
+                }
+                resp.on_hover_text("Back to the message");
+                ax += w + 8.0;
+            }
             for (index, name, size, caution) in &files {
                 let label = format!("{}  ({})", one_line(name), human_size(*size));
                 let w = (text_width(&p, &label, font(12.0)) + 36.0).min(width);
@@ -724,7 +745,7 @@ impl MailUi {
                 }
                 let chip = Rect::from_min_size(pos2(ax, y), vec2(w, 28.0));
                 let resp = ui.interact(chip, egui::Id::new(("attachment", *index)), Sense::click());
-                let is_picked = picked == Some(*index);
+                let is_picked = previewed.map_or(picked == Some(*index), |shown| shown == *index);
                 p.rect_filled(
                     chip,
                     3.0,
@@ -749,13 +770,17 @@ impl MailUi {
                 clip_text(&p, pos2(chip.left() + 26.0, chip.center().y - 8.0), room, &label, font(12.0), t.text);
                 if resp.clicked() {
                     picked = Some(*index);
+                    // Shown in the pane on a click, unless it is one to think twice about.
+                    if caution.is_none() && previewed != Some(*index) {
+                        preview_pick = Some(Some(*index));
+                    }
                 }
                 if resp.double_clicked() {
                     ask = Some(*index);
                 }
                 let resp = resp.on_hover_text(match caution {
                     Some(words) => format!("{words}\nDouble-click to open or save it. Nothing is opened or run without your answer."),
-                    None => "Double-click to open or save it. Nothing is opened or run without your answer.".to_string(),
+                    None => "Click to see it here; double-click to open or save it. Nothing is opened or run without your answer.".to_string(),
                 });
                 resp.context_menu(|ui| {
                     picked = Some(*index);
@@ -808,6 +833,8 @@ impl MailUi {
         });
         let offer = waiting > 0 && !doc.as_ref().is_some_and(|d| d.truncated);
         let notice = match &doc {
+            // The notices are the message's; an attachment shown says what it is in its head.
+            _ if shown.is_some() => None,
             Some(d) if d.truncated => Some("This message is very long; the rest is not shown. Remote content is never downloaded."),
             Some(_) if offer => {
                 Some("Pictures in this message were not downloaded, to keep you private. Click here, or right-click a picture, to download them.")
@@ -864,13 +891,28 @@ impl MailUi {
             clip_text(&p, pos2(bar.left() + pad + 12.0, bar.center().y - 8.0), bar.width() - 40.0, notice, font(11.5), t.text_dim);
             y += 30.0;
         }
+        if let Some(shown) = shown.as_ref().filter(|s| !s.head.is_empty() || s.cut) {
+            p.hline((rect.left() + 1.0)..=rect.right(), y, (1.0, t.line));
+            y += 8.0;
+            let label_w = shown.head.iter().map(|(l, _)| text_width(&p, l, bold(12.0))).fold(0.0, f32::max) + 12.0;
+            for (label, value) in shown.head.iter().take(8) {
+                clip_text(&p, pos2(left, y), label_w, label, bold(12.0), t.text_dim);
+                cell_text(&p, pos2(left + label_w, y), width - label_w, value, font(12.0), t.text);
+                y += 18.0;
+            }
+            if shown.cut {
+                clip_text(&p, pos2(left, y), width, "Only the start of this file is shown.", font(11.5), t.text_faint);
+                y += 18.0;
+            }
+            y += 6.0;
+        }
         p.hline((rect.left() + 1.0)..=rect.right(), y, (1.0, t.line));
         y += 1.0;
 
         let plain = match &doc {
             Some(_) => String::new(),
             None => {
-                let full = item.body_text();
+                let full = shown.as_ref().map_or_else(|| item.body_text(), |p| p.item.body_text());
                 let cut = full.char_indices().nth(MAX_BODY_CHARS).map(|(i, _)| i);
                 let mut body: String = full.get(..cut.unwrap_or(full.len())).unwrap_or("").replace('\t', "    ");
                 body.retain(|c| c == '\n' || !c.is_control());
@@ -886,7 +928,7 @@ impl MailUi {
             ui.painter().rect_filled(body_rect, 0.0, fill);
         }
         ui.scope_builder(UiBuilder::new().max_rect(body_rect), |ui| {
-            ScrollArea::vertical().id_salt(("body", self.session.selected)).auto_shrink(false).show(ui, |ui| {
+            ScrollArea::vertical().id_salt(("body", self.session.selected, previewed)).auto_shrink(false).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad as i8, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     match &doc {
@@ -906,6 +948,9 @@ impl MailUi {
         });
         for cmd in acts {
             self.act(cmd, Value::Null);
+        }
+        if let Some(index) = preview_pick {
+            self.act("mail.previewAttachment", json!({ "index": index }));
         }
         for (cmd, params) in meeting_acts {
             self.act(cmd, params);

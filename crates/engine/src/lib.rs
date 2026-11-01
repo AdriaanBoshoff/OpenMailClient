@@ -9,6 +9,7 @@
 pub mod accounts;
 pub mod arrange;
 pub mod arrival;
+pub mod attachment_preview;
 pub mod attachments;
 pub mod autocomplete;
 pub mod catalog;
@@ -58,6 +59,8 @@ mod tests_names;
 mod tests_people;
 #[cfg(test)]
 mod tests_pictures;
+#[cfg(test)]
+mod tests_preview;
 #[cfg(test)]
 mod tests_print;
 #[cfg(test)]
@@ -369,6 +372,9 @@ pub struct Session {
     /// The row a Shift and a click selects from.
     pub anchor: Option<u64>,
     pub open: Option<Item>,
+    /// The attachment shown in the reading pane in place of the body (`mail.previewAttachment`):
+    /// the row it belongs to and its number. Shown only while that row is the one read.
+    pub previewing: Option<(u64, usize)>,
     pub sort: SortKey,
     pub sort_desc: bool,
     pub search: String,
@@ -587,6 +593,7 @@ impl Session {
             print_style: print::Style::default(),
             print_list: print::Listing::default(),
             list_columns: print::Field::LIST.to_vec(),
+            previewing: None,
         }
     }
 

@@ -421,6 +421,8 @@ pub struct MailUi {
     pub(crate) plain_bodies: bool,
     /// The open message's formatted body, kept until another message is opened.
     body_doc: Option<(u64, Arc<Doc>)>,
+    /// The attachment shown in the reading pane in place of its message, worked out once.
+    attached_view: Option<((u64, usize), Option<Arc<openmailclient_engine::attachment_preview::Preview>>)>,
     pictures: pictures::Pictures,
     faces: faces::Faces,
     pub(crate) actions: Vec<(String, Value)>,
@@ -717,6 +719,7 @@ impl MailUi {
             leaving_since: None,
             plain_bodies: false,
             body_doc: None,
+            attached_view: None,
             pictures: pictures::Pictures::default(),
             faces: faces::Faces::default(),
             actions: Vec::new(),
@@ -1266,7 +1269,11 @@ impl MailUi {
         if self.plain_bodies {
             return None;
         }
-        let item = self.session.open.as_ref()?;
+        let shown = self.attachment_shown();
+        let item = match &shown {
+            Some(p) => &p.item,
+            None => self.session.open.as_ref()?,
+        };
         let (html, len) = match (item.props.get(pid::HTML), item.props.get(pid::RTF_COMPRESSED)) {
             (Some(PropValue::Binary(b)), _) => (true, b.len()),
             (Some(PropValue::String(s)), _) => (true, s.len()),
@@ -1274,7 +1281,7 @@ impl MailUi {
             _ => return None,
         };
         let mut hasher = DefaultHasher::new();
-        (self.session.selected, html, len, item.subject()).hash(&mut hasher);
+        (self.session.selected, self.session.previewing, html, len, item.subject()).hash(&mut hasher);
         let key = hasher.finish();
         let doc = match &self.body_doc {
             Some((k, doc)) if *k == key => doc.clone(),
@@ -1292,6 +1299,29 @@ impl MailUi {
             }
         };
         (!doc.is_empty()).then_some(doc)
+    }
+
+    /// The attachment the reading pane shows in place of the open message, if one is asked for
+    /// and it can be shown; worked out once for each attachment.
+    pub(crate) fn attachment_shown(&mut self) -> Option<Arc<openmailclient_engine::attachment_preview::Preview>> {
+        let (selected, index) = self.session.previewing?;
+        if Some(selected) != self.session.selected {
+            return None;
+        }
+        if let Some((key, shown)) = &self.attached_view
+            && *key == (selected, index)
+        {
+            return shown.clone();
+        }
+        let shown = self
+            .session
+            .open
+            .as_ref()
+            .and_then(|item| item.attachments.get(index))
+            .and_then(|a| openmailclient_engine::attachment_preview::preview(a, &self.session.zone, &self.session.region).ok())
+            .map(Arc::new);
+        self.attached_view = Some(((selected, index), shown.clone()));
+        shown
     }
 
     /// Whether drawing waits until every picture of the message read is decoded, as a picture

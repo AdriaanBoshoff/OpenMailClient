@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); every setting in one Options window and the File tab in pages (M1.9); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 154 · 2026-10-30
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); every setting in one Options window and the File tab in pages (M1.9); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 155 · 2026-10-30
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 90 of 134 (67%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 772, all passing |
+| Tests | 777, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command, for published account settings and for updates |
@@ -273,7 +273,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes~~ | done: M3b.28 |
 | Pictures on a server, loaded on an explicit command (never by themselves): from the info bar and a right-click on a picture | done: M4.10 |
 | Attachments opened on a double-click (Open, Save As, Cancel), a program or script only saved | done: M4.11 |
-| An attachment shown in the reading pane on a click (Attachment Preview) without another program | M5, with the item windows |
+| ~~An attachment shown in the reading pane on a click (Attachment Preview) without another program~~ | done: M5.23 |
 | ~~An account's servers found from its address (the provider's published settings, the usual names tried)~~ | done: M4.14 |
 | ~~A domain's provider found from its mail exchangers (MX), and RFC 6186 SRV records (a DNS client is needed)~~ | done: M4.15 |
 | A server's own certificate trusted on the owner's word, and kept for that server only | done: M4.9 |
@@ -2822,3 +2822,17 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   left. Going beyond what is asked: an expired message is struck through where its text is,
   and the end mark of a preview held whole goes where the preview is read to end, on its left
   when it is read from the right. 1 test.
+- **2026-10-30** - M5.23: an attachment shown in the reading pane on a click. A click on an
+  attachment shows it in the reading pane in place of the message, with a Message chip to go
+  back, as Outlook's Attachment Preview does, without another program
+  (`mail.previewAttachment` and `crates/engine/src/attachment_preview.rs`). Pictures (PNG,
+  JPEG, GIF, BMP, WebP, TIFF, SVG) are known by their bytes and decoded off the window's
+  thread; text is read as UTF-8, UTF-16 or Latin-1; a web page is shown as a message body is,
+  its scripts never run and nothing remote fetched; an attached message (`.msg`, `.eml` or an
+  Outlook item) under its own From, Sent, To and Subject; a calendar file event by event and
+  contact cards person by person. A program or script, by its name or its bytes, is never
+  previewed, and what has no preview is said in words. Going beyond what is asked: values with
+  commas or tabs between them (`.csv`, `.tsv`) are set out as a table, quoted values as RFC
+  4180 has them, each value text and never markup; large files are cut at a whole letter and
+  said to be; the result over the command line marks the file's text as untrusted. A calendar
+  test that looked at the real week was made to look at its own. 5 tests.

@@ -339,7 +339,9 @@ fn a_series_with_changed_and_deleted_occurrences_is_saved_to_a_pst_and_read_agai
     run(&mut other, "nav.module", json!({"module": "calendar"}));
     assert_eq!(shown(&mut other, "2026-10-01", "2026-12-01", "Rowing"), before);
     // Read again, it is changed as any series is.
-    let opened = other.calendar.items.iter().find(|(_, a)| a.subject == "Rowing").map(|(i, _)| *i).unwrap();
+    // Looked for in its own weeks: the calendar opens on the real week, which moves on.
+    let (series, _) = other.appointments_between(time::from_civil(2026, 10, 1, 0, 0, 0, 0), time::from_civil(2026, 12, 1, 0, 0, 0, 0)).unwrap();
+    let opened = series.iter().find(|(_, a)| a.subject == "Rowing").map(|(i, _)| *i).unwrap();
     run(&mut other, "calendar.select", json!({"id": opened, "occurrence": "2026-10-22"}));
     run(&mut other, "calendar.delete", json!({}));
     assert_eq!(shown(&mut other, "2026-10-01", "2026-12-01", "Rowing").len(), 4);
