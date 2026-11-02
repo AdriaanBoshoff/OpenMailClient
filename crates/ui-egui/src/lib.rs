@@ -1580,6 +1580,10 @@ impl MailUi {
             }
         }
         let mail_keys = !calendar && !people;
+        // Forward as Attachment, Ctrl+Alt+F, ahead of Ctrl+F, which it would be taken for.
+        if mail_keys && hit(Modifiers::COMMAND | Modifiers::ALT, Key::F) {
+            run.push(("mail.forwardAsAttachment", Value::Null));
+        }
         for (key, id) in [
             (Key::N, if mail_keys { "mail.new" } else { "" }),
             (Key::R, if people { "" } else { "mail.reply" }),

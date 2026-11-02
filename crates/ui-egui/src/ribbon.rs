@@ -43,6 +43,7 @@ const HOME: &[Group] = &[
             big(Icon::ReplyAll, "Reply\nAll", "mail.replyAll"),
             big(Icon::Forward, "Forward", "mail.forward"),
             small(Icon::NewMeeting, "Meeting", "ui.replyWithMeeting"),
+            small(Icon::Clip, "Forward as Attachment", "mail.forwardAsAttachment"),
         ],
     ),
     ("Move", &[small(Icon::Move, "Move", "menu:move"), small(Icon::Rules, "Rules", "menu:rules")]),

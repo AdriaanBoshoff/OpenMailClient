@@ -999,6 +999,7 @@ impl MailUi {
         let mut body = draft.body.clone();
         let attachments: Vec<(String, usize)> = draft.attachments.iter().map(|a| (a.name(), a.size())).collect();
         let show_bcc = draft.show_bcc;
+        let importance = draft.importance;
         let signed = draft.signature_name.clone();
         let signature_names: Vec<String> = self.session.signatures.list.iter().map(|g| g.name.clone()).collect();
         let (go_at, expire_at) = (draft.deliver_after, draft.expires);
@@ -1044,6 +1045,21 @@ impl MailUi {
                 ] {
                     if ui.add(egui::Button::new(egui::RichText::new(label).font(font(12.5))).min_size(vec2(0.0, 30.0))).clicked() {
                         acts.push((cmd, params));
+                    }
+                }
+                // Message > Tags: High and Low Importance, each pressed in while it is chosen.
+                for (icon, label, level, cmd) in
+                    [(Icon::Importance, "High", 2, "compose.highImportance"), (Icon::LowImportance, "Low", 0, "compose.lowImportance")]
+                {
+                    let on = importance == Some(level);
+                    let text = egui::RichText::new(format!("   {label}")).font(font(12.5)).color(if on { t.accent } else { t.text });
+                    let b = ui
+                        .add(egui::Button::new(text).selected(on).min_size(vec2(52.0, 30.0)))
+                        .on_hover_text(format!("{label} Importance: marks it so to those it goes to; press again for normal"));
+                    let mark = Rect::from_center_size(pos2(b.rect.left() + 9.0, b.rect.center().y), vec2(11.0, 11.0));
+                    icons::paint(ui.painter(), mark, icon, if level == 2 { t.danger } else { t.accent });
+                    if b.clicked() {
+                        acts.push((cmd, Value::Null));
                     }
                 }
                 ui.menu_button(egui::RichText::new("Delivery…").font(font(12.5)), |ui| {
@@ -1358,9 +1374,7 @@ fn draw_line(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme
         match field {
             Field::Importance => match row.importance {
                 2 => icons::paint(p, icon_at(*x), Icon::Importance, t.danger),
-                0 => {
-                    p.text(icon_at(*x).center(), Align2::CENTER_CENTER, "↓", font(12.0), t.text_faint);
-                }
+                0 => icons::paint(p, icon_at(*x), Icon::LowImportance, t.text_faint),
                 _ => {}
             },
             Field::Attachment if row.has_attachments => icons::paint(p, icon_at(*x), Icon::Clip, t.text_dim),

@@ -1,8 +1,8 @@
 # OpenMailClient
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M5%20closed-orange)
-![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-90%20of%20134%20%C2%B7%2067%25-yellow)
-![tests](https://img.shields.io/badge/tests-810%20passing-brightgreen)
+![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-108%20of%20142%20%C2%B7%2076%25-yellow)
+![tests](https://img.shields.io/badge/tests-812%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)

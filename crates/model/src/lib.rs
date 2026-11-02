@@ -251,6 +251,18 @@ impl Attachment {
         Self { props, data, embedded: None }
     }
 
+    /// An Outlook item attached as it is (attach method 5, [MS-OXCMSG] 2.2.2.9), named by
+    /// its subject as Outlook names an attached item.
+    pub fn item(item: Item) -> Self {
+        let subject = item.subject();
+        let name = if subject.trim().is_empty() { "Untitled".to_string() } else { subject };
+        let mut props = PropBag::default();
+        props.set_str(pid::DISPLAY_NAME, &name);
+        props.set(pid::ATTACH_METHOD, PropValue::Int32(5));
+        props.set(pid::RENDERING_POSITION, PropValue::Int32(-1));
+        Self { props, data: Vec::new(), embedded: Some(Box::new(item)) }
+    }
+
     /// Whether this is an object of another program (attach method 6) whose bytes are a
     /// storage, as such an object must be ([MS-OXCMSG] 2.2.2.9). One that is not would be
     /// listed by Outlook as no attachment at all, so the writers keep it as a file instead.

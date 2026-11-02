@@ -241,6 +241,8 @@ pub struct Draft {
     pub signature_auto: bool,
     /// The name of the signature put in, as the signature menu marks it.
     pub signature_name: Option<String>,
+    /// High or Low Importance: 2 high, 0 low; none for normal (PidTagImportance).
+    pub importance: Option<i32>,
 }
 
 /// A draft kept in a data file's Drafts folder.

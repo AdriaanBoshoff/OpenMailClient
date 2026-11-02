@@ -55,6 +55,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: forward,
         },
         CommandSpec {
+            id: "mail.forwardAsAttachment",
+            label: "Forward as Attachment",
+            tab: "Home",
+            group: "Respond",
+            shortcut: "Ctrl+Alt+F",
+            params: "the messages selected go attached as they are, each an item of its own, in a new message; its subject is the one's with FW: before it, or for several none",
+            enabled: has_selection,
+            run: forward_as_attachment,
+        },
+        CommandSpec {
             id: "compose.setField",
             label: "Set Field",
             tab: "",
@@ -123,6 +133,26 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             params: r#"{"anyway": true to send it whatever "compose.check" says, "wait": false to send on a thread of its own}; files it in the Outbox, and sends the Outbox when there is an account (see mail.sendAll)"#,
             enabled: composing,
             run: send,
+        },
+        CommandSpec {
+            id: "compose.highImportance",
+            label: "High Importance",
+            tab: "Message",
+            group: "Tags",
+            shortcut: "",
+            params: r#"{"on": true | false}; default toggles, and off is normal; returns {"importance": "high" | "normal" | "low"}"#,
+            enabled: composing,
+            run: high_importance,
+        },
+        CommandSpec {
+            id: "compose.lowImportance",
+            label: "Low Importance",
+            tab: "Message",
+            group: "Tags",
+            shortcut: "",
+            params: r#"{"on": true | false}; default toggles, and off is normal; returns {"importance": "high" | "normal" | "low"}"#,
+            enabled: composing,
+            run: low_importance,
         },
         CommandSpec {
             id: "compose.delayDelivery",
@@ -412,6 +442,67 @@ fn forward(s: &mut Session, _: &Value) -> CmdResult {
     respond(s, "Forward")
 }
 
+/// Forward as Attachment: the messages selected, each attached whole as an item, so that what
+/// they were (headers, attachments, all of it) goes on unchanged ([MS-OXCMSG] 2.2.2.9).
+fn forward_as_attachment(s: &mut Session, _: &Value) -> CmdResult {
+    let (store, folder) = s.current.ok_or(StoreError::NoFolder)?;
+    let ids = s.chosen();
+    if ids.is_empty() {
+        return Err(StoreError::NoItem.into());
+    }
+    let mut attachments = Vec::new();
+    let mut first = None;
+    for id in ids.iter().take(MAX_ATTACHMENTS) {
+        let item = match s.open.as_ref().filter(|_| s.selected == Some(*id)) {
+            Some(open) => open.clone(),
+            None => s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.load(folder, openmailclient_model::ItemId(*id))?,
+        };
+        first.get_or_insert_with(|| item.clone());
+        // Its size as it goes, a message of its own, so that the window can say it.
+        let size = i32::try_from(openmailclient_mime::write(&item).len()).unwrap_or(i32::MAX);
+        let mut a = openmailclient_model::Attachment::item(item);
+        a.props.set(pid::ATTACH_SIZE, PropValue::Int32(size));
+        attachments.push(a);
+    }
+    let subject = match (&first, attachments.len()) {
+        (Some(item), 1) => prefixed("FW:", &item.subject()),
+        _ => String::new(),
+    };
+    let account = first.as_ref().map(|i| account_reached(s, i)).unwrap_or_default();
+    let mut draft = Draft { kind: "Forward", subject, attachments, account, ..Draft::default() };
+    sign(s, &mut draft);
+    set_aside(s);
+    s.compose = Some(draft);
+    ok()
+}
+
+fn importance_name(level: Option<i32>) -> &'static str {
+    match level {
+        Some(2) => "high",
+        Some(0) => "low",
+        _ => "normal",
+    }
+}
+
+/// High or Low Importance, pressed in as Outlook's are: pressing the one on lets it out again.
+fn set_importance(s: &mut Session, p: &Value, level: i32, what: &str) -> CmdResult {
+    let draft = s.compose.as_mut().ok_or_else(|| EngineError::Disabled(what.into()))?;
+    let on = p_bool(p, "on").unwrap_or(draft.importance != Some(level));
+    draft.importance = if on { Some(level) } else { draft.importance.filter(|l| *l != level) };
+    draft.touched = true;
+    let name = importance_name(draft.importance);
+    s.status = format!("It goes with {name} importance");
+    Ok(json!({ "importance": name }))
+}
+
+fn high_importance(s: &mut Session, p: &Value) -> CmdResult {
+    set_importance(s, p, 2, "High Importance")
+}
+
+fn low_importance(s: &mut Session, p: &Value) -> CmdResult {
+    set_importance(s, p, 0, "Low Importance")
+}
+
 fn clamp(text: &str, max: usize) -> String {
     let mut end = text.len().min(max);
     while !text.is_char_boundary(end) {
@@ -630,6 +721,9 @@ pub(super) fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
     }
     item.refresh_display_recipients();
     item.attachments = draft.attachments.clone();
+    if let Some(level) = draft.importance {
+        item.props.set(pid::IMPORTANCE, PropValue::Int32(level.clamp(0, 2)));
+    }
     for (id, t) in [(pid::DEFERRED_DELIVERY_TIME, draft.deliver_after), (pid::EXPIRY_TIME, draft.expires)] {
         if t > 0 {
             item.props.set(id, PropValue::Time(t));
@@ -776,6 +870,7 @@ fn edit_draft(s: &mut Session, _: &Value) -> CmdResult {
         references: text(pid::INTERNET_REFERENCES),
         deliver_after: time(pid::DEFERRED_DELIVERY_TIME),
         expires: time(pid::EXPIRY_TIME),
+        importance: Some(item.importance()).filter(|l| *l != 1),
         filed: Some(Filed { path, store, folder, item: openmailclient_model::ItemId(id) }),
         ..Draft::default()
     };

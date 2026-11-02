@@ -39,6 +39,8 @@ pub enum Icon {
     Print,
     Close,
     Importance,
+    /// Low Importance: an arrow pointing down.
+    LowImportance,
     Check,
     ChevronDown,
     ChevronRight,
@@ -289,6 +291,10 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Importance => {
             pen.filled(&[(7.0, 2.0), (9.0, 2.0), (8.6, 10.0), (7.4, 10.0)]);
             pen.dot(8.0, 12.8, 1.1);
+        }
+        Icon::LowImportance => {
+            pen.line(&[(8.0, 2.5), (8.0, 13.0)]);
+            pen.line(&[(4.5, 9.5), (8.0, 13.0), (11.5, 9.5)]);
         }
         Icon::Check => pen.line(&[(2.5, 8.5), (6.0, 12.0), (13.5, 4.0)]),
         Icon::ChevronDown => pen.line(&[(4.0, 6.0), (8.0, 10.0), (12.0, 6.0)]),

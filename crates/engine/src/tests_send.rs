@@ -319,3 +319,57 @@ fn rules_on_mail_as_it_is_sent_keep_a_copy_mark_it_and_hold_it_back() {
     assert_eq!((count(&s, "Outbox"), count(&s, "Kept")), (1, 1));
     assert_eq!(fake.state().submitted.len(), 1);
 }
+
+#[test]
+fn importance_is_pressed_in_and_out_and_goes_with_the_message() {
+    let fake = Fake::default();
+    let mut s = session(&fake);
+    assert!(s.run("compose.highImportance", &Value::Null).is_err(), "nothing is being written");
+    write(&mut s, &[("to", "june@example.test"), ("subject", "Boiler"), ("body", "It is leaking.")]);
+    assert_eq!(s.run("compose.highImportance", &Value::Null).unwrap()["importance"], "high");
+    // Low takes High's place, pressing Low again lets it out, and "on" says which it is to be.
+    assert_eq!(s.run("compose.lowImportance", &Value::Null).unwrap()["importance"], "low");
+    assert_eq!(s.run("compose.lowImportance", &Value::Null).unwrap()["importance"], "normal");
+    assert_eq!(s.run("compose.highImportance", &json!({ "on": false })).unwrap()["importance"], "normal");
+    assert_eq!(s.run("compose.highImportance", &json!({ "on": true })).unwrap()["importance"], "high");
+    assert_eq!(s.run("compose.highImportance", &json!({ "on": true })).unwrap()["importance"], "high");
+
+    // A draft saved and opened again keeps it.
+    s.run("compose.saveDraft", &Value::Null).unwrap();
+    assert_eq!(s.compose.as_ref().and_then(|d| d.importance), Some(2));
+    s.run("compose.send", &json!({ "anyway": true })).unwrap();
+    let text = String::from_utf8_lossy(&went_data(&fake)).to_string();
+    let head = text.split("\r\n\r\n").next().unwrap_or_default().to_string();
+    assert!(head.contains("\r\nImportance: high"), "{head}");
+    assert_eq!(openmailclient_mime::parse(went_data(&fake).as_slice()).unwrap().importance(), 2);
+}
+
+#[test]
+fn forward_as_attachment_carries_each_message_selected_whole() {
+    let fake = Fake::default();
+    let mut s = session(&fake);
+    s.run("mail.select", &json!({ "folder": "Inbox", "index": 0 })).unwrap();
+    let first = s.open.clone().unwrap();
+    s.run("mail.forwardAsAttachment", &Value::Null).unwrap();
+    let d = s.compose.clone().unwrap();
+    assert_eq!(d.subject, format!("FW: {}", first.subject()));
+    assert_eq!(d.attachments.len(), 1);
+    assert_eq!(d.attachments[0].name(), first.subject());
+    assert!(d.attachments[0].size() > first.subject().len(), "its size is said");
+    assert_eq!(d.attachments[0].embedded.as_ref().map(|i| i.subject()), Some(first.subject()));
+    assert!(d.body.trim().is_empty() || !d.body.contains(&first.body_text()), "the message is attached, not quoted");
+    s.run("compose.discard", &Value::Null).unwrap();
+
+    // Several go in one message, each attached, with no subject chosen for them.
+    s.run("mail.select", &json!({ "folder": "Inbox", "index": 0 })).unwrap();
+    s.run("mail.select", &json!({ "index": 1, "add": true })).unwrap();
+    s.run("mail.forwardAsAttachment", &Value::Null).unwrap();
+    s.run("compose.setField", &json!({ "field": "to", "value": "june@example.test" })).unwrap();
+    let d = s.compose.clone().unwrap();
+    assert_eq!((d.subject.as_str(), d.attachments.len()), ("", 2));
+    s.run("compose.send", &json!({ "anyway": true })).unwrap();
+    let back = openmailclient_mime::parse(went_data(&fake).as_slice()).unwrap();
+    let carried: Vec<String> = back.attachments.iter().filter_map(|a| a.embedded.as_ref().map(|i| i.subject())).collect();
+    assert_eq!(carried.len(), 2, "each went as a message of its own: {carried:?}");
+    assert!(carried.contains(&first.subject()), "{carried:?}");
+}
