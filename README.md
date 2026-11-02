@@ -13,8 +13,7 @@ reachable as a command from the UI, a CLI and (later) an MCP server.
 
 Project page: https://adriaanboshoff.github.io/OpenMailClient/
 
-OpenMailClient is an independent concept project. It is not affiliated with Microsoft. It follows the
-conventions of [`storytold/wordcraft`](https://github.com/storytold/wordcraft).
+OpenMailClient is an independent concept project. It is not affiliated with Microsoft.
 
 ![The OpenMailClient window with the sample mailbox: folder pane, message list, and an RTF receipt with tables, a bordered note, an attachment card and a picture in the reading pane](docs/images/openmailclient-reading-pane.png)
 
