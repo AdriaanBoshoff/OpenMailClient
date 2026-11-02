@@ -245,6 +245,55 @@ pub struct Draft {
     pub importance: Option<i32>,
 }
 
+/// Filter Email ([Home > Find]): the message list shows only messages with attachments, flagged,
+/// of high importance or with a category, as many of them at once as are chosen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MailFilter {
+    pub attachments: bool,
+    pub flagged: bool,
+    pub important: bool,
+    pub categorized: bool,
+}
+
+impl MailFilter {
+    /// Each filter by the name `view.filter` takes, Unread (kept on its own) aside.
+    pub const NAMES: [&'static str; 4] = ["attachments", "flagged", "important", "categorized"];
+
+    pub fn any(&self) -> bool {
+        *self != Self::default()
+    }
+
+    /// Whether a row is shown with these filters on: it is each of what is chosen.
+    pub fn keeps(&self, r: &openmailclient_model::Summary) -> bool {
+        (!self.attachments || r.has_attachments)
+            && (!self.flagged || r.flag == openmailclient_model::Flag::Flagged)
+            && (!self.important || r.importance >= 2)
+            && (!self.categorized || r.categories.iter().any(|c| !c.trim().is_empty()))
+    }
+
+    pub fn get(&self, name: &str) -> Option<bool> {
+        match name {
+            "attachments" => Some(self.attachments),
+            "flagged" => Some(self.flagged),
+            "important" => Some(self.important),
+            "categorized" => Some(self.categorized),
+            _ => None,
+        }
+    }
+
+    pub fn set(&mut self, name: &str, on: bool) -> bool {
+        let slot = match name {
+            "attachments" => &mut self.attachments,
+            "flagged" => &mut self.flagged,
+            "important" => &mut self.important,
+            "categorized" => &mut self.categorized,
+            _ => return false,
+        };
+        *slot = on;
+        true
+    }
+}
+
 /// A draft kept in a data file's Drafts folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Filed {
@@ -392,6 +441,8 @@ pub struct Session {
     pub sort_desc: bool,
     pub search: String,
     pub unread_only: bool,
+    /// Filter Email's other filters, with Unread above: the list shows only what is all of them.
+    pub filter: MailFilter,
     pub reading_pane: ReadingPane,
     /// Each folder's own view, by [`folder_view::key`], as the settings keep them.
     pub folder_views: std::collections::BTreeMap<String, folder_view::FolderView>,
@@ -570,6 +621,7 @@ impl Session {
             sort_desc: true,
             search: String::new(),
             unread_only: false,
+            filter: MailFilter::default(),
             reading_pane: ReadingPane::Right,
             folder_views: std::collections::BTreeMap::new(),
             views_looked: std::collections::HashSet::new(),
@@ -843,6 +895,9 @@ impl Session {
         if self.unread_only {
             rows.retain(|r| !r.read);
         }
+        if self.filter.any() {
+            rows.retain(|r| self.filter.keeps(r));
+        }
         arrange::sort(&mut rows, self.sort, self.sort_desc);
         self.rows = rows;
         if let Some(sel) = self.selected
@@ -859,6 +914,13 @@ impl Session {
             self.also.retain(|id| listed.contains(id));
         }
         Ok(())
+    }
+
+    /// The filters on, by the names `view.filter` takes: Unread first.
+    pub fn filters(&self) -> Vec<&'static str> {
+        let mut on: Vec<&'static str> = if self.unread_only { vec!["unread"] } else { Vec::new() };
+        on.extend(MailFilter::NAMES.iter().copied().filter(|n| self.filter.get(n) == Some(true)));
+        on
     }
 
     /// The rows selected, in the list's order: the one shown and those chosen with it.
@@ -1369,6 +1431,7 @@ impl Session {
             })).collect::<Vec<_>>(),
             "search": self.search,
             "unread_only": self.unread_only,
+            "filter": self.filters(),
             "undo": self.undo.last().map(|step| step.what()),
             "setAside": self.set_aside.len(),
             "composing": self.compose.as_ref().map(|d| json!({

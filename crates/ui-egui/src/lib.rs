@@ -213,7 +213,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand {
         id: "ui.menu",
         label: "Open Menu",
-        params: r#"{"menu": "categorize" | "followup" | "move" | "arrange" | "reading" | "groups" | "todobar", "x": px, "y": px}"#,
+        params: r#"{"menu": "categorize" | "followup" | "move" | "arrange" | "reading" | "groups" | "todobar" | "rules" | "filter" | "copyfolder", "x": px, "y": px}"#,
     },
     UiCommand { id: "ui.ribbonMode", label: "Simplified Ribbon", params: r#"{"mode": "classic" | "simplified"}; none switches"# },
     UiCommand {
@@ -362,6 +362,8 @@ pub(crate) enum Menu {
     Groups,
     TodoBar,
     Rules,
+    Filter,
+    CopyFolder,
 }
 
 /// A link the person is being asked about.
@@ -1204,6 +1206,8 @@ impl MailUi {
                     Some("groups") => Menu::Groups,
                     Some("todobar") => Menu::TodoBar,
                     Some("rules") => Menu::Rules,
+                    Some("filter") => Menu::Filter,
+                    Some("copyfolder") => Menu::CopyFolder,
                     _ => return Err("unknown menu".to_string()),
                 };
                 let coord = |key: &str| params.get(key).and_then(Value::as_f64).map_or(100.0, |v| v.clamp(0.0, 20_000.0) as f32);
@@ -1772,8 +1776,11 @@ impl MailUi {
         }
         if s.module == Module::Mail {
             let unread = s.current_folder().map_or(0, |f| f.unread);
-            let counts =
-                if s.search.is_empty() && !s.unread_only { format!("Items: {}", s.rows.len()) } else { format!("Filtered: {}", s.rows.len()) };
+            let counts = if s.search.is_empty() && s.filters().is_empty() {
+                format!("Items: {}", s.rows.len())
+            } else {
+                format!("Filtered: {}", s.rows.len())
+            };
             x += clip_text(&p, pos2(x, y), 160.0, &counts, font(11.5), t.bar_text) + 16.0;
             if unread > 0 {
                 x += clip_text(&p, pos2(x, y), 160.0, &format!("Unread: {unread}"), font(11.5), t.bar_text) + 16.0;

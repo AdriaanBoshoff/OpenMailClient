@@ -41,6 +41,8 @@ pub enum Icon {
     Importance,
     /// Low Importance: an arrow pointing down.
     LowImportance,
+    /// Copy: one sheet behind another.
+    Copy,
     Check,
     ChevronDown,
     ChevronRight,
@@ -202,6 +204,10 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.line(&[(10.2, 10.2), (14.0, 14.0)]);
         }
         Icon::Folder => pen.folder(),
+        Icon::Copy => {
+            pen.line(&[(4.0, 3.5), (4.0, 1.5), (13.5, 1.5), (13.5, 11.0), (11.5, 11.0)]);
+            pen.closed(&[(2.0, 4.5), (11.0, 4.5), (11.0, 14.5), (2.0, 14.5)]);
+        }
         Icon::NewFolder => {
             pen.closed(&[(1.5, 5.0), (5.5, 5.0), (7.0, 7.0), (13.5, 7.0), (13.5, 14.0), (1.5, 14.0)]);
             pen.line(&[(12.5, 0.5), (12.5, 4.5)]);

@@ -42,7 +42,7 @@ fn catalog_names_real_commands_and_parity_only_rises() {
     }
     let (done, total) = catalog::summary();
     // The floor only goes up: raise it when features land.
-    assert!(done >= 108, "parity fell to {done} of {total}");
+    assert!(done >= 111, "parity fell to {done} of {total}");
     assert!(catalog::checklist().contains("- [x] New: New Email"));
 }
 
@@ -3094,4 +3094,76 @@ fn a_message_is_printed_as_its_body_alone() {
     assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
     assert!(s.page_setup.details && s.page_setup.edges);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn filter_email_shows_only_what_is_each_filter_chosen() {
+    let mut s = session();
+    run(&mut s, "mail.select", json!({"folder": "Inbox"}));
+    let all = s.rows.len();
+    let with = s.rows.iter().filter(|r| r.has_attachments).count();
+    assert!(with > 0 && with < all, "the sample has some messages with attachments: {with} of {all}");
+
+    let done = run(&mut s, "view.filter", json!({"by": "attachments"}));
+    assert_eq!((done["filter"].clone(), done["count"].as_u64()), (json!(["attachments"]), Some(with as u64)));
+    assert!(s.rows.iter().all(|r| r.has_attachments));
+
+    // A message with attachments flagged: with Flagged on too, it alone is shown.
+    let id = s.rows[0].id;
+    run(&mut s, "mail.select", json!({"id": id}));
+    run(&mut s, "mail.followUp", json!({"when": "today"}));
+    let both = run(&mut s, "view.filter", json!({"by": "flagged", "on": true}));
+    assert_eq!(both["filter"], json!(["attachments", "flagged"]));
+    assert!(s.rows.iter().any(|r| r.id == id) && s.rows.iter().all(|r| r.has_attachments && r.flag == openmailclient_model::Flag::Flagged));
+    assert_eq!(s.inspect()["filter"], json!(["attachments", "flagged"]));
+
+    // Each is taken off on its own, or all at once; Unread is one of them.
+    run(&mut s, "view.filter", json!({"by": "attachments"}));
+    assert_eq!(s.filters(), vec!["flagged"]);
+    run(&mut s, "view.filter", json!({"by": "unread", "on": true}));
+    assert!(s.unread_only && s.rows.iter().all(|r| !r.read && r.flag == openmailclient_model::Flag::Flagged));
+    run(&mut s, "view.filter", json!({"by": "important"}));
+    assert!(s.rows.iter().all(|r| r.importance >= 2));
+    let cleared = run(&mut s, "view.filter", json!({"clear": true}));
+    assert_eq!((cleared["filter"].clone(), s.rows.len(), s.unread_only), (json!([]), all, false));
+
+    for bad in [json!({}), json!({"by": "nonsense"}), json!({"by": 3})] {
+        assert!(s.run("view.filter", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.rows.len(), all, "a bad filter changes nothing");
+}
+
+#[test]
+fn copy_folder_makes_the_folder_again_with_what_it_holds() {
+    let mut s = session();
+    run(&mut s, "mail.select", json!({"folder": "Inbox/Projects"}));
+    run(&mut s, "folder.new", json!({"name": "Old"}));
+    let projects = folder(&s, "Projects");
+    // Into the Archive: the folder, the one inside it and every message, the original kept.
+    let done = run(&mut s, "folder.copy", json!({"to": "Archive"}));
+    assert_eq!((done["name"].as_str(), done["folders"].as_u64(), done["unreadable"].as_u64()), (Some("Projects"), Some(2), Some(0)), "{done}");
+    assert_eq!(done["messages"].as_u64(), Some(u64::from(projects.0)));
+    let copy = s.folder_by_path(0, "Archive/Projects").unwrap();
+    assert_eq!(FolderId(done["folderId"].as_u64().unwrap()), copy);
+    assert!(s.folder_by_path(0, "Archive/Projects/Old").is_some());
+    assert!(s.folder_by_path(0, "Inbox/Projects/Old").is_some(), "the original stays");
+    let copied = s.folders[0].iter().find(|f| f.id == copy).unwrap();
+    assert_eq!((copied.total, copied.unread), projects);
+
+    // Again: the name is taken, so the copy is numbered; never into itself.
+    let again = run(&mut s, "folder.copy", json!({"to": "Archive"}));
+    assert_eq!(again["name"], "Projects (2)");
+    assert!(s.run("folder.copy", &json!({"to": "Inbox/Projects/Old"})).unwrap_err().to_string().contains("itself"));
+    assert!(s.run("folder.copy", &json!({"to": "Inbox/Projects"})).is_err());
+
+    // A calendar copied stays a calendar, with its appointments.
+    run(&mut s, "mail.select", json!({"folder": "Calendar"}));
+    let cal = run(&mut s, "folder.copy", json!({"to": "Archive"}));
+    let id = FolderId(cal["folderId"].as_u64().unwrap());
+    assert_eq!(s.folders[0].iter().find(|f| f.id == id).map(|f| f.kind), Some(FolderKind::Calendar));
+    assert_eq!(cal["messages"].as_u64(), Some(u64::from(folder(&s, "Calendar").0)));
+
+    for bad in [json!({}), json!({"to": "Nowhere"}), json!({"toId": 999_999}), json!({"to": "Archive", "toStore": 7})] {
+        assert!(s.run("folder.copy", &bad).is_err(), "{bad}");
+    }
 }

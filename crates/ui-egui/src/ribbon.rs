@@ -55,7 +55,7 @@ const HOME: &[Group] = &[
             small(Icon::Flag, "Follow Up", "menu:followup"),
         ],
     ),
-    ("Find", &[small(Icon::Filter, "Filter Unread", "view.filterUnread"), small(Icon::People, "Address Book", "people.addressBook")]),
+    ("Find", &[small(Icon::Filter, "Filter Email", "menu:filter"), small(Icon::People, "Address Book", "people.addressBook")]),
 ];
 
 const CALENDAR_HOME: &[Group] = &[
@@ -231,6 +231,7 @@ const FOLDER: &[Group] = &[
         "Actions",
         &[
             with(small(Icon::Rename, "Rename Folder", "ui.prompt"), r#"{"command":"folder.rename"}"#),
+            small(Icon::Copy, "Copy Folder", "menu:copyfolder"),
             small(Icon::Delete, "Delete Folder", "folder.delete"),
         ],
     ),
@@ -311,6 +312,8 @@ impl MailUi {
                 Some("categorize" | "followup") => self.session.is_enabled("mail.flag"),
                 Some("move") => self.session.is_enabled("mail.move"),
                 Some("arrange") => self.session.is_enabled("view.sortBy"),
+                Some("filter") => self.session.is_enabled("view.filter"),
+                Some("copyfolder") => self.session.is_enabled("folder.copy"),
                 Some(_) => true,
                 None => self.session.is_enabled(c),
             },
@@ -534,6 +537,32 @@ impl MailUi {
                     .map(|f| item(&folder_path(folders, f.id), "mail.move", json!({ "folderId": f.id.0 })))
                     .collect()
             }
+            Menu::CopyFolder => {
+                // Where the folder may be copied to: any folder of a data file that can be
+                // written, but the folder itself and those inside it.
+                let Some((store, current)) = s.current else { return Vec::new() };
+                let mut inside = vec![current];
+                let here: &[FolderInfo] = s.folders.get(store).map_or(&[], Vec::as_slice);
+                let mut at = 0;
+                while let Some(&f) = inside.get(at) {
+                    inside.extend(here.iter().filter(|c| c.parent == Some(f)).map(|c| c.id));
+                    at += 1;
+                }
+                let many = s.stores.len() > 1;
+                let mut items = Vec::new();
+                for (i, folders) in s.folders.iter().enumerate() {
+                    if !s.stores.get(i).is_some_and(|st| st.writable()) {
+                        continue;
+                    }
+                    for f in folders.iter().filter(|f| f.kind != FolderKind::Search && !(i == store && inside.contains(&f.id))) {
+                        let path = folder_path(folders, f.id);
+                        let label = if many { format!("{}: {path}", i.saturating_add(1)) } else { path };
+                        items.push(item(&label, "folder.copy", json!({ "toId": f.id.0, "toStore": i })));
+                    }
+                }
+                items.truncate(60);
+                items
+            }
             Menu::Arrange => ["date", "from", "to", "subject", "size", "importance", "flag", "attachments"]
                 .into_iter()
                 .map(|key| {
@@ -581,6 +610,23 @@ impl MailUi {
                         .map(|(label, part, on)| MenuItem { checked: on, ..item(label, "view.todoBar", json!({ "part": part, "show": !on })) })
                         .collect();
                 items.push(MenuItem { checked: !shown.any(), ..item("Off", "view.todoBar", json!({ "part": "off" })) });
+                items
+            }
+            Menu::Filter => {
+                let on = s.filters();
+                let mut items: Vec<MenuItem> = [
+                    ("Unread", "unread"),
+                    ("Has Attachments", "attachments"),
+                    ("Flagged", "flagged"),
+                    ("Important", "important"),
+                    ("Categorized", "categorized"),
+                ]
+                .into_iter()
+                .map(|(label, by)| MenuItem { checked: on.contains(&by), ..item(label, "view.filter", json!({ "by": by })) })
+                .collect();
+                if !on.is_empty() {
+                    items.push(item("Clear Filter", "view.filter", json!({ "clear": true })));
+                }
                 items
             }
             Menu::Rules => {

@@ -55,6 +55,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: move_to,
         },
         CommandSpec {
+            id: "folder.copy",
+            label: "Copy Folder",
+            tab: "Folder",
+            group: "Actions",
+            shortcut: "",
+            params: r#"{"to": the path of the folder the copy goes under, or "toId": its id, "toStore": the data file it goes into (default: this one)}; the folder is copied with the folders inside it and every message, each folder keeping what it holds (mail, appointments, contacts, tasks); a name taken there has a number put after it; returns {"folderId": the copy's id, "name", "folders", "messages", "unreadable": messages that could not be read and were left out}"#,
+            enabled: has_folder,
+            run: copy,
+        },
+        CommandSpec {
             id: "folder.delete",
             label: "Delete Folder",
             tab: "Folder",
@@ -232,6 +242,80 @@ fn move_to(s: &mut Session, p: &Value) -> CmdResult {
     s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.move_folder(folder, to)?;
     s.refresh_folders(store);
     ok()
+}
+
+/// Copy Folder: the folder and those inside it made again under `to`, in this data file or
+/// another, and each message put into its copy. The original is not touched.
+fn copy(s: &mut Session, p: &Value) -> CmdResult {
+    let (store, folder) = s.current.ok_or(StoreError::NoFolder)?;
+    let into = match p_u64(p, "toStore") {
+        Some(n) => {
+            usize::try_from(n).ok().filter(|n| *n < s.stores.len()).ok_or_else(|| EngineError::BadParams("there is no such data file".into()))?
+        }
+        None => store,
+    };
+    let to = match (p_u64(p, "toId"), p_str(p, "to")) {
+        (Some(id), _) => FolderId(id),
+        (None, Some(path)) => s
+            .folder_by_path(into, path)
+            .ok_or_else(|| EngineError::BadParams(format!("there is no folder \"{}\"", path.chars().take(MAX_NAME).collect::<String>())))?,
+        _ => return Err(EngineError::BadParams("\"to\" (path) or \"toId\" is required".into())),
+    };
+    if s.folder_info(into, to).is_none() {
+        return Err(EngineError::BadParams("there is no such folder to copy it into".into()));
+    }
+    if !s.stores.get(into).is_some_and(|st| st.writable()) {
+        return Err(EngineError::Format("that data file cannot be written".into()));
+    }
+    let tree = subtree(s, store, folder);
+    if into == store && tree.contains(&to) {
+        return Err(EngineError::BadParams("a folder cannot be copied into itself or a folder inside it".into()));
+    }
+    let info = s.folder_info(store, folder).cloned().ok_or(StoreError::NoFolder)?;
+    // Each folder of the tree is made under the copy of its parent; the tree lists a parent
+    // before those inside it.
+    let mut made: std::collections::HashMap<FolderId, FolderId> = std::collections::HashMap::new();
+    let (mut messages, mut unreadable) = (0u64, 0u64);
+    let mut name_of_top = String::new();
+    for f in &tree {
+        let Some(fi) = s.folder_info(store, *f).cloned() else { continue };
+        let parent = if *f == folder { to } else { fi.parent.and_then(|p| made.get(&p).copied()).ok_or(StoreError::NoFolder)? };
+        let name = if *f == folder { free_name(s, into, parent, &fi.name) } else { fi.name.clone() };
+        let dst = s.stores.get_mut(into).ok_or(StoreError::NoFolder)?;
+        let copy = if fi.container_class.is_empty() || fi.container_class == "IPF.Note" {
+            dst.create_folder(parent, &name)?
+        } else {
+            dst.create_folder_of(Some(parent), &name, &fi.container_class)?
+        };
+        if *f == folder {
+            name_of_top = name;
+        }
+        made.insert(*f, copy);
+        let rows = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.list(*f)?;
+        for row in rows {
+            let item = match s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.load(*f, ItemId(row.id)) {
+                Ok(item) => item,
+                Err(_) => {
+                    unreadable = unreadable.saturating_add(1);
+                    continue;
+                }
+            };
+            match s.stores.get_mut(into).ok_or(StoreError::NoFolder)?.add(copy, item) {
+                Ok(_) => messages = messages.saturating_add(1),
+                Err(_) => unreadable = unreadable.saturating_add(1),
+            }
+        }
+    }
+    s.refresh_folders(into);
+    let top = made.get(&folder).copied().ok_or(StoreError::NoFolder)?;
+    s.status = format!(
+        "\"{}\" copied, {} folder{} and {messages} message{}",
+        info.name,
+        made.len(),
+        if made.len() == 1 { "" } else { "s" },
+        if messages == 1 { "" } else { "s" }
+    );
+    Ok(json!({ "folderId": top.0, "name": name_of_top, "folders": made.len(), "messages": messages, "unreadable": unreadable }))
 }
 
 /// A name for `name` that no folder under `parent` has: itself, or itself with a number.

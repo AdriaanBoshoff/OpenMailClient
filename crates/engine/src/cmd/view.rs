@@ -99,6 +99,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: filter_unread,
         },
         CommandSpec {
+            id: "view.filter",
+            label: "Filter Email",
+            tab: "Home",
+            group: "Find",
+            shortcut: "",
+            params: r#"{"by": "unread" | "attachments" | "flagged" | "important" | "categorized", "on": true | false (default toggles)}, or {"clear": true} for every message; filters chosen together show only what is each of them; returns {"filter": [those on], "count": messages shown}"#,
+            enabled: has_folder,
+            run: filter,
+        },
+        CommandSpec {
             id: "search.query",
             label: "Search",
             tab: "",
@@ -240,6 +250,42 @@ fn filter_unread(s: &mut Session, p: &Value) -> CmdResult {
     s.unread_only = p_bool(p, "on").unwrap_or(!s.unread_only);
     s.reload_rows()?;
     ok()
+}
+
+fn filter(s: &mut Session, p: &Value) -> CmdResult {
+    if p_bool(p, "clear").unwrap_or(false) {
+        s.unread_only = false;
+        s.filter = crate::MailFilter::default();
+    } else {
+        let by = need_str(p, "by")?;
+        let now = if by == "unread" { Some(s.unread_only) } else { s.filter.get(by) };
+        let Some(now) = now else {
+            return Err(EngineError::BadParams(format!(
+                "\"{}\" is not unread, attachments, flagged, important or categorized",
+                by.chars().take(32).collect::<String>()
+            )));
+        };
+        let on = p_bool(p, "on").unwrap_or(!now);
+        if by == "unread" {
+            s.unread_only = on;
+        } else {
+            s.filter.set(by, on);
+        }
+    }
+    s.reload_rows()?;
+    let on = s.filters();
+    let words: Vec<&str> = on
+        .iter()
+        .map(|f| match *f {
+            "unread" => "unread",
+            "attachments" => "with attachments",
+            "flagged" => "flagged",
+            "important" => "of high importance",
+            _ => "with a category",
+        })
+        .collect();
+    s.status = if words.is_empty() { "Every message is shown".to_string() } else { format!("Only messages {}", words.join(" and ")) };
+    Ok(serde_json::json!({ "filter": on, "count": s.rows.len() }))
 }
 
 fn search(s: &mut Session, p: &Value) -> CmdResult {

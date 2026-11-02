@@ -839,8 +839,9 @@ pub fn list_layout(s: &crate::Session, job: &Job, library: &Library) -> Result<L
             n => format!("{n} selected messages of {}", s.rows.len()),
         };
     }
-    if s.unread_only {
-        note.push_str("; unread only");
+    let filters = s.filters();
+    if !filters.is_empty() {
+        note.push_str(&format!("; only {}", filters.join(", ")));
     }
     if !s.search.trim().is_empty() {
         note.push_str(&format!("; search: {}", shown(s.search.trim(), MAX_SEARCH_SHOWN)));
