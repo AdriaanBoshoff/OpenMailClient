@@ -4095,3 +4095,14 @@ fn an_arabic_word_that_changes_its_look_part_way_is_joined_across_the_change() {
     faces::scripts_in("Devanagari \u{928}\u{92E} Thai \u{E2A}\u{E27} \u{939} \u{4E2D}", &mut seen);
     assert_eq!(seen, vec!['\u{928}', '\u{E2A}', '\u{4E2D}']);
 }
+
+#[test]
+fn about_opens_a_window_of_its_own_and_closes() {
+    let mut ui = MailUi::new(Session::with_sample());
+    let before = ui.session.status.clone();
+    ui.execute("ui.about", &Value::Null).unwrap();
+    assert!(ui.about);
+    assert_eq!(ui.session.status, before, "About is a window now, not a line in the status bar");
+    ui.execute("ui.about", &json!({ "close": true })).unwrap();
+    assert!(!ui.about);
+}

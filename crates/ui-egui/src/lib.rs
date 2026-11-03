@@ -6,6 +6,7 @@
 //! live here. Message text is drawn as text: nothing in a message is ever run or fetched.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod about;
 mod accounts;
 mod address_book;
 mod alert;
@@ -265,7 +266,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.saveThemeDialog", label: "Save Theme…", params: r#"{"name": a theme (default: the one in use)}"# },
     UiCommand { id: "ui.openThemeDialog", label: "Open Theme…", params: "" },
     UiCommand { id: "ui.bodyFormat", label: "Read as Plain Text", params: r#"{"format": "formatted" | "plain"}; none switches"# },
-    UiCommand { id: "ui.about", label: "About OpenMailClient", params: "" },
+    UiCommand { id: "ui.about", label: "About OpenMailClient", params: r#"{"close": true to close it}; the version, licence and project page"# },
     UiCommand {
         id: "ui.updates",
         label: "Check for Updates",
@@ -478,6 +479,9 @@ pub struct MailUi {
     pub(crate) book: address_book::Book,
     pub(crate) suggest: Option<address_book::Suggest>,
     pub(crate) merge: Option<merge::Merge>,
+    /// Whether About OpenMailClient is open, and the icon it shows, drawn once.
+    pub(crate) about: bool,
+    pub(crate) about_icon: Option<egui::TextureHandle>,
     /// Options is open, at this page.
     pub(crate) options: Option<options::Page>,
     /// The page of the File tab shown.
@@ -760,6 +764,8 @@ impl MailUi {
             book: address_book::Book::default(),
             suggest: None,
             merge: None,
+            about: false,
+            about_icon: None,
             options: None,
             file_page: ribbon::FilePage::Info,
             go_at_text: String::new(),
@@ -1262,10 +1268,7 @@ impl MailUi {
                     _ => return Err("\"format\" must be formatted or plain".to_string()),
                 };
             }
-            "ui.about" => {
-                self.session.status =
-                    format!("OpenMailClient {}: an independent open-source mail client. Not affiliated with Microsoft.", env!("CARGO_PKG_VERSION"));
-            }
+            "ui.about" => self.about = !matches!(params.get("close"), Some(Value::Bool(true))),
             "ui.quit" => {
                 if self.may_quit() {
                     self.requests.push(UiRequest::Quit);
@@ -1429,6 +1432,7 @@ impl MailUi {
         self.reminders_window(&ctx);
         self.address_book_window(&ctx);
         self.mail_merge_window(&ctx);
+        self.about_window(&ctx);
         self.answer_window(&ctx);
         self.alert_window(&ctx);
         self.appointment_window(&ctx);

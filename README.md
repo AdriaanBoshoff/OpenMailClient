@@ -158,7 +158,8 @@ a reader we can try without driving a window, a printer we may use).
 - **Import from Outlook.** Every IMAP and POP3 account of the Outlook profiles, with its servers and
   without its password, and the profiles' data files: shown first, then copied without changing
   Outlook's own files, an `.ost` made a `.pst` of our own.
-- **An installer and updates.** A Windows installer with Start menu and desktop shortcuts, and
+- **An installer and updates.** A Windows installer with Start menu and desktop shortcuts, a
+  Linux archive that installs under `~/.local`, and
   Check for Updates from this repository's GitHub releases, pre-releases too, each installer
   checked by its SHA-256 before it is run.
 - A sample mailbox with invented content, for trying things without any real mail.
@@ -170,20 +171,19 @@ a reader we can try without driving a window, a printer we may use).
   whole on its next save, keeping its ids, and then opens too; an `.ost` is exported with its
   hidden items as a `.pst` Outlook opens. No Outlook-written `.pst` has been saved into yet. A 4K-page file is
   written whole on every save (M3c.2), its larger blocks deflated as Outlook stores them (M3c.7).
-- **Parts of formatted bodies.** Right-to-left text while it is typed; complex scripts
+- **Parts of formatted bodies.** Complex scripts
   on screen beyond what egui shapes; metafiles that copy with a mask or see-through; the
   printer's own settings (trays, two-sided). Each is scheduled in
   [ROADMAP.md](ROADMAP.md#do-later-from-m2).
-- The Scheduling Assistant.
 - The MCP server, the control channel and the web build.
 - Signed installers, and packages for macOS.
 
 ## Download
 
-The newest pre-release, **0.1.0-alpha.2**, is on the
+The newest pre-release, **0.1.0-alpha.3**, is on the
 [releases page](https://github.com/AdriaanBoshoff/OpenMailClient/releases) for Windows and Linux.
 
-**Windows 10 and 11 (x64):** `OpenMailClient-0.1.0-alpha.2-windows-x64-setup.exe`. It installs for you alone unless you
+**Windows 10 and 11 (x64):** `OpenMailClient-0.1.0-alpha.3-windows-x64-setup.exe`. It installs for you alone unless you
 choose everyone, needs no administrator, and asks whether to put OpenMailClient on the Start menu
 and the desktop. Uninstalling it leaves your mail, settings and accounts where they are.
 `SHA256SUMS.txt` beside it gives the installer's SHA-256.
@@ -191,17 +191,17 @@ and the desktop. Uninstalling it leaves your mail, settings and accounts where t
 The installer is not signed yet, so Windows SmartScreen may ask whether to run it ("More info",
 then "Run anyway").
 
-**Linux (x64):** `OpenMailClient-0.1.0-alpha.2-linux-x64.tar.gz`, for any distribution with glibc
+**Linux (x64):** `OpenMailClient-0.1.0-alpha.3-linux-x64.tar.gz`, for any distribution with glibc
 2.31 or newer (Ubuntu 20.04, Debian 11, Fedora 32 and since) and an X11 or Wayland desktop. It
 installs for you alone, under `~/.local`, with no administrator, and puts OpenMailClient among
 your applications:
 
 ```bash
-tar xzf OpenMailClient-0.1.0-alpha.2-linux-x64.tar.gz
+tar xzf OpenMailClient-0.1.0-alpha.3-linux-x64.tar.gz
 ```
 
 ```bash
-OpenMailClient-0.1.0-alpha.2-linux-x64/install.sh
+OpenMailClient-0.1.0-alpha.3-linux-x64/install.sh
 ```
 
 `install.sh --uninstall` takes it away again and leaves your mail, settings and accounts where
