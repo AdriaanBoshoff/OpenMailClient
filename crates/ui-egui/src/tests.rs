@@ -4106,3 +4106,38 @@ fn about_opens_a_window_of_its_own_and_closes() {
     ui.execute("ui.about", &json!({ "close": true })).unwrap();
     assert!(!ui.about);
 }
+
+#[test]
+fn release_notes_are_read_as_markdown() {
+    use crate::notes::{Block, Span, blocks, spans};
+    let text = "Intro with **bold** and `code`.\ngoes on\n\n## Install\n\n- one\n  - two [page](https://example.org/a)\n1. first\n\n```sh\ntar xzf a.tar.gz\n```\n---\nsnake_case and *it*";
+    let b = blocks(text);
+    assert_eq!(b.len(), 8, "{b:?}");
+    let Block::Paragraph(p) = &b[0] else { panic!("{b:?}") };
+    assert_eq!(p.iter().map(|s| s.text.as_str()).collect::<String>(), "Intro with bold and code. goes on");
+    assert!(p.iter().any(|s| s.bold && s.text == "bold") && p.iter().any(|s| s.code && s.text == "code"));
+    assert!(matches!(&b[1], Block::Heading(2, h) if h[0].text == "Install"));
+    assert!(matches!(&b[2], Block::Item(0, None, _)));
+    let Block::Item(1, None, two) = &b[3] else { panic!("{b:?}") };
+    assert!(two.iter().any(|s| s.text == "page" && s.link.as_deref() == Some("https://example.org/a")));
+    assert!(matches!(&b[4], Block::Item(0, Some(n), _) if n == "1."));
+    assert_eq!(b[5], Block::Code("tar xzf a.tar.gz".into()));
+    assert_eq!(b[6], Block::Rule);
+    let Block::Paragraph(last) = &b[7] else { panic!("{b:?}") };
+    assert_eq!(last[0], Span { text: "snake_case and ".into(), ..Span::default() });
+    assert!(last[1].italic && last[1].text == "it");
+    // Escapes keep a mark as it is.
+    assert_eq!(spans(r"\*not\*")[0].text, "*not*");
+}
+
+#[test]
+fn release_notes_take_junk_without_panicking() {
+    use crate::notes::{blocks, spans};
+    for junk in ["", "`", "``", "[", "[a](", "[a]", "**", "*", "_", "#", "#######", "1.", "1) ", "- ", "```", "\\", "é*`[](", "\u{0}\u{202e}"] {
+        let _ = blocks(junk);
+        let _ = spans(junk);
+    }
+    let long = "**[`".repeat(5_000);
+    let _ = blocks(&long);
+    assert!(blocks(&"a\n\n".repeat(10_000)).len() <= 400);
+}

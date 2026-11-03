@@ -30,6 +30,9 @@
 //!                                            date, time, and the first day of the week
 //!                                            (0 Sunday)
 //! {"now": [2026, 10, 16, 12, 0]}             the time it is, in UTC
+//! {"release": {"tag_name": "v9.0.0", "body": "…", "assets": […]}, "downloaded": true}
+//!                                            a GitHub release, made up, found by Check for
+//!                                            Updates (and its installer brought down)
 //! {"printers": ["Hall Laser", "Desk Inkjet"]}
 //!                                            printers made up, the first the default, that
 //!                                            keep what they are sent: nothing is printed
@@ -107,6 +110,18 @@ fn run() -> Result<(), String> {
             let text = |i: usize| r.get(i).and_then(Value::as_str).unwrap_or("");
             let start = r.get(3).and_then(Value::as_u64).map_or(0, |n| (n % 7) as u32);
             harness.state_mut().session.region = openmailclient_model::time::Region::of(text(0), text(1), text(2), "", "", start);
+        } else if let Some(release) = step.get("release") {
+            use openmailclient_engine::update;
+            let found = update::read_releases(&serde_json::to_vec(&json!([release])).map_err(|e| e.to_string())?)?.into_iter().next();
+            let downloaded = step.get("downloaded").and_then(Value::as_bool) == Some(true);
+            let state = &mut harness.state_mut().session.update;
+            state.ready = found.as_ref().filter(|_| downloaded).map(|r| update::Ready {
+                path: "ui_shot-setup.exe".into(),
+                sha256: [0; 32],
+                version: r.version.clone(),
+            });
+            state.checked = true;
+            state.found = found;
         } else if let Some(at) = step.get("now").and_then(Value::as_array) {
             let n = |i: usize| at.get(i).and_then(Value::as_u64).unwrap_or(0);
             harness.state_mut().session.now =

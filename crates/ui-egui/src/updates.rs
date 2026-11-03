@@ -57,8 +57,11 @@ impl MailUi {
                         if !r.notes.trim().is_empty() {
                             ui.add_space(4.0);
                             egui::ScrollArea::vertical().id_salt("update-notes").max_height(NOTES_H).show(ui, |ui| {
-                                // The release's own words, as text: nothing in them is followed.
-                                ui.add(egui::Label::new(egui::RichText::new(r.notes.trim()).font(font(12.5)).color(t.text)).wrap());
+                                // The release's own words, laid out as GitHub shows them; nothing
+                                // in them is run, and a link goes only when clicked.
+                                if let Some(link) = crate::notes::show(ui, &t, r.notes.trim()) {
+                                    page = Some(link);
+                                }
                             });
                         }
                     });
@@ -82,6 +85,43 @@ impl MailUi {
                         ui.label(
                             egui::RichText::new("Downloaded, and checked against the sums published with the release.").font(font(12.5)).color(t.ok),
                         );
+                    }
+                    // What can be done with this release, by what it says of itself: on a row of
+                    // its own, so the buttons never run into those below however many there are.
+                    let installable = cfg!(windows) && r.setup.is_some();
+                    if installable || downloading.is_some() {
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if let Some((id, _, stopping)) = &downloading {
+                                if ui.add_enabled(!stopping, crate::dialog::plain("Stop")).clicked() {
+                                    run.push(("mail.cancelTask", json!({ "id": id })));
+                                }
+                            } else if state.ready.is_none() {
+                                if ui
+                                    .add(crate::dialog::primary(&t, "Download"))
+                                    .on_hover_text("Bring the installer down and check it; nothing is run yet")
+                                    .clicked()
+                                {
+                                    run.push(("help.downloadUpdate", json!({ "wait": false })));
+                                }
+                            } else {
+                                if ui
+                                    .add(crate::dialog::primary(&t, "Restart and Install"))
+                                    .on_hover_text("Close OpenMailClient, install, and start it again")
+                                    .clicked()
+                                {
+                                    run.push(("help.installUpdate", Value::Null));
+                                    quit = true;
+                                }
+                                if state.install.is_none() {
+                                    if ui.add(crate::dialog::plain("Install on Close")).clicked() {
+                                        run.push(("help.installUpdate", Value::Null));
+                                    }
+                                } else if ui.add(crate::dialog::plain("Don't Install")).clicked() {
+                                    run.push(("help.installUpdate", json!({ "cancel": true })));
+                                }
+                            }
+                        });
                     }
                 }
                 None if state.checked => {
@@ -125,38 +165,6 @@ impl MailUi {
                 {
                     page = Some(r.page.clone());
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let installable = cfg!(windows) && state.found.as_ref().is_some_and(|r| r.setup.is_some());
-                    if let Some((id, _, stopping)) = &downloading {
-                        if ui.add_enabled(!stopping, crate::dialog::plain("Stop")).clicked() {
-                            run.push(("mail.cancelTask", json!({ "id": id })));
-                        }
-                    } else if installable && state.ready.is_none() {
-                        if ui
-                            .add(crate::dialog::primary(&t, "Download"))
-                            .on_hover_text("Bring the installer down and check it; nothing is run yet")
-                            .clicked()
-                        {
-                            run.push(("help.downloadUpdate", json!({ "wait": false })));
-                        }
-                    } else if installable && state.ready.is_some() {
-                        if ui
-                            .add(crate::dialog::primary(&t, "Restart and Install"))
-                            .on_hover_text("Close OpenMailClient, install, and start it again")
-                            .clicked()
-                        {
-                            run.push(("help.installUpdate", Value::Null));
-                            quit = true;
-                        }
-                        if state.install.is_none() {
-                            if ui.add(crate::dialog::plain("Install on Close")).clicked() {
-                                run.push(("help.installUpdate", Value::Null));
-                            }
-                        } else if ui.add(crate::dialog::plain("Don't Install")).clicked() {
-                            run.push(("help.installUpdate", json!({ "cancel": true })));
-                        }
-                    }
-                });
             });
         }
         for (id, params) in run {

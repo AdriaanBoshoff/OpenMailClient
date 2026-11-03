@@ -21,6 +21,7 @@ mod import;
 mod line_edit;
 mod meeting;
 mod merge;
+mod notes;
 pub mod options;
 mod panes;
 mod people;
