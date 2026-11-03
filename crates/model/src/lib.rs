@@ -8,6 +8,7 @@
 pub mod calendar;
 pub mod codepage;
 pub mod contact;
+pub mod format;
 pub mod free_busy;
 pub mod html;
 pub mod meeting;

@@ -65,6 +65,8 @@ pub mod pid {
     pub const ATTACH_LONG_FILENAME: u16 = 0x3707;
     pub const ATTACH_RENDERING: u16 = 0x3709;
     pub const RENDERING_POSITION: u16 = 0x370B;
+    /// PidTagAttachFlags: 4, attRenderedInBody, for a picture the HTML body shows ([MS-OXCMSG] 2.2.2.18).
+    pub const ATTACH_FLAGS: u16 = 0x3714;
     pub const ATTACH_MIME_TAG: u16 = 0x370E;
     pub const ATTACH_CONTENT_ID: u16 = 0x3712;
     pub const SMTP_ADDRESS: u16 = 0x39FE;

@@ -16,7 +16,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Options",
             shortcut: "",
-            params: r#"{}; returns {"signatures": [{"name", "text"}], "default": {"new", "replies"}, "accounts": [{"account", "name", "new", "replies", "own": it has a choice of its own}]}; {name} and {email} in a signature's text are filled with those of the account a message goes from"#,
+            params: r#"{}; returns {"signatures": [{"name", "text", "html": it as it looks, its pictures written into it, or null for text alone}], "default": {"new", "replies"}, "accounts": [{"account", "name", "new", "replies", "own": it has a choice of its own}]}; {name} and {email} in a signature's text are filled with those of the account a message goes from"#,
             enabled: always,
             run: list,
         },
@@ -26,7 +26,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{"name", "text", "was": the name it had, to rename it}; makes one or changes one of that name; returns {"name"}"#,
+            params: r#"{"name", "text", "html": it as it looks instead of "text", its pictures written into it as data: addresses (pictures on a server are left out), "was": the name it had, to rename it}; makes one or changes one of that name; returns {"name", "formatted"}"#,
             enabled: always,
             run: save,
         },
@@ -65,7 +65,7 @@ fn list(s: &mut Session, _: &Value) -> CmdResult {
         })
         .collect();
     Ok(json!({
-        "signatures": sigs.list.iter().map(|g| json!({ "name": g.name, "text": g.text })).collect::<Vec<_>>(),
+        "signatures": sigs.list.iter().map(|g| json!({ "name": g.name, "text": g.text, "html": g.html })).collect::<Vec<_>>(),
         "default": { "new": sigs.default.new, "replies": sigs.default.replies },
         "accounts": accounts,
     }))
@@ -78,11 +78,25 @@ fn name_of(p: &Value, key: &str) -> Result<String, EngineError> {
 
 fn save(s: &mut Session, p: &Value) -> CmdResult {
     let name = name_of(p, "name")?;
-    let text = need_str(p, "text")?;
-    if text.len() > signatures::MAX_TEXT.saturating_mul(4) {
-        return Err(EngineError::BadParams("this signature is longer than any is kept".into()));
-    }
-    let text = signatures::clean_text(text);
+    let sig = match p.get("html").and_then(Value::as_str) {
+        Some(html) => {
+            if html.len() > signatures::MAX_HTML {
+                return Err(EngineError::BadParams("this signature, with its pictures, is larger than any is kept".into()));
+            }
+            let (text, look) = openmailclient_formats::editable::of_html(html, &|_| None);
+            if text.len() > signatures::MAX_TEXT {
+                return Err(EngineError::BadParams("this signature is longer than any is kept".into()));
+            }
+            Signature::of(name.clone(), &text, &look)
+        }
+        None => {
+            let text = need_str(p, "text")?;
+            if text.len() > signatures::MAX_TEXT.saturating_mul(4) {
+                return Err(EngineError::BadParams("this signature is longer than any is kept".into()));
+            }
+            Signature { name: name.clone(), text: signatures::clean_text(text), html: None }
+        }
+    };
     if p.get("was").is_some_and(|v| !v.is_null()) {
         let was = name_of(p, "was")?;
         if s.signatures.get(&was).is_none() {
@@ -93,10 +107,11 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
         }
         s.signatures.rename(&was, &name);
     }
-    if !s.signatures.put(Signature { name: name.clone(), text }) {
+    let formatted = sig.html.is_some();
+    if !s.signatures.put(sig) {
         return Err(EngineError::Format(format!("no more than {} signatures are kept", signatures::MAX_SIGNATURES)));
     }
-    Ok(json!({ "name": name }))
+    Ok(json!({ "name": name, "formatted": formatted }))
 }
 
 fn delete(s: &mut Session, p: &Value) -> CmdResult {

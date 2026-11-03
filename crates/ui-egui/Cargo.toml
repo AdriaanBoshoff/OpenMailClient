@@ -20,6 +20,13 @@ log = { workspace = true }
 chrono = { workspace = true }
 # Decodes pictures a message carries as attachments; nothing else is read with it.
 image = { workspace = true, features = ["jpeg", "gif", "bmp"] }
+# Pictures copied and pasted, written into HTML.
+base64 = { workspace = true }
+
+# The clipboard as HTML and pictures, for formatted text copied and pasted: the toolkit's
+# carries only text. Already built for the toolkit's own text clipboard.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arboard = "3.6"
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

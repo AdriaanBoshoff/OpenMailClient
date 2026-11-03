@@ -135,6 +135,28 @@ impl Faces {
         }
     }
 
+    /// Look up the fonts of `asked` (a font's name, bold, italic) for text being written in,
+    /// alongside the message being read. Call every frame it is drawn in.
+    pub(crate) fn want(&mut self, ctx: &Context, asked: &[(Arc<str>, bool, bool)]) {
+        self.ready = ctx.fonts(|fonts| fonts.families());
+        // Not yet given the interface's fonts: what it would hand egui would take them away.
+        if !self.defs.families.contains_key(&FontFamily::Name("bold".into())) {
+            return;
+        }
+        let mut added = false;
+        for (list, bold, italic) in asked {
+            let Some(family) = self.family(list) else { continue };
+            if *italic && self.face(&family, *bold, true, &mut added).is_some() {
+                continue;
+            }
+            self.face(&family, *bold, false, &mut added);
+        }
+        if added {
+            ctx.set_fonts(self.defs.clone());
+            ctx.request_repaint();
+        }
+    }
+
     /// Fonts for the scripts of `seen` (one character of each, as `scripts_in` gives them)
     /// that the interface fonts have no letters for, given to egui.
     pub(crate) fn cover(&mut self, ctx: &Context, seen: &[char]) {

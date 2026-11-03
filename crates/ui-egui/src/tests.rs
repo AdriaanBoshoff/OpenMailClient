@@ -4141,3 +4141,83 @@ fn release_notes_take_junk_without_panicking() {
     let _ = blocks(&long);
     assert!(blocks(&"a\n\n".repeat(10_000)).len() <= 400);
 }
+
+#[test]
+fn a_signature_is_written_with_its_look_and_pictures_and_kept_as_html() {
+    use base64::Engine as _;
+    use openmailclient_engine::signatures::Signature;
+    let mut ui = MailUi::new(Session::with_sample());
+    let data = base64::engine::general_purpose::STANDARD.encode(sample_picture());
+    // With no message being written a picture has nowhere to go.
+    assert!(ui.execute("ui.insertPicture", &json!({ "data": data })).is_err());
+    ui.signature_writing(vec![writing::Did::Body("Regards, Sam ".into(), 0)]);
+    ui.signature_writing(vec![
+        writing::Did::Run("compose.select", json!({ "from": 0, "to": 8 })),
+        writing::Did::Run("compose.format", json!({ "bold": true, "color": "#1f3864", "font": "Georgia" })),
+        writing::Did::Run("compose.select", json!({ "from": 13, "to": 13 })),
+        writing::Did::Run("compose.format", json!({ "size": 40 })),
+    ]);
+    ui.signature_writing(vec![writing::Did::PictureFile]);
+    assert_eq!(ui.requests.last(), Some(&UiRequest::InsertPicture));
+    ui.execute("ui.insertPicture", &json!({ "data": data, "name": "logo.png" })).unwrap();
+    assert!(!ui.picture_for_signature, "the next picture goes to the message again");
+    let w = &ui.signature_edit.w;
+    assert_eq!(w.format.pictures.len(), 1);
+    assert!(w.body.contains('\u{FFFC}'));
+    // Drawn in either theme at any width, its picture decoded apart from the window's thread.
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    for (dark, width) in [(false, 0.0), (true, 40.0), (false, 700.0)] {
+        let t = theme::Tokens::named(dark);
+        let w = ui.signature_edit.w.clone();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |eg| {
+            eg.set_max_width(width);
+            let _ = writing::writing_box(eg, &t, &mut ui.faces, &ui.inline, &w, egui::Id::new("try"), 4, 1000);
+        });
+        output.textures_delta.clear();
+    }
+    // Kept as HTML with the picture written into it, and opened again as it was.
+    let kept = Signature::of("Work".into(), &ui.signature_edit.w.body, &ui.signature_edit.w.format);
+    let html = kept.html.clone().expect("a signature with a look is kept as HTML");
+    assert!(html.contains("data:image/png;base64,"), "{html}");
+    assert!(html.contains("<b") || html.contains("bold"), "{html}");
+    ui.execute("signatures.save", &json!({ "name": "Work", "html": html })).unwrap();
+    let saved = ui.session.signatures.get("Work").unwrap().clone();
+    let again = signatures::SignatureEdit::of(&saved);
+    assert_eq!(again.w.format.pictures.len(), 1);
+    assert_eq!(again.w.format.to_plain(&again.w.body).trim(), kept.text.trim());
+}
+
+#[test]
+fn the_compose_box_draws_formatted_text_and_says_what_was_done() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("mail.new", &Value::Null).unwrap();
+    ui.execute("compose.setField", &json!({ "field": "body", "value": "one\ntwo\nthree" })).unwrap();
+    for (cmd, p) in [
+        ("compose.select", json!({ "from": 0, "to": 3 })),
+        ("compose.format", json!({ "underline": true, "highlight": "#ffff00" })),
+        ("compose.select", json!({ "from": 4, "to": 13 })),
+        ("compose.paragraph", json!({ "list": "number" })),
+        ("compose.paragraph", json!({ "indent": "more" })),
+        ("compose.link", json!({ "address": "https://example.org" })),
+    ] {
+        ui.execute(cmd, &p).unwrap();
+    }
+    let w = openmailclient_engine::Writing::of(ui.session.compose.as_ref().unwrap());
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let t = theme::Tokens::named(false);
+    let look = writing::styled(&ctx, &mut ui.faces, &ui.inline, &w, &crate::font(13.5), &t, 500.0);
+    assert_eq!(look.of.len(), w.body.chars().count());
+    assert_eq!(look.paras.len(), 3);
+    assert_eq!(look.paras[1].marker.as_deref(), Some("1."));
+    assert_eq!(look.paras[2].marker.as_deref(), Some("2."));
+    assert!(look.paras[1].indent >= 2);
+    // A selection the engine moved is given to the box, and the box's own is said back.
+    let mut said = Vec::new();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |eg| {
+        said = writing::writing_box(eg, &t, &mut ui.faces, &ui.inline, &w, egui::Id::new(("compose", "body")), 8, usize::MAX);
+    });
+    output.textures_delta.clear();
+    assert!(said.is_empty(), "nothing is done by drawing it: {said:?}");
+}

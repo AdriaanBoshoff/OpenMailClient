@@ -109,7 +109,7 @@ fn signatures_are_brought_from_outlook_with_each_accounts_choice() {
     let theirs = dir.join("Signatures");
     std::fs::create_dir_all(&theirs).unwrap();
     std::fs::write(theirs.join("Work.txt"), utf16_file("\r\nRegards,\r\nPat\r\n")).unwrap();
-    std::fs::write(theirs.join("Work.htm"), "<p>Regards,</p>").unwrap();
+    std::fs::write(theirs.join("Work.htm"), "<p>Regards,<br>Pat</p>").unwrap();
     std::fs::write(theirs.join("Home.txt"), utf16_file("Cheers")).unwrap();
     let before: Vec<(String, Vec<u8>)> =
         std::fs::read_dir(&theirs).unwrap().map(|e| e.unwrap().path()).map(|p| (p.display().to_string(), std::fs::read(&p).unwrap())).collect();

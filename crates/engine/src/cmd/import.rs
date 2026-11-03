@@ -160,7 +160,19 @@ fn bring_signature(s: &mut Session, f: &crate::signatures::Found) -> Result<Stri
         return Ok(f.name.clone());
     }
     let name = s.signatures.free_name(&f.name).ok_or_else(|| "there are too many signatures of its name".to_string())?;
-    if !s.signatures.put(crate::signatures::Signature { name: name.clone(), text: f.text.clone() }) {
+    // As it looks, its pictures with it, where Outlook keeps it as HTML; its text where the
+    // look comes to nothing.
+    let mut sig = match &f.html {
+        Some(h) => {
+            let (text, look) = openmailclient_formats::editable::of_html(h, &|_| None);
+            crate::signatures::Signature::of(name.clone(), &text, &look)
+        }
+        None => crate::signatures::Signature { name: name.clone(), text: f.text.clone(), html: None },
+    };
+    if sig.text.trim().is_empty() && sig.html.is_none() {
+        sig.text = f.text.clone();
+    }
+    if !s.signatures.put(sig) {
         return Err(format!("no more than {} signatures are kept", crate::signatures::MAX_SIGNATURES));
     }
     Ok(name)

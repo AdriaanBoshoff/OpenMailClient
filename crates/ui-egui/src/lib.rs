@@ -43,6 +43,7 @@ mod themes;
 pub use themes::FILE_EXT as THEME_FILE_EXT;
 mod todo_bar;
 mod updates;
+mod writing;
 
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Key, Modifiers, Painter, Pos2, Rect, Sense, Ui, pos2, vec2};
@@ -109,6 +110,9 @@ pub enum UiRequest {
     SaveCards(Vec<u64>),
     /// Pick a picture for the contact open in its window (`ui.contactPicture`).
     ContactPicture,
+    /// Pick a picture to be put in what is being written, the message or the signature
+    /// (`ui.insertPicture`).
+    InsertPicture,
     /// Pick a theme file to open (`ui.openTheme`).
     OpenTheme,
     /// Pick a WAVE file to be played when a reminder is due (`reminders.options` "soundFile").
@@ -160,6 +164,16 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         params: r#"{"index": attachment number}; asks whether to open the attachment, save it or do neither, saying what the reader should know of it first; nothing is opened until the person answers"#,
     },
     UiCommand { id: "ui.attachDialog", label: "Attach File…", params: "" },
+    UiCommand {
+        id: "ui.insertPictureDialog",
+        label: "Insert Picture…",
+        params: "asks for a picture file to put in the message being written, where its caret is",
+    },
+    UiCommand {
+        id: "ui.insertPicture",
+        label: "Insert Picture",
+        params: r#"{"path": a picture file}; puts it in what the picture was asked for in: the signature being edited, else the message being written (compose.insertPicture)"#,
+    },
     UiCommand {
         id: "ui.openSelected",
         label: "Open",
@@ -432,6 +446,10 @@ pub struct MailUi {
     attached_view: Option<((u64, usize), Option<Arc<openmailclient_engine::attachment_preview::Preview>>)>,
     pictures: pictures::Pictures,
     faces: faces::Faces,
+    /// Pictures of what is being written, decoded apart from the window's thread.
+    inline: writing::Inline,
+    /// The picture asked for goes into the signature being edited, not the message.
+    picture_for_signature: bool,
     pub(crate) actions: Vec<(String, Value)>,
     pub(crate) search: String,
     pub(crate) collapsed: HashSet<(usize, u64)>,
@@ -732,6 +750,8 @@ impl MailUi {
             attached_view: None,
             pictures: pictures::Pictures::default(),
             faces: faces::Faces::default(),
+            inline: writing::Inline::default(),
+            picture_for_signature: false,
             actions: Vec::new(),
             search,
             collapsed: HashSet::new(),
@@ -1101,6 +1121,19 @@ impl MailUi {
                 });
             }
             "ui.attachDialog" => self.requests.push(UiRequest::Attach),
+            "ui.insertPictureDialog" => {
+                if !self.session.is_enabled("compose.insertPicture") {
+                    return Err("No message is being written".to_string());
+                }
+                self.picture_for_signature = false;
+                self.requests.push(UiRequest::InsertPicture);
+            }
+            "ui.insertPicture" => {
+                if std::mem::take(&mut self.picture_for_signature) {
+                    return self.signature_picture(params);
+                }
+                return self.execute("compose.insertPicture", params);
+            }
             "ui.openSelected" => {
                 if self.session.is_enabled("compose.editDraft") {
                     return self.execute("compose.editDraft", &Value::Null);

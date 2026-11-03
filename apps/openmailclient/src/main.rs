@@ -206,6 +206,16 @@ impl App {
                         self.run("people.saveAs", params);
                     }
                 }
+                UiRequest::InsertPicture => {
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Insert picture")
+                        .add_filter("Picture", &["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "tif", "tiff"])
+                        .add_filter("All files", &["*"])
+                        .pick_file();
+                    if let Some(path) = picked {
+                        self.run("ui.insertPicture", json!({ "path": path }));
+                    }
+                }
                 UiRequest::ContactPicture => {
                     let picked = rfd::FileDialog::new()
                         .set_title("Add contact picture")

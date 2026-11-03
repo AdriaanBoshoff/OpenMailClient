@@ -4,6 +4,7 @@
 
 use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_u64};
 use crate::{CmdResult, Draft, EngineError, Filed, Session, outgoing, signatures};
+use openmailclient_model::format::{Format, Mark, PICTURE, Para};
 use openmailclient_model::zone::Offsets;
 use openmailclient_model::{
     Attachment, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, pid, recipient_email,
@@ -19,7 +20,7 @@ const MAX_ATTACHMENTS: usize = 500;
 const MAX_SET_ASIDE: usize = 20;
 /// Field text is clamped: a subject line, an address line, a body.
 const MAX_LINE: usize = 32 * 1024;
-const MAX_BODY: usize = 16 * 1024 * 1024;
+pub(super) const MAX_BODY: usize = 16 * 1024 * 1024;
 
 pub(super) fn commands() -> Vec<CommandSpec> {
     vec![
@@ -252,32 +253,43 @@ pub(super) fn start_to(s: &mut Session, to: String) {
     s.compose = Some(draft);
 }
 
-/// A signature's text for a message from the account `draft` goes from: `{name}` and
-/// `{email}` filled with its.
-fn signed_as(s: &Session, draft: &Draft, text: &str) -> String {
+/// A signature's text and look for a message from the account `draft` goes from: `{name}`
+/// and `{email}` filled with its.
+fn signed_as(s: &Session, draft: &Draft, sig: &signatures::Signature) -> (String, Format) {
     let (name, email) = match from_account(s, draft) {
         Some(a) => (if a.display_name.trim().is_empty() { a.name.as_str() } else { a.display_name.as_str() }, a.email.as_str()),
         None => (s.user_name.as_str(), s.user_email.as_str()),
     };
-    signatures::fill(text, name, email)
+    sig.formatted(name, email)
 }
 
 /// Put the signature `named` (its name and its text) in as the draft's, in place of the one put
 /// in before where it is still there as it was put in: above the quoted text of a reply or
 /// forward, else at the foot.
-fn place_signature(draft: &mut Draft, named: Option<(String, String)>) {
+fn place_signature(draft: &mut Draft, named: Option<(String, String, Format)>) {
     if let Some(old) = draft.signature.take() {
         let block = format!("\n\n{old}");
         if let Some(at) = draft.body.find(&block) {
             let after = draft.body.get(at.saturating_add(block.len())..).unwrap_or("");
-            draft.body = format!("{}{after}", draft.body.get(..at).unwrap_or(""));
+            let new = format!("{}{after}", draft.body.get(..at).unwrap_or(""));
+            let from = draft.body.get(..at).unwrap_or("").chars().count();
+            draft.rewrite(new, from);
         }
     }
     draft.signature_name = None;
-    let Some((name, text)) = named.filter(|(_, t)| !t.is_empty()) else { return };
+    let Some((name, text, look)) = named.filter(|(_, t, _)| !t.is_empty()) else { return };
+    if draft.body.len().saturating_add(text.len()) > MAX_BODY {
+        return;
+    }
     let at = draft.body.find(&format!("\n\n{}", outgoing::ORIGINAL)).unwrap_or(draft.body.len());
-    let (before, after) = (draft.body.get(..at).unwrap_or(""), draft.body.get(at..).unwrap_or(""));
-    draft.body = clamp(&format!("{before}\n\n{text}{after}"), MAX_BODY);
+    let from = draft.body.get(..at).unwrap_or("").chars().count();
+    // It goes in with its own look, after a blank line of the body's: two paragraphs more.
+    let mut piece = Format { runs: vec![(2, Mark::default())], paras: vec![Para::default(); 2], pictures: look.pictures.clone() };
+    piece.runs.extend(look.runs.iter().cloned());
+    piece.paras.extend(look.paras.iter().copied());
+    let mut body = std::mem::take(&mut draft.body);
+    draft.format.insert(&mut body, from, &format!("\n\n{text}"), &piece);
+    draft.body = body;
     draft.signature = Some(text);
     draft.signature_name = Some(name);
 }
@@ -291,7 +303,10 @@ fn sign(s: &Session, draft: &mut Draft) {
         "Reply" | "Reply All" | "Forward" => choice.replies.as_deref(),
         _ => return,
     };
-    let named = name.and_then(|n| s.signatures.get(n)).map(|g| (g.name.clone(), signed_as(s, draft, &g.text)));
+    let named = name.and_then(|n| s.signatures.get(n)).map(|g| {
+        let (text, look) = signed_as(s, draft, g);
+        (g.name.clone(), text, look)
+    });
     place_signature(draft, named);
     draft.signature_auto = true;
 }
@@ -309,7 +324,8 @@ fn signature(s: &mut Session, p: &Value) -> CmdResult {
             let g = s.signatures.get(n).ok_or_else(|| {
                 EngineError::BadParams(format!("there is no signature called {}", n.chars().take(signatures::MAX_NAME).collect::<String>()))
             })?;
-            Some((g.name.clone(), signed_as(s, draft, &g.text)))
+            let (text, look) = signed_as(s, draft, g);
+            Some((g.name.clone(), text, look))
         }
     };
     if let Some(d) = s.compose.as_mut() {
@@ -503,7 +519,7 @@ fn low_importance(s: &mut Session, p: &Value) -> CmdResult {
     set_importance(s, p, 0, "Low Importance")
 }
 
-fn clamp(text: &str, max: usize) -> String {
+pub(super) fn clamp(text: &str, max: usize) -> String {
     let mut end = text.len().min(max);
     while !text.is_char_boundary(end) {
         end -= 1;
@@ -524,7 +540,11 @@ fn set_field(s: &mut Session, p: &Value) -> CmdResult {
             draft.show_bcc = true;
         }
         "subject" => draft.subject = one_line,
-        "body" => draft.body = clamp(value, MAX_BODY),
+        "body" => {
+            // Where the change begins, if the writer knows: else where the selection was.
+            let at = p_u64(p, "at").and_then(|a| usize::try_from(a).ok()).unwrap_or(draft.selected().0);
+            draft.rewrite(clamp(value, MAX_BODY), at);
+        }
         "from" | "account" => {
             // An account by its id or its address; empty for the first account.
             let wanted = value.trim();
@@ -704,7 +724,9 @@ fn expires(s: &mut Session, p: &Value) -> CmdResult {
 pub(super) fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
     let mut item = Item::new_mail();
     item.set_subject(&draft.subject);
-    item.set_body_text(&draft.body);
+    let mut look = draft.format.clone();
+    look.fit(&draft.body);
+    let formatted = !draft.plain && (!look.is_plain() || !look.pictures.is_empty());
     match from_account(s, draft) {
         Some(a) => item.set_sender(&a.display_name, &a.email),
         None => item.set_sender(&s.user_name, &s.user_email),
@@ -721,6 +743,12 @@ pub(super) fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
     }
     item.refresh_display_recipients();
     item.attachments = draft.attachments.clone();
+    if formatted {
+        body_html(&mut item, &draft.body, &look);
+    } else {
+        let text: String = draft.body.chars().filter(|c| *c != PICTURE).collect();
+        item.set_body_text(&text);
+    }
     if let Some(level) = draft.importance {
         item.props.set(pid::IMPORTANCE, PropValue::Int32(level.clamp(0, 2)));
     }
@@ -738,6 +766,61 @@ pub(super) fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
         item.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(MSGFLAG_READ | MSGFLAG_UNSENT));
     }
     item
+}
+
+/// The font and size a formatted message is written in, where its text names none: Outlook's
+/// own for new mail, with the open fonts like it after it for a reader that has not got it.
+const BODY_FONT: &str = "Calibri, Carlito, Arial, sans-serif";
+const BODY_POINTS: f32 = 11.0;
+
+/// Give `item` its body as HTML, with the same as text beside it ([MS-OXCMSG] 2.2.1.58), and
+/// each picture in it as an attachment it refers to by content id, hidden from the list of
+/// attachments as one shown in the body is ([MS-OXCMSG] 2.2.2.24, 2.2.2.18).
+fn body_html(item: &mut Item, text: &str, look: &Format) {
+    let stamp = look.pictures.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, p| {
+        p.bytes.iter().take(4096).fold(h ^ u64::from(p.id), |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3))
+    });
+    let cid =
+        |p: &openmailclient_model::format::Picture| format!("image{:03}.{}@{stamp:016x}", p.id, openmailclient_formats::editable::extension(&p.kind));
+    let base = Mark { family: Some(std::sync::Arc::from(BODY_FONT)), size: Some(BODY_POINTS), ..Mark::default() };
+    let html = look.to_html(text, &base, |p| format!("cid:{}", cid(p)));
+    item.set_body_text(&look.to_plain(text));
+    item.props.set(pid::HTML, PropValue::Binary(html.into_bytes()));
+    item.props.set(pid::INTERNET_CODEPAGE, PropValue::Int32(65001));
+    for p in &look.pictures {
+        let mut a = Attachment::file(&p.name, &p.kind, p.bytes.to_vec());
+        a.props.set_str(pid::ATTACH_CONTENT_ID, &cid(p));
+        a.props.set(pid::ATTACHMENT_HIDDEN, PropValue::Bool(true));
+        // attRenderedInBody ([MS-OXCMSG] 2.2.2.18).
+        a.props.set(pid::ATTACH_FLAGS, PropValue::Int32(4));
+        a.props.set(pid::RENDERING_POSITION, PropValue::Int32(-1));
+        item.attachments.push(a);
+    }
+}
+
+/// A message's body as it is written on: its HTML read back with the pictures its attachments
+/// give it, which are then no longer attachments of their own; its text where it has no HTML,
+/// or none that reads as more than text.
+fn body_of(item: &Item) -> (String, Format, Vec<Attachment>) {
+    let text = clamp(&item.body_text(), MAX_BODY);
+    let attachments: Vec<Attachment> = item.attachments.iter().take(MAX_ATTACHMENTS).cloned().collect();
+    let as_text = |text: String, attachments: Vec<Attachment>| {
+        let mut f = Format::default();
+        f.fit(&text);
+        (text, f, attachments)
+    };
+    let Some(html) = item.body_html() else { return as_text(text, attachments) };
+    let found = |cid: &str| crate::pictures::attached(item, cid).map(|a| (std::sync::Arc::from(a.data.as_slice()), a.mime().to_string(), a.name()));
+    let (body, look) = openmailclient_formats::editable::of_html(&html, &found);
+    if body.len() > MAX_BODY || (look.is_plain() && look.pictures.is_empty()) {
+        return as_text(text, attachments);
+    }
+    // An attachment shown in the body comes back as its picture there.
+    let shown = |a: &Attachment| {
+        a.content_id().is_some_and(|c| !c.is_empty() && html.contains(&format!("cid:{}", c.trim_start_matches('<').trim_end_matches('>'))))
+            && openmailclient_formats::editable::sniff(&a.data).is_some()
+    };
+    (body, look, attachments.into_iter().filter(|a| !shown(a)).collect())
 }
 
 /// The account a draft goes from: the one it names, or the first.
@@ -856,14 +939,16 @@ fn edit_draft(s: &mut Session, _: &Value) -> CmdResult {
     let text = |id: u16| item.props.str(id).map(|t| clamp(t, MAX_LINE)).unwrap_or_default();
     let time = |id: u16| item.props.time(id).filter(|t| *t > 0).unwrap_or(0);
     let (to, cc, bcc) = (line(RECIP_TO), line(RECIP_CC), line(RECIP_BCC));
+    let (body, format, attachments) = body_of(&item);
     let draft = Draft {
         show_bcc: !bcc.is_empty(),
         to,
         cc,
         bcc,
         subject: clamp(&item.subject(), MAX_LINE),
-        body: clamp(&item.body_text(), MAX_BODY),
-        attachments: item.attachments.iter().take(MAX_ATTACHMENTS).cloned().collect(),
+        body,
+        format,
+        attachments,
         kind: "Draft",
         account,
         in_reply_to: text(pid::IN_REPLY_TO_ID),

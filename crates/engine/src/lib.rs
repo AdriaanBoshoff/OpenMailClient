@@ -54,6 +54,8 @@ mod tests_columns;
 #[cfg(test)]
 mod tests_folder_view;
 #[cfg(test)]
+mod tests_format;
+#[cfg(test)]
 mod tests_free_busy;
 #[cfg(test)]
 mod tests_import;
@@ -106,6 +108,7 @@ use openmailclient_model::zone::Zone;
 use openmailclient_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
 use serde_json::{Value, json};
 
+pub use cmd::format::{Writing, write as write_formatted};
 pub use cmd::{CommandSpec, registry};
 
 #[derive(Debug, thiserror::Error)]
@@ -243,6 +246,35 @@ pub struct Draft {
     pub signature_name: Option<String>,
     /// High or Low Importance: 2 high, 0 low; none for normal (PidTagImportance).
     pub importance: Option<i32>,
+    /// The look of the body: its stretches of bold, colour and the like, its paragraphs and its
+    /// pictures, counted in the body's characters. A body with none of it is sent as text.
+    pub format: openmailclient_model::format::Format,
+    /// The selection in the body, in characters: where it was begun and where the caret is.
+    pub selection: (usize, usize),
+    /// The look the next text typed takes, where it is not that of the text before the caret:
+    /// Bold pressed with nothing selected.
+    pub typing: Option<openmailclient_model::format::Mark>,
+    /// Format Text > Plain Text: it goes as text alone, with nothing formatted.
+    pub plain: bool,
+}
+
+impl Draft {
+    /// The body changed to `new`, the change beginning no later than character `at`; its look
+    /// follows it, and what came in takes the look being typed in.
+    pub fn rewrite(&mut self, new: String, at: usize) {
+        let typed = self.typing.take().unwrap_or_else(|| self.format.typing_at(at));
+        self.format.follow_from(&self.body, &new, &typed, at);
+        self.body = new;
+        let n = self.body.chars().count();
+        self.selection = (self.selection.0.min(n), self.selection.1.min(n));
+    }
+
+    /// The selection, its start first.
+    pub fn selected(&self) -> (usize, usize) {
+        let n = self.body.chars().count();
+        let (a, b) = (self.selection.0.min(n), self.selection.1.min(n));
+        (a.min(b), a.max(b))
+    }
 }
 
 /// Filter Email ([Home > Find]): the message list shows only messages with attachments, flagged,

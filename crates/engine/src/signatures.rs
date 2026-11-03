@@ -9,6 +9,9 @@
 //! account as its "New Signature" and "Reply-Forward Signature" values; those are read by
 //! [`read_outlook`] to be imported.
 
+use base64::Engine as _;
+use openmailclient_formats::editable;
+use openmailclient_model::format::{Format, Mark};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -18,6 +21,8 @@ pub const MAX_SIGNATURES: usize = 64;
 pub const MAX_NAME: usize = 100;
 /// The longest text of one, in bytes.
 pub const MAX_TEXT: usize = 32 * 1024;
+/// The longest formatted form of one, its pictures in it, in bytes.
+pub const MAX_HTML: usize = 4 << 20;
 /// Accounts whose choices are kept at most.
 const MAX_CHOICES: usize = 64;
 /// A file of Outlook's larger than this is not a signature.
@@ -27,6 +32,42 @@ const MAX_FILE: u64 = 1 << 20;
 pub struct Signature {
     pub name: String,
     pub text: String,
+    /// It as it looks, with its pictures written into it (RFC 2397), where it has a look of
+    /// its own; its text is then what it reads as.
+    pub html: Option<String>,
+}
+
+impl Signature {
+    /// One with the look `format` gives `text`: kept as text alone where it has none.
+    pub fn of(name: String, text: &str, format: &Format) -> Signature {
+        let mut f = format.clone();
+        f.fit(text);
+        let plain = clean_text(&f.to_plain(text));
+        let html = (!f.is_plain() || !f.pictures.is_empty()).then(|| keep_html(text, &f)).filter(|h| h.len() <= MAX_HTML);
+        Signature { name, text: plain, html }
+    }
+
+    /// Its text and look for mail from `name` at `email`, `{name}` and `{email}` filled.
+    pub fn formatted(&self, name: &str, email: &str) -> (String, Format) {
+        match &self.html {
+            Some(h) => {
+                let (text, f) =
+                    editable::of_html(&fill(h, &openmailclient_model::format::escape(name), &openmailclient_model::format::escape(email)), &|_| None);
+                (text, f)
+            }
+            None => {
+                let text = fill(&self.text, name, email);
+                let mut f = Format::default();
+                f.fit(&text);
+                (text, f)
+            }
+        }
+    }
+}
+
+/// A formatted text as a signature keeps it: HTML with its pictures written into it.
+pub fn keep_html(text: &str, f: &Format) -> String {
+    f.to_html(text, &Mark::default(), |p| format!("data:{};base64,{}", p.kind, base64::engine::general_purpose::STANDARD.encode(&p.bytes)))
 }
 
 /// The signatures chosen for new messages and for replies and forwards, by name.
@@ -158,7 +199,10 @@ impl Signatures {
     /// As the settings keep them.
     pub fn to_json(&self) -> Value {
         json!({
-            "list": self.list.iter().map(|s| json!({ "name": s.name, "text": s.text })).collect::<Vec<_>>(),
+            "list": self.list.iter().map(|s| match &s.html {
+                Some(h) => json!({ "name": s.name, "text": s.text, "html": h }),
+                None => json!({ "name": s.name, "text": s.text }),
+            }).collect::<Vec<_>>(),
             "default": self.default.to_json(),
             "accounts": self.by_account.iter().map(|(a, c)| json!({ "account": a, "new": c.new, "replies": c.replies })).collect::<Vec<_>>(),
         })
@@ -173,9 +217,10 @@ impl Signatures {
         for s in o.get("list").and_then(Value::as_array).into_iter().flatten() {
             let name = s.get("name").and_then(Value::as_str).and_then(clean_name);
             let text = s.get("text").and_then(Value::as_str).map(clean_text);
+            let html = s.get("html").and_then(Value::as_str).filter(|h| h.len() <= MAX_HTML).map(str::to_string);
             match (name, text) {
                 (Some(name), Some(text)) if out.get(&name).is_none() => {
-                    if !out.put(Signature { name, text }) {
+                    if !out.put(Signature { name, text, html }) {
                         ignored += 1;
                     }
                 }
@@ -236,6 +281,8 @@ pub struct Found {
     pub text: String,
     /// It has pictures or formatting its plain text leaves out.
     pub formatted: bool,
+    /// Its `.htm`, the pictures of its `_files` folder written into it, to be brought as it looks.
+    pub html: Option<String>,
 }
 
 /// The signatures in Outlook's folder of them, by name, each from its `.txt`, else as the text
@@ -268,7 +315,9 @@ pub fn read_outlook(dir: &Path) -> Vec<Found> {
     for stem in names {
         let Some(name) = clean_name(&stem) else { continue };
         let html = read(&stem, "htm").or_else(|| read(&stem, "html"));
-        let pictures = dir.join(format!("{stem}_files")).is_dir();
+        let files = dir.join(format!("{stem}_files"));
+        let pictures = files.is_dir();
+        let html = html.map(|h| if pictures { with_pictures(&h, &stem, &files) } else { h }).filter(|h| h.len() <= MAX_HTML.saturating_mul(4));
         let text = match read(&stem, "txt") {
             Some(t) => clean_text(&t),
             None => match &html {
@@ -276,8 +325,42 @@ pub fn read_outlook(dir: &Path) -> Vec<Found> {
                 None => continue,
             },
         };
-        out.push(Found { name, text, formatted: pictures || html.is_some() });
+        let formatted = pictures || html.is_some();
+        out.push(Found { name, text, formatted, html });
         if out.len() >= MAX_SIGNATURES {
+            break;
+        }
+    }
+    out
+}
+
+/// Pictures in a folder there are at most, and the largest read.
+const MAX_FOLDER_PICTURES: usize = 64;
+const MAX_PICTURE: u64 = 4 << 20;
+
+/// An Outlook signature's HTML with each picture of its `_files` folder that it names
+/// (`Name_files/image001.png`, the folder's name as written or with its spaces as `%20`)
+/// written into it as a `data:` address. Only pictures are read, only from that folder.
+fn with_pictures(html: &str, stem: &str, files: &Path) -> String {
+    let Ok(entries) = std::fs::read_dir(files) else { return html.to_string() };
+    let mut out = html.to_string();
+    let folders = [format!("{stem}_files"), format!("{stem}_files").replace(' ', "%20")];
+    for e in entries.flatten().take(MAX_FOLDER_PICTURES.saturating_mul(4)).filter(|e| e.path().is_file()).take(MAX_FOLDER_PICTURES) {
+        let file = e.file_name().to_string_lossy().into_owned();
+        if !e.metadata().is_ok_and(|m| m.len() <= MAX_PICTURE) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(e.path()) else { continue };
+        let Some(kind) = editable::sniff(&bytes) else { continue };
+        let data = format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes));
+        for folder in &folders {
+            for name in [file.clone(), file.replace(' ', "%20")] {
+                for quote in ['"', '\''] {
+                    out = out.replace(&format!("{quote}{folder}/{name}{quote}"), &format!("{quote}{data}{quote}"));
+                }
+            }
+        }
+        if out.len() > MAX_HTML.saturating_mul(4) {
             break;
         }
     }
@@ -299,8 +382,8 @@ mod tests {
     #[test]
     fn kept_and_read_back_as_the_settings_keep_them() {
         let mut s = Signatures::default();
-        assert!(s.put(Signature { name: "Work".into(), text: "Alex Morgan\nExample Ltd".into() }));
-        assert!(s.put(Signature { name: "Short".into(), text: "— {name}".into() }));
+        assert!(s.put(Signature { name: "Work".into(), text: "Alex Morgan\nExample Ltd".into(), html: Some("<p><b>Alex Morgan</b></p>".into()) }));
+        assert!(s.put(Signature { name: "Short".into(), text: "— {name}".into(), html: None }));
         s.default = Choice { new: Some("Work".into()), replies: Some("Short".into()) };
         s.choose("a2", Some(Choice { new: Some("Short".into()), replies: None }));
         let (back, ignored) = Signatures::of_json(&s.to_json()).unwrap();
@@ -328,7 +411,7 @@ mod tests {
             "accounts": [{"account": "", "new": "A"}, {"account": "x".repeat(65)}, {"account": "a1", "new": "nothing"}],
         });
         let (s, ignored) = Signatures::of_json(&v).unwrap();
-        assert_eq!(s.list, vec![Signature { name: "A".into(), text: "one\ntwo".into() }]);
+        assert_eq!(s.list, vec![Signature { name: "A".into(), text: "one\ntwo".into(), html: None }]);
         assert_eq!(s.default, Choice { new: Some("A".into()), replies: None });
         assert_eq!(s.by_account, vec![("a1".to_string(), Choice::default())], "a choice of nothing kept is a choice of none");
         assert_eq!(ignored, 7);

@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 159 · 2026-11-02 · ranked: the top of the list is what hurts most.
+**Status:** revision 160 · 2026-11-03 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 160 · 2026-11-03 — M1.13: messages and signatures written with a look and pictures, copied and pasted with them.
 - 159 · 2026-11-02 — M1.12: Filter Email with filters together, and Copy Folder into this data file or another.
 - 158 · 2026-11-02 — M1.11: High and Low Importance in the compose window, and Forward as Attachment for one message or several.
 - 157 · 2026-11-01 — M5.35: the Calendar's Schedule View, every calendar a row of the day with when anyone is busy; M5 closed.

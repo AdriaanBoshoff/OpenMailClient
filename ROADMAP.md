@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); every setting in one Options window and the File tab in pages (M1.9); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); the third, 0.1.0-alpha.3 (R1); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 170 · 2026-11-03
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; mail shown as it comes down and closing while it does (M4.16); the Calendar (M5.1), Import from Outlook (M5.2) and recurring appointments (M5.3) and calendar files (M5.4); calendars kept in step with a CalDAV server (M5.5); time zones and daylight saving (M5.6); meetings, invitations sent, answered and called off (M5.7); People: contacts, contact groups and vCard files (M5.8); Tasks and the To-Do List (M5.9); reminders for appointments, tasks and flagged mail (M5.10); contacts kept in step with a CardDAV server, the Address Book and Check Names, Mail Merge and to-dos in calendar files (M5.11); tasks kept in step with a CalDAV server's task lists (M5.12); every setting in one Options window and the File tab in pages (M1.9); the To-Do Bar beside every module (M5.12); the first pre-release, 0.1.0-alpha.1: a Windows installer and Check for Updates from GitHub (R1); the second, 0.1.0-alpha.2, for Windows and Linux (R1); the third, 0.1.0-alpha.3 (R1); messages and signatures written with a look and pictures (M1.13); web access from a browser (M7) not started; third-party sign-in (M8) comes after the first release · revision 171 · 2026-11-03
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 111 of 142 (78%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 814, all passing |
+| Catalogued Outlook Classic features with a command | 117 of 144 (81%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 840, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command, for published account settings and for updates |
@@ -321,7 +321,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Rules brought from Outlook and kept in a data file as Outlook keeps them, so that each runs the other's: [MS-OXORULE] 2.2.9.3 leaves the stream Outlook keeps them in (PidTagRwRulesStream of the Inbox's hidden `IPM.RuleOrganizer` message) opaque, so this waits for a public description of it; descriptions others worked out are not used (clean room) | when a public specification describes PidTagRwRulesStream |
 | ~~Run Rules Now taken back with Undo; more of Outlook's conditions and actions (dates received, words in the sender's address alone, forward or reply, play a sound)~~ | done: M5.15 |
 | ~~Rules on mail as it is sent (Outlook's "apply rule after I send the message": a copy kept elsewhere, a category, a delay)~~ | done: M5.16 |
-| Signatures with formatting and pictures, made and put in as formatted text (Outlook's .htm and its _files folder brought whole) | when the compose body is formatted |
+| ~~Signatures with formatting and pictures, made and put in as formatted text (Outlook's .htm and its _files folder brought whole)~~ | done: M1.13 |
 | Release signing: the installer signed (Authenticode) so SmartScreen knows it, and `SHA256SUMS.txt` signed with a key of the project's (Ed25519) that the updater checks, so a changed release is refused even from GitHub | R2, before 0.1.0 |
 | A release workflow: the installer built, checked and published by GitHub Actions from a tag, not on a developer's machine | R2 |
 | Packages for macOS (`.dmg`, an app bundle) and Linux (AppImage, `.deb`), and updates for them (the updater sends them to the release page until then) | R3, with M6's web build |
@@ -3013,3 +3013,25 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   window, importance, Forward as Attachment, Filter Email and Copy Folder since 0.1.0-alpha.2;
   and About OpenMailClient is a window of its own, with the icon, version, licence and the
   project's page, where it was a line in the status bar (`crates/ui-egui/src/about.rs`). 1 test.
+- **2026-11-03** - M1.13: messages and signatures written with a look and pictures. The compose
+  body and the signature editor are one box of formatted text (`crates/ui-egui/src/writing.rs`)
+  with a Format Text bar above it: font, size, Grow and Shrink Font, bold, italic, underline
+  and strikethrough (Ctrl+B, Ctrl+I, Ctrl+U), font and highlight colour, bullets and numbering,
+  indent, alignment, a link, a picture from a file, Clear Formatting, and HTML or plain text.
+  Each is a command (`compose.format`, `compose.paragraph`, `compose.link`,
+  `compose.insertPicture`, `compose.paste`, `compose.textFormat`, `compose.select`) working on
+  the selection, or on what is typed next when nothing is selected, as Outlook's buttons do; the
+  look is kept as runs over the text (`crates/model/src/format.rs`) and sent as HTML with its
+  pictures attached inline (RFC 2392 cid: addresses), a plain-text part beside it. The text
+  box draws text of several fonts and sizes on one line, pictures standing in the text on its
+  foot, list markers and centred or right-set paragraphs (`text_area::Styled`,
+  `line_edit::line_in`), pictures decoded on a thread of their own. Copy puts HTML on the
+  clipboard with the text; Paste takes HTML, a picture or text, read as inert as any message:
+  nothing named on a server is fetched, and the only files it may bring in are the pictures a
+  program copying formatted text leaves in the system's temporary folder, as Outlook does, so a
+  signature copied out of Outlook comes across with its pictures. Signatures are kept as HTML
+  with their pictures written into them, put into a message as formatted text, and Outlook's
+  `.htm` signatures are brought on import with the pictures of their `_files` folder. Better
+  than Outlook: a colour that could not be read on the dark theme is drawn in the text colour
+  while it is written, though it is sent as chosen; pasted HTML never fetches anything. Parity
+  117 of 144. 9 tests.

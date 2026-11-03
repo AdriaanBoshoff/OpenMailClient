@@ -26,6 +26,8 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+# Pictures written into a signature kept in the settings (RFC 2397).
+base64 = { workspace = true }
 log = { workspace = true }
 # The time zone the machine keeps.
 chrono = { workspace = true }

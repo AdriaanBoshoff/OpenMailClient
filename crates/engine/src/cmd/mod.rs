@@ -9,6 +9,7 @@ mod calendar_file;
 pub(crate) mod compose;
 mod file;
 mod folder;
+pub(crate) mod format;
 pub mod free_busy;
 pub(crate) mod imap_sync;
 mod import;
@@ -63,6 +64,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(link::commands());
         v.extend(picture::commands());
         v.extend(compose::commands());
+        v.extend(format::commands());
         v.extend(signatures::commands());
         v.extend(rules::commands());
         v.extend(folder::commands());

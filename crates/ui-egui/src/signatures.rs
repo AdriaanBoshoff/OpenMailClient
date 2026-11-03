@@ -1,11 +1,16 @@
 //! The Signatures page of Options: signatures made, changed, renamed and deleted, and the one
 //! each account puts in new messages and in replies and forwards, or the one every account
 //! takes. Every change goes through its `signatures.*` command.
+//!
+//! A signature is written as a message is, with its fonts, colours, links and pictures, and the
+//! Format Text bar above it (`crate::writing`); it is kept as HTML with its pictures written
+//! into it, or as text alone where it has no look.
 
 use crate::MailUi;
 use crate::line_edit::LineEdit;
 use egui::Ui;
-use openmailclient_engine::signatures::{self, MAX_NAME};
+use openmailclient_engine::signatures::{self, MAX_NAME, Signature};
+use openmailclient_engine::{Writing, write_formatted};
 use serde_json::{Value, json};
 
 /// The signature being written on the page.
@@ -14,9 +19,24 @@ pub(crate) struct SignatureEdit {
     /// The name it had when it was opened; none for a new one.
     was: Option<String>,
     name: String,
-    text: String,
-    /// A save asked for and not yet looked at: the name it was saved under.
-    saving: Option<String>,
+    /// What is written, with its look.
+    pub(crate) w: Writing,
+    /// A save asked for and not yet looked at: the name it was saved under, and the text it
+    /// reads as.
+    saving: Option<(String, String)>,
+}
+
+impl SignatureEdit {
+    pub(crate) fn of(g: &Signature) -> SignatureEdit {
+        let w = match &g.html {
+            Some(html) => {
+                let (text, format) = openmailclient_formats::editable::of_html(html, &|_| None);
+                Writing::new(text, format)
+            }
+            None => Writing::new(g.text.clone(), Default::default()),
+        };
+        SignatureEdit { was: Some(g.name.clone()), name: g.name.clone(), w, saving: None }
+    }
 }
 
 /// What a choice box can be set to.
@@ -50,15 +70,41 @@ impl Pick {
 }
 
 impl MailUi {
+    /// What was done to the signature being written, done to it.
+    pub(crate) fn signature_writing(&mut self, did: Vec<crate::writing::Did>) {
+        let w = &mut self.signature_edit.w;
+        for d in did {
+            match d {
+                crate::writing::Did::Body(text, at) => {
+                    let text: String = text.chars().take(signatures::MAX_TEXT).collect();
+                    w.rewrite(text, at);
+                }
+                crate::writing::Did::Run(command, p) => {
+                    if let Err(e) = write_formatted(w, command, &p) {
+                        self.session.status = e.to_string();
+                    }
+                }
+                crate::writing::Did::PictureFile => {
+                    self.picture_for_signature = true;
+                    self.requests.push(crate::UiRequest::InsertPicture);
+                }
+            }
+        }
+    }
+
+    /// `ui.insertPicture` for the signature being written: the picture put in where its caret is.
+    pub(crate) fn signature_picture(&mut self, p: &Value) -> Result<Value, String> {
+        write_formatted(&mut self.signature_edit.w, "compose.insertPicture", p).map_err(|e| e.to_string())
+    }
+
     pub(crate) fn signatures_page(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         // A save asked for last frame: kept, it is the one written on now; refused, it stays new.
-        if let Some(name) = self.signature_edit.saving.take() {
-            let kept = signatures::clean_text(&self.signature_edit.text);
-            if let Some(g) = self.session.signatures.get(&name).filter(|g| g.text == kept) {
-                self.signature_edit.was = Some(g.name.clone());
-                self.signature_edit.name = g.name.clone();
-            }
+        if let Some((name, kept)) = self.signature_edit.saving.take()
+            && let Some(g) = self.session.signatures.get(&name).filter(|g| g.text == kept)
+        {
+            self.signature_edit.was = Some(g.name.clone());
+            self.signature_edit.name = g.name.clone();
         }
         let names: Vec<String> = self.session.signatures.list.iter().map(|g| g.name.clone()).collect();
         crate::dialog::heading(ui, &t, "Signatures");
@@ -74,8 +120,7 @@ impl MailUi {
                         if ui.selectable_label(on, n).clicked()
                             && let Some(g) = self.session.signatures.get(n)
                         {
-                            self.signature_edit =
-                                SignatureEdit { was: Some(g.name.clone()), name: g.name.clone(), text: g.text.clone(), saving: None };
+                            self.signature_edit = SignatureEdit::of(g);
                         }
                     }
                 });
@@ -83,18 +128,25 @@ impl MailUi {
                     self.signature_edit = SignatureEdit::default();
                 }
             });
+            let mut did = Vec::new();
             ui.vertical(|ui| {
                 let e = &mut self.signature_edit;
                 ui.add(
                     LineEdit::new(&mut e.name, egui::Id::new("signature-name")).desired_width(f32::INFINITY).char_limit(MAX_NAME).hint("Name", None),
                 );
                 ui.add_space(4.0);
-                ui.add(
-                    crate::text_area::TextArea::new(&mut e.text, egui::Id::new("signature-text"))
-                        .desired_rows(6)
-                        .char_limit(signatures::MAX_TEXT)
-                        .hint("Regards,\n{name}\n{email}"),
-                );
+                egui::Frame::new().stroke(egui::Stroke::new(1.0, t.line)).fill(t.surface).inner_margin(6.0).corner_radius(3.0).show(ui, |ui| {
+                    did = crate::writing::writing_box(
+                        ui,
+                        &t,
+                        &mut self.faces,
+                        &self.inline,
+                        &e.w,
+                        egui::Id::new("signature-text"),
+                        6,
+                        signatures::MAX_TEXT,
+                    );
+                });
                 ui.label(
                     egui::RichText::new("{name} and {email} are filled with those of the account a message goes from.")
                         .font(crate::font(11.5))
@@ -105,11 +157,15 @@ impl MailUi {
                     if ui.add_enabled(named, crate::dialog::plain("Save")).clicked() {
                         let e = &self.signature_edit;
                         let name = signatures::clean_name(&e.name).unwrap_or_default();
-                        let mut p = json!({ "name": name, "text": e.text });
+                        let kept = Signature::of(name.clone(), &e.w.body, &e.w.format);
+                        let mut p = match (&kept.html, e.w.plain) {
+                            (Some(html), false) => json!({ "name": name, "html": html }),
+                            _ => json!({ "name": name, "text": kept.text }),
+                        };
                         if let Some(was) = &e.was {
                             p["was"] = json!(was);
                         }
-                        self.signature_edit.saving = Some(name);
+                        self.signature_edit.saving = Some((name, kept.text));
                         self.act("signatures.save", p);
                     }
                     if let Some(was) = self.signature_edit.was.clone()
@@ -120,6 +176,7 @@ impl MailUi {
                     }
                 });
             });
+            self.signature_writing(did);
         });
         ui.add_space(8.0);
         crate::dialog::heading(ui, &t, "Put in messages");

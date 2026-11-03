@@ -996,7 +996,7 @@ impl MailUi {
             ("bcc", "Bcc", draft.bcc.clone(), draft.show_bcc),
             ("subject", "Subject", draft.subject.clone(), true),
         ];
-        let mut body = draft.body.clone();
+        let writing = openmailclient_engine::Writing::of(draft);
         let attachments: Vec<(String, usize)> = draft.attachments.iter().map(|a| (a.name(), a.size())).collect();
         let show_bcc = draft.show_bcc;
         let importance = draft.importance;
@@ -1017,6 +1017,8 @@ impl MailUi {
         let mut took = false;
         // A name taken off the AutoComplete list, by its × or the Delete key.
         let mut forget: Option<String> = None;
+        let (faces, inline) = (&mut self.faces, &self.inline);
+        let mut pick_picture = false;
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(vec2(14.0, 10.0))), |ui| {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
             // The buttons go on to a second line where the pane is narrow.
@@ -1206,14 +1208,22 @@ impl MailUi {
             }
             ui.separator();
             ScrollArea::vertical().id_salt("compose-body").auto_shrink(false).show(ui, |ui| {
-                let edit = crate::text_area::TextArea::new(&mut body, egui::Id::new(("compose", "body"))).font(font(13.5)).bare().desired_rows(16);
-                if ui.add(edit).changed() {
-                    acts.push(("compose.setField", json!({ "field": "body", "value": body })));
+                let id = egui::Id::new(("compose", "body"));
+                for did in crate::writing::writing_box(ui, &t, faces, inline, &writing, id, 16, usize::MAX) {
+                    match did {
+                        crate::writing::Did::Body(body, at) => acts.push(("compose.setField", json!({ "field": "body", "value": body, "at": at }))),
+                        crate::writing::Did::Run(cmd, params) => acts.push((cmd, params)),
+                        crate::writing::Did::PictureFile => pick_picture = true,
+                    }
                 }
             });
         });
         self.go_at_text = go_text;
         self.expire_at_text = expire_text;
+        if pick_picture {
+            self.picture_for_signature = false;
+            self.requests.push(crate::UiRequest::InsertPicture);
+        }
         for (id, params) in acts {
             if id == "ui.suggestPick" {
                 if let (Some(s), Some(n)) = (self.suggest.as_mut(), params["pick"].as_u64().and_then(|n| usize::try_from(n).ok())) {

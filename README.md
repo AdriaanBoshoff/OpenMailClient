@@ -66,8 +66,8 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 
 Closed milestones still have work left over: it is not dropped. Each piece is a row in
 [Do later](ROADMAP.md#do-later-from-m2) with the slot it lands in, and is struck when it lands.
-105 rows are done; 28 are open: 3 after M5, 1 in M6, 2 in M8 (after the first release), 4 in R2 and
-1 in R3, 4 with M1's checks against Outlook, 1 with the formatted compose body, and 12 that wait on
+106 rows are done; 27 are open: 3 after M5, 1 in M6, 2 in M8 (after the first release), 4 in R2 and
+1 in R3, 4 with M1's checks against Outlook, and 12 that wait on
 something we do not have yet (an Outlook-written file of a kind we may read, a public specification,
 a reader we can try without driving a window, a printer we may use).
 
@@ -120,6 +120,12 @@ a reader we can try without driving a window, a printer we may use).
   can be done with them), Open & Export, Save, then Print, Options and Exit.
 - Read, flag, categorise, move, delete, archive, search, sort and filter in writable (in-memory) stores.
 - Reply, reply all, forward and new mail as drafts; saving messages as `.msg`, `.oft` or `.eml`.
+- **Writing with a look.** New mail and signatures are written as formatted text, with a Format
+  Text bar: fonts, sizes, bold, italic, underline, colours and highlighting, bullets and
+  numbering, indents, alignment, links and pictures put in from a file or pasted. Copy and paste
+  keep the look, so a signature copied out of Outlook comes across with its pictures; pasted
+  HTML never fetches anything from a server. Mail goes as HTML with its pictures inline and a
+  plain-text part beside it, or as plain text alone at a click.
 - **Formatted bodies.** HTML and RTF mail is laid out and drawn: fonts the message names (installed
   ones only), colours, lists, links, tables (cell borders, fills, merged cells, tables inside cells),
   paragraph borders and spacing, bordered and filled blocks inside one another, rounded corners, borders round

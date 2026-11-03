@@ -185,12 +185,49 @@ pub(crate) fn line(chars: &[char], font: &FontId, color: Color32, measure: impl 
 /// As `line`, read from the right when `rtl` says so, or as its first letter that has a way
 /// says when it does not: a line of a paragraph wrapped is read the way its paragraph is.
 pub(crate) fn line_as(chars: &[char], font: &FontId, color: Color32, mut measure: impl FnMut(&str) -> f32, rtl: Option<bool>) -> Line {
+    let looks = [Look::Text(egui::TextFormat::simple(font.clone(), color))];
+    line_in(chars, &|_| 0, &looks, &mut |piece, _| measure(piece), rtl)
+}
+
+/// How a stretch of a line is drawn: in a format of its own, or as room kept for a picture,
+/// so wide and so high, that is drawn over it.
+#[derive(Clone, Debug)]
+pub(crate) enum Look {
+    Text(egui::TextFormat),
+    Room(f32, f32),
+}
+
+impl std::hash::Hash for Look {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Look::Text(format) => format.hash(state),
+            Look::Room(w, h) => (w.to_bits(), h.to_bits()).hash(state),
+        }
+    }
+}
+
+/// What room for a picture is written as in a line: a blank of a font too small to be seen,
+/// moved on by the rest of the room.
+fn room_format() -> egui::TextFormat {
+    egui::TextFormat::simple(FontId::proportional(1.0), Color32::TRANSPARENT)
+}
+
+/// As `line_as`, each character drawn as `looks[look(n)]` says. `measure` gives the width of a
+/// piece of text in a format, as the toolkit draws it.
+pub(crate) fn line_in(
+    chars: &[char],
+    look: &dyn Fn(usize) -> usize,
+    looks: &[Look],
+    measure: &mut dyn FnMut(&str, &egui::TextFormat) -> f32,
+    rtl: Option<bool>,
+) -> Line {
     let chars: Vec<char> = chars.iter().map(|c| shown(*c)).collect();
     let text: String = chars.iter().collect();
     let rtl = rtl.unwrap_or_else(|| script::first_strong(&text).unwrap_or(false));
     let levels = script::levels(&text, Some(rtl));
-    // Pieces: characters that stand equally deep and are of one kind, as in `seen_line`.
-    let mut pieces: Vec<(usize, usize, u8, u8)> = Vec::new();
+    // Pieces: characters that stand equally deep, are of one kind and of one look, as in
+    // `seen_line`.
+    let mut pieces: Vec<(usize, usize, u8, u8, usize)> = Vec::new();
     for (at, c) in chars.iter().enumerate() {
         let level = levels.get(at).copied().unwrap_or(0);
         let kind = if c.is_whitespace() {
@@ -200,24 +237,47 @@ pub(crate) fn line_as(chars: &[char], font: &FontId, color: Color32, mut measure
         } else {
             2
         };
+        let seen = look(at);
         match pieces.last_mut() {
-            Some(last) if last.2 == level && last.3 == kind => last.1 = at + 1,
-            _ => pieces.push((at, at + 1, level, kind)),
+            Some(last) if last.2 == level && last.3 == kind && last.4 == seen => last.1 = at + 1,
+            _ => pieces.push((at, at + 1, level, kind, seen)),
         }
     }
     let stand_ins: Vec<char> = pieces.iter().map(|p| if p.3 == 0 { ' ' } else { 'a' }).collect();
     let depth: Vec<u8> = pieces.iter().map(|p| p.2).collect();
-    let format = egui::TextFormat::simple(font.clone(), color);
+    let plain = egui::TextFormat::default();
     let (mut job, mut edges, mut x) = (LayoutJob::default(), vec![(0.0, 0.0); chars.len()], 0.0f32);
     for i in script::order(&stand_ins, &depth, u8::from(rtl)) {
-        let Some((from, to, level, _)) = pieces.get(i).copied() else { continue };
+        let Some((from, to, level, _, seen)) = pieces.get(i).copied() else { continue };
         let Some(piece) = chars.get(from..to) else { continue };
+        let format = match looks.get(seen) {
+            Some(Look::Text(format)) => format,
+            Some(Look::Room(wide, _)) => {
+                // Each picture as wide as its room.
+                let wide = wide.max(0.0);
+                for (n, edge) in edges.iter_mut().skip(from).take(to - from).enumerate() {
+                    let n = n as f32;
+                    *edge = (x + n * wide, x + (n + 1.0) * wide);
+                }
+                let all = wide * piece.len() as f32;
+                let tiny = room_format();
+                let blank = measure(" ", &tiny);
+                body::section_of_its_own(&mut job, " ", (all - blank).max(0.0), tiny);
+                x += all;
+                continue;
+            }
+            None => &plain,
+        };
         let whole = body::spelled(piece, level);
-        let wide = measure(&whole);
+        let wide = measure(&whole, format);
         // Where each character ends is how wide the piece is up to it.
         let mut before = 0.0f32;
         for (n, edge) in edges.iter_mut().skip(from).take(to - from).enumerate() {
-            let upto = if n + 1 == piece.len() { wide } else { measure(&body::spelled(piece.get(..=n).unwrap_or(piece), level)).clamp(before, wide) };
+            let upto = if n + 1 == piece.len() {
+                wide
+            } else {
+                measure(&body::spelled(piece.get(..=n).unwrap_or(piece), level), format).clamp(before, wide)
+            };
             *edge = if level % 2 == 1 { (x + wide - before, x + wide - upto) } else { (x + before, x + upto) };
             before = upto;
         }

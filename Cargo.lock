@@ -2929,6 +2929,7 @@ dependencies = [
 name = "openmailclient-engine"
 version = "0.1.0-alpha.3"
 dependencies = [
+ "base64 0.22.1",
  "cfb",
  "chrono",
  "iana-time-zone",
@@ -3056,6 +3057,8 @@ dependencies = [
 name = "openmailclient-ui-egui"
 version = "0.1.0-alpha.3"
 dependencies = [
+ "arboard",
+ "base64 0.22.1",
  "chrono",
  "egui",
  "egui_kittest",
