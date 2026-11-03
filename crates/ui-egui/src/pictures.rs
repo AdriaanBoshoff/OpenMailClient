@@ -27,6 +27,8 @@ const MAX_DEPTH: usize = 64;
 pub(crate) struct Shown {
     /// The picture, or the first frame of one that moves.
     pub texture: TextureHandle,
+    /// A still picture at each half of its size, the largest first (`smaller`).
+    pub smaller: Vec<TextureHandle>,
     /// Size in pixels as decoded, before any scaling to fit what is kept.
     pub size: Vec2,
     /// The frames of a picture that moves.
@@ -100,8 +102,11 @@ impl Reel {
 impl Shown {
     /// What is drawn now: the picture, or the frame of the moment when it moves and `moving`
     /// says such pictures are played. The window is asked to draw again when the next is due.
-    pub(crate) fn frame(&self, ctx: &Context, moving: bool) -> egui::TextureId {
-        let Some(reel) = self.film.as_ref().filter(|_| moving) else { return self.texture.id() };
+    /// A still one is drawn from the copy of it nearest the `drawn` size, in points.
+    pub(crate) fn frame(&self, ctx: &Context, moving: bool, drawn: Vec2) -> egui::TextureId {
+        let Some(reel) = self.film.as_ref().filter(|_| moving) else {
+            return sharpest(&self.texture, &self.smaller, drawn * ctx.pixels_per_point());
+        };
         let (frame, left) = reel.at(ctx.input(|i| i.time) - reel.since);
         if let Some(left) = left {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(left.min(60.0)));
@@ -132,6 +137,7 @@ struct Job {
 /// What decoding a picture came to, made into textures on the decoding thread.
 struct Made {
     texture: TextureHandle,
+    smaller: Vec<TextureHandle>,
     size: Vec2,
     /// The frames of one that moves, with how many times it is played.
     film: Option<(Vec<(TextureHandle, u64)>, Option<u32>)>,
@@ -357,7 +363,13 @@ impl Pictures {
         let shown = made.filter(|m| self.kept_bytes.saturating_add(m.bytes) <= MAX_KEPT_BYTES).map(|m| {
             self.kept_bytes = self.kept_bytes.saturating_add(m.bytes);
             let since = ctx.input(|i| i.time);
-            Shown { texture: m.texture, size: m.size, film: m.film.map(|(frames, loops)| Reel { frames, loops, since }), ink: m.ink }
+            Shown {
+                texture: m.texture,
+                smaller: m.smaller,
+                size: m.size,
+                film: m.film.map(|(frames, loops)| Reel { frames, loops, since }),
+                ink: m.ink,
+            }
         });
         self.put(slot, shown);
     }
@@ -414,13 +426,123 @@ fn make(ctx: &Context, name: &str, data: &[u8], room: usize) -> Option<Made> {
         let texture = frames.first()?.0.clone();
         let size = vec2(f32::from(film.natural.0), f32::from(film.natural.1));
         let ink = film.frames.first().and_then(|frame| ink(&frame.rgba));
-        return Some(Made { texture, size, film: Some((frames, film.loops)), ink, bytes });
+        return Some(Made { texture, smaller: Vec::new(), size, film: Some((frames, film.loops)), ink, bytes });
     }
     let pixels = openmailclient_engine::pictures::decode(data)?;
     let ink = ink(&pixels.rgba);
     let (image, size) = image_of(&pixels)?;
-    let bytes = image.pixels.len().saturating_mul(4);
-    Some(Made { texture: ctx.load_texture(name, image, TextureOptions::LINEAR), size, film: None, ink, bytes })
+    let (texture, smaller, bytes) = textures(ctx, name, image.size, &pixels.rgba)?;
+    Some(Made { texture, smaller, size, film: None, ink, bytes })
+}
+
+/// Copies smaller than this on their longer side are not made.
+const LEAST_COPY: usize = 16;
+
+/// A still picture of `size` and unmultiplied `rgba` as a texture, with a copy of it at each half
+/// of its size, the largest first, and the memory they all take. The renderer keeps no smaller
+/// copies of its own and samples only the four texels nearest each pixel, so a picture drawn at
+/// a third of its size would miss most of its pixels and look grainy; drawn from the copy
+/// nearest its size it is shrunk by less than half, and every pixel counts.
+pub(crate) fn textures(ctx: &Context, name: &str, size: [usize; 2], rgba: &[u8]) -> Option<(TextureHandle, Vec<TextureHandle>, usize)> {
+    if size[0].checked_mul(size[1])?.checked_mul(4)? != rgba.len() {
+        return None;
+    }
+    let texture = ctx.load_texture(name, ColorImage::from_rgba_unmultiplied(size, rgba), TextureOptions::LINEAR);
+    let (mut smaller, mut bytes) = (Vec::new(), rgba.len());
+    let mut at = (size, None::<Vec<u8>>);
+    while at.0[0].max(at.0[1]) / 2 >= LEAST_COPY {
+        let from = at.1.as_deref().unwrap_or(rgba);
+        let Some((half, pixels)) = halved(at.0, from) else { break };
+        bytes = bytes.saturating_add(pixels.len());
+        smaller.push(ctx.load_texture(
+            format!("{name}-{}", smaller.len() + 1),
+            ColorImage::from_rgba_unmultiplied(half, &pixels),
+            TextureOptions::LINEAR,
+        ));
+        at = (half, Some(pixels));
+    }
+    Some((texture, smaller, bytes))
+}
+
+/// The texture to draw a picture `px` physical pixels in size from: the smallest copy at least
+/// that size, so that it is never shrunk by half or more as it is drawn.
+pub(crate) fn sharpest(texture: &TextureHandle, smaller: &[TextureHandle], px: Vec2) -> egui::TextureId {
+    smaller
+        .iter()
+        .rev()
+        .find(|t| {
+            let [w, h] = t.size();
+            w as f32 >= px.x - 0.5 && h as f32 >= px.y - 0.5
+        })
+        .unwrap_or(texture)
+        .id()
+}
+
+/// Light as it is, from the 8-bit sRGB value of a channel (IEC 61966-2-1).
+fn linear(v: u8) -> f32 {
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = [0.0; 256];
+        for (n, slot) in t.iter_mut().enumerate() {
+            let c = n as f32 / 255.0;
+            *slot = if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+        }
+        t
+    });
+    table.get(usize::from(v)).copied().unwrap_or(0.0)
+}
+
+/// The 8-bit sRGB value of light `l` (0 to 1).
+fn gamma(l: f32) -> u8 {
+    const STEPS: usize = 4096;
+    static TABLE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        (0..=STEPS)
+            .map(|n| {
+                let l = n as f32 / STEPS as f32;
+                let c = if l <= 0.003_130_8 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 };
+                (c * 255.0).round().clamp(0.0, 255.0) as u8
+            })
+            .collect()
+    });
+    let at = (l.clamp(0.0, 1.0) * STEPS as f32).round() as usize;
+    table.get(at).copied().unwrap_or(255)
+}
+
+/// A picture of `size` and unmultiplied `rgba` at half its size, rounded up: each pixel the mean
+/// of the two by two it stands for, in light as it is and weighed by how much each covers, so
+/// that a dark edge of the see-through part does not bleed in.
+pub(crate) fn halved(size: [usize; 2], rgba: &[u8]) -> Option<([usize; 2], Vec<u8>)> {
+    let [w, h] = size;
+    if w.checked_mul(h)?.checked_mul(4)? != rgba.len() || (w < 2 && h < 2) {
+        return None;
+    }
+    let half = [w.div_ceil(2), h.div_ceil(2)];
+    let mut out = Vec::with_capacity(half[0].checked_mul(half[1])?.checked_mul(4)?);
+    for y in 0..half[1] {
+        for x in 0..half[0] {
+            let (mut sum, mut cover, mut n) = ([0.0f32; 3], 0.0f32, 0.0f32);
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let (sx, sy) = (2 * x + dx, 2 * y + dy);
+                if sx >= w || sy >= h {
+                    continue;
+                }
+                let at = (sy * w + sx) * 4;
+                let Some(&[r, g, b, a]) = rgba.get(at..at + 4) else { continue };
+                let a = f32::from(a) / 255.0;
+                for (s, c) in sum.iter_mut().zip([r, g, b]) {
+                    *s += linear(c) * a;
+                }
+                cover += a;
+                n += 1.0;
+            }
+            for s in sum {
+                out.push(if cover > 0.0 { gamma(s / cover) } else { 0 });
+            }
+            out.push(if n > 0.0 { (cover / n * 255.0).round().clamp(0.0, 255.0) as u8 } else { 0 });
+        }
+    }
+    Some((half, out))
 }
 
 fn content_ids<'a>(blocks: &'a [Block], out: &mut Vec<&'a str>, depth: usize) {

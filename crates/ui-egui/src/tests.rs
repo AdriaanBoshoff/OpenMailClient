@@ -1457,7 +1457,7 @@ fn a_picture_that_moves_is_played_frame_by_frame_or_stands_still() {
     assert_eq!((reel.at(f64::NAN), reel.at(-4.0).0), ((0, None), 0));
     // Played, the window is asked to draw again when the next frame is due; standing still it
     // is the first frame and nothing is asked.
-    assert_eq!(moves.frame(&ctx, false), moves.texture.id());
+    assert_eq!(moves.frame(&ctx, false, moves.size), moves.texture.id());
     for moving in [true, false] {
         shown.moving = moving;
         for width in [0.0, 300.0] {
@@ -4220,4 +4220,41 @@ fn the_compose_box_draws_formatted_text_and_says_what_was_done() {
     });
     output.textures_delta.clear();
     assert!(said.is_empty(), "nothing is done by drawing it: {said:?}");
+}
+
+#[test]
+fn a_picture_is_halved_by_the_mean_of_its_light_and_a_see_through_edge_does_not_darken() {
+    // Black and white side by side become the grey that gives back half the light, not 128.
+    let (size, out) = pictures::halved([2, 1], &[0, 0, 0, 255, 255, 255, 255, 255]).unwrap();
+    assert_eq!(size, [1, 1]);
+    assert!((186..=189).contains(&out[0]) && out[0] == out[1] && out[1] == out[2] && out[3] == 255, "{out:?}");
+    // Red beside a clear black pixel stays red, half covering.
+    let (_, out) = pictures::halved([2, 1], &[255, 0, 0, 255, 0, 0, 0, 0]).unwrap();
+    assert_eq!(out, vec![255, 0, 0, 128]);
+    // An odd edge is the mean of what there is; one pixel is not halved; a wrong length is refused.
+    let (size, out) = pictures::halved([3, 1], &[10, 10, 10, 255, 10, 10, 10, 255, 200, 200, 200, 255]).unwrap();
+    assert_eq!((size, &out[4..]), ([2, 1], &[200u8, 200, 200, 255][..]));
+    assert!(pictures::halved([1, 1], &[1, 2, 3, 4]).is_none());
+    assert!(pictures::halved([4, 4], &[0; 12]).is_none());
+    assert!(pictures::halved([usize::MAX, 2], &[]).is_none());
+}
+
+#[test]
+fn a_large_picture_drawn_small_is_drawn_from_a_copy_near_its_size() {
+    let ctx = egui::Context::default();
+    let (w, h) = (1200usize, 300usize);
+    let rgba: Vec<u8> = (0..w * h).flat_map(|n| if (n % w + n / w) % 2 == 0 { [0, 0, 0, 255] } else { [255, 255, 255, 255] }).collect();
+    let (full, smaller, bytes) = pictures::textures(&ctx, "big", [w, h], &rgba).unwrap();
+    assert_eq!(smaller.iter().map(|t| t.size()).collect::<Vec<_>>(), [[600, 150], [300, 75], [150, 38], [75, 19], [38, 10], [19, 5]]);
+    assert!(bytes < rgba.len() * 4 / 3 + 4096, "{bytes}");
+    let id = |px: (f32, f32)| pictures::sharpest(&full, &smaller, egui::vec2(px.0, px.1));
+    // Drawn 380 wide, it comes from the 600: shrunk by less than half, every pixel counting.
+    assert_eq!(id((380.0, 95.0)), smaller[0].id());
+    assert_eq!(id((300.0, 75.0)), smaller[1].id());
+    assert_eq!(id((1200.0, 300.0)), full.id());
+    assert_eq!(id((2400.0, 600.0)), full.id());
+    assert_eq!(id((1.0, 1.0)), smaller[5].id());
+    // A checkerboard shrunk is the even grey of its light, not a pattern of what was sampled.
+    let (_, grey) = pictures::halved([w, h], &rgba).unwrap();
+    assert!(grey.chunks(4).all(|p| (186..=189).contains(&p[0])), "every pixel the same grey");
 }

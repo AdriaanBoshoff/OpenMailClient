@@ -25,6 +25,7 @@
 //!                                            the rest as words)
 //! {"arrive": "raw RFC 5322 text"}           put a message in the fake server's Inbox
 //! {"settle": true}                           draw until the jobs under way have ended
+//! {"wait": 500}                              draw for that many milliseconds, as for pictures decoded apart
 //! {"region": ["yyyy/MM/dd", "dddd, d MMMM yyyy", "HH:mm", 1]}
 //!                                            write dates as a region does: short and long
 //!                                            date, time, and the first day of the week
@@ -165,6 +166,12 @@ fn run() -> Result<(), String> {
                 if harness.state().session.jobs.is_empty() {
                     break;
                 }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                harness.run_steps(1);
+            }
+        } else if let Some(ms) = step.get("wait").and_then(Value::as_u64) {
+            let end = std::time::Instant::now() + std::time::Duration::from_millis(ms.min(10_000));
+            while std::time::Instant::now() < end {
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 harness.run_steps(1);
             }

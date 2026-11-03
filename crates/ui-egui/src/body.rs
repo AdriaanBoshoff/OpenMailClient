@@ -799,7 +799,12 @@ fn picture(ui: &Ui, run: &Run, stand: Stand, at: Rect, look: Look) {
             if backed(drawn, look) {
                 ui.painter().rect_filled(at.expand(BACKING_MARGIN), 3.0, BACKING);
             }
-            ui.painter().image(drawn.frame(ui.ctx(), look.pictures.moving), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            ui.painter().image(
+                drawn.frame(ui.ctx(), look.pictures.moving, at.size()),
+                at,
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
         }
         Stand::Frame => frame(ui, run, at, look),
         // A card is set as low as the tails of the letters beside it, so that its words stand on

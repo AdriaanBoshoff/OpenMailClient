@@ -68,7 +68,8 @@ pub(crate) enum Did {
 /// A picture being decoded, decoded, or that could not be.
 enum Slot {
     Pending,
-    Ready(TextureHandle, Vec2),
+    /// The picture, its copies at each half of its size, and its own size.
+    Ready(TextureHandle, Vec<TextureHandle>, Vec2),
     Failed,
 }
 
@@ -89,21 +90,19 @@ fn key_of(bytes: &[u8]) -> u64 {
 fn decoded(ctx: &egui::Context, bytes: &[u8]) -> Slot {
     let Some(pixels) = openmailclient_engine::pictures::decode(bytes) else { return Slot::Failed };
     let (Ok(w), Ok(h)) = (usize::try_from(pixels.width), usize::try_from(pixels.height)) else { return Slot::Failed };
-    if w.checked_mul(h).and_then(|n| n.checked_mul(4)) != Some(pixels.rgba.len()) {
-        return Slot::Failed;
-    }
-    let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &pixels.rgba);
+    let Some((texture, smaller, _)) = crate::pictures::textures(ctx, "written-picture", [w, h], &pixels.rgba) else { return Slot::Failed };
     let natural = vec2(f32::from(pixels.natural.0), f32::from(pixels.natural.1));
-    Slot::Ready(ctx.load_texture("written-picture", image, egui::TextureOptions::LINEAR), natural)
+    Slot::Ready(texture, smaller, natural)
 }
 
 impl Inline {
-    /// The picture decoded, with its own size; `None` while it is decoded or if it cannot be.
-    fn get(&self, ctx: &egui::Context, p: &Picture) -> Option<(egui::TextureId, Vec2)> {
+    /// The picture decoded, with its copies and its own size; `None` while it is decoded or if
+    /// it cannot be.
+    fn get(&self, ctx: &egui::Context, p: &Picture) -> Option<(TextureHandle, Vec<TextureHandle>, Vec2)> {
         let key = key_of(&p.bytes);
         let Ok(mut slots) = self.0.lock() else { return None };
         match slots.get(&key) {
-            Some(Slot::Ready(texture, size)) => return Some((texture.id(), *size)),
+            Some(Slot::Ready(texture, smaller, size)) => return Some((texture.clone(), smaller.clone(), *size)),
             Some(_) => return None,
             None => {}
         }
@@ -209,9 +208,10 @@ pub(crate) fn styled(ctx: &egui::Context, faces: &mut Faces, inline: &Inline, w:
                 let look = match m.picture.and_then(|id| f.pictures.iter().find(|p| p.id == id)) {
                     Some(p) => {
                         let ready = inline.get(ctx, p);
-                        let size = picture_size(p, ready.map(|(_, s)| s), room - 8.0);
-                        if let Some((texture, _)) = ready {
-                            styled.pictures.insert(styled.looks.len(), texture);
+                        let size = picture_size(p, ready.as_ref().map(|(_, _, s)| *s), room - 8.0);
+                        if let Some((texture, smaller, _)) = &ready {
+                            let px = size * ctx.pixels_per_point();
+                            styled.pictures.insert(styled.looks.len(), crate::pictures::sharpest(texture, smaller, px));
                         }
                         Look::Room(size.x, size.y)
                     }
