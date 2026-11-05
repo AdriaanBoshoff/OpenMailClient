@@ -14,6 +14,8 @@ pub mod app_icon;
 mod body;
 mod calendar;
 mod calendar_file;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod control;
 mod dialog;
 mod faces;
 pub mod icons;

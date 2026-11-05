@@ -54,6 +54,47 @@ pub struct CommandSpec {
     pub run: fn(&mut Session, &Value) -> CmdResult,
 }
 
+/// Commands that reach beyond this machine: they send mail or answers, talk to a server, change
+/// what an account is, or bring down and run an update. Whatever drives the window from outside
+/// it (the control channel, the MCP server) runs them only where the owner has allowed it.
+pub const REACHES_OUT: &[&str] = &[
+    "compose.send",
+    "mail.sendAll",
+    "mail.sendReceive",
+    "mail.sendReceiveEvery",
+    "mail.newMailAsItComes",
+    "mail.downloadPictures",
+    "account.add",
+    "account.edit",
+    "account.remove",
+    "account.test",
+    "account.find",
+    "account.receive",
+    "account.trustCertificate",
+    "account.setPassword",
+    "calendar.sendInvitations",
+    "calendar.cancelMeeting",
+    "calendar.respond",
+    "calendar.sync",
+    "people.sync",
+    "people.mailMerge",
+    "tasks.respond",
+    "tasks.sendStatusReport",
+    "tasks.sync",
+    "help.checkForUpdates",
+    "help.downloadUpdate",
+    "help.installUpdate",
+];
+
+/// Commands that carry a secret in their parameters: never run from outside the window, so a
+/// password never passes through a channel, a log or an agent.
+pub const CARRIES_SECRET: &[&str] = &["account.setPassword"];
+
+/// Whether a command reaches beyond this machine ([`REACHES_OUT`]).
+pub fn reaches_out(id: &str) -> bool {
+    REACHES_OUT.contains(&id)
+}
+
 pub fn registry() -> &'static [CommandSpec] {
     static REG: OnceLock<Vec<CommandSpec>> = OnceLock::new();
     REG.get_or_init(|| {

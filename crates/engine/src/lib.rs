@@ -109,7 +109,7 @@ use openmailclient_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, I
 use serde_json::{Value, json};
 
 pub use cmd::format::{Writing, write as write_formatted};
-pub use cmd::{CommandSpec, registry};
+pub use cmd::{CARRIES_SECRET, CommandSpec, REACHES_OUT, reaches_out, registry};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {

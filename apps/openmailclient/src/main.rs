@@ -1,8 +1,12 @@
 //! The OpenMailClient desktop app.
 //!
 //! ```text
-//! openmailclient [--sample] [--dark] [--classic-ribbon] [--no-settings] [file.pst | file.ost | file.msg | file.eml | file.oft]...
+//! openmailclient [--sample] [--dark] [--classic-ribbon] [--no-settings] [--control PORT [--control-reach-out]] [file.pst | file.ost | file.msg | file.eml | file.oft]...
 //! ```
+//!
+//! `--control PORT` lets scripts and agents drive the window by JSON lines on 127.0.0.1:PORT, with
+//! the key it writes beside the settings (`openmailclient_ui_egui::control`); commands that reach
+//! beyond this machine run through it only with `--control-reach-out`.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -27,6 +31,8 @@ struct App {
     settled: Option<std::time::Instant>,
     /// When the app started: the clock saving on its own goes by.
     started: std::time::Instant,
+    /// The control channel, when the window was started with one.
+    control: Option<openmailclient_ui_egui::control::Control>,
 }
 
 impl App {
@@ -357,6 +363,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.ui.ui(ui);
         let ctx = ui.ctx().clone();
+        if let Some(control) = self.control.as_mut() {
+            control.serve(&mut self.ui, &ctx);
+        }
         // Closing the window with unsaved changes asks once before they are thrown away.
         if ctx.input(|i| i.viewport().close_requested()) && !self.ui.may_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -403,6 +412,8 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        // The channel closes first: nothing is asked of a window on its way out.
+        self.control = None;
         // Work on threads of its own is stopped, not waited out.
         self.ui.session.leave_jobs(std::time::Duration::from_secs(2));
         self.ui.session.finish_saves();
@@ -464,22 +475,41 @@ fn main() -> ExitCode {
     // Outlook's profiles are read only when an import from Outlook is asked for.
     session.outlook = Some(std::sync::Arc::new(openmailclient_engine::outlook::system_profiles));
     session.outlook_signatures = openmailclient_engine::signatures::outlook_dir();
-    let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null, written: None, settled: None, started: std::time::Instant::now() };
+    let mut app = App {
+        ui: MailUi::new(session),
+        settings,
+        kept: Value::Null,
+        written: None,
+        settled: None,
+        started: std::time::Instant::now(),
+        control: None,
+    };
     if let Some(path) = app.settings.clone() {
         // The data files of last time are opened again unless this run names what to open.
         let reopen = !args.iter().any(|a| a == "--sample" || !a.starts_with("--"));
         app.run("settings.load", json!({ "path": path.display().to_string(), "reopen": reopen }));
         app.kept = app.ui.session.settings(Some(&app.ui.settings()));
     }
-    for arg in args {
+    let mut control: Option<u16> = None;
+    let reach_out = args.iter().any(|a| a == "--control-reach-out");
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--control" => match args.next().and_then(|p| p.parse::<u16>().ok()) {
+                Some(port) => control = Some(port),
+                None => {
+                    eprintln!("openmailclient: --control takes a port number");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--control-reach-out" => {}
             "--no-settings" => {}
             "--sample" => app.run("file.openSample", Value::Null),
             "--dark" => app.run("ui.theme", json!({ "theme": "dark" })),
             "--classic-ribbon" => app.run("ui.ribbonMode", json!({ "mode": "classic" })),
             "--help" | "-h" => {
                 println!(
-                    "openmailclient [--sample] [--dark] [--classic-ribbon] [--no-settings] [file.pst | file.ost | file.msg | file.eml | file.oft]..."
+                    "openmailclient [--sample] [--dark] [--classic-ribbon] [--no-settings] [--control PORT [--control-reach-out]] [file.pst | file.ost | file.msg | file.eml | file.oft]..."
                 );
                 return ExitCode::SUCCESS;
             }
@@ -520,6 +550,24 @@ fn main() -> ExitCode {
         // A watched Inbox that heard of new mail wakes the window, which receives it at once.
         let ctx = cc.egui_ctx.clone();
         app.ui.session.waker = Some(std::sync::Arc::new(move || ctx.request_repaint()));
+        if let Some(port) = control {
+            let ctx = cc.egui_ctx.clone();
+            let key_dir = settings_path().and_then(|p| p.parent().map(std::path::Path::to_path_buf));
+            let listening = match key_dir {
+                Some(dir) => openmailclient_ui_egui::control::listen(port, &dir, reach_out, std::sync::Arc::new(move || ctx.request_repaint())),
+                None => Err("there is no folder for the channel's key".to_string()),
+            };
+            match listening {
+                Ok(channel) => {
+                    app.ui.session.status = format!("Control channel on 127.0.0.1:{}", channel.port());
+                    app.control = Some(channel);
+                }
+                Err(e) => {
+                    eprintln!("openmailclient: no control channel: {e}");
+                    app.ui.session.status = format!("No control channel: {e}");
+                }
+            }
+        }
         Ok(Box::new(app))
     };
     match eframe::run_native("OpenMailClient", options, Box::new(creator)) {

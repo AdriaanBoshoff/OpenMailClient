@@ -3167,3 +3167,27 @@ fn copy_folder_makes_the_folder_again_with_what_it_holds() {
         assert!(s.run("folder.copy", &bad).is_err(), "{bad}");
     }
 }
+
+/// What reaches beyond this machine is named by real commands, every account change among them,
+/// and a command that carries a password is one of them.
+#[test]
+fn commands_that_reach_out_are_real_commands() {
+    let ids: Vec<&str> = registry().iter().map(|c| c.id).collect();
+    for id in crate::REACHES_OUT.iter().chain(crate::CARRIES_SECRET) {
+        assert!(ids.contains(id), "{id} is not a command");
+    }
+    for id in &ids {
+        if id.starts_with("account.") && *id != "account.list" {
+            assert!(crate::reaches_out(id), "{id} changes or reaches an account");
+        }
+        // Replies and forwards open a message to be written; only its Send sends it.
+        let lower = id.to_lowercase();
+        if (lower.contains("send") && !lower.contains("sender")) || lower.ends_with(".respond") {
+            assert!(crate::reaches_out(id), "{id} sends");
+        }
+    }
+    for id in crate::CARRIES_SECRET {
+        assert!(crate::reaches_out(id));
+    }
+    assert!(!crate::reaches_out("mail.select") && !crate::reaches_out("file.save"));
+}
