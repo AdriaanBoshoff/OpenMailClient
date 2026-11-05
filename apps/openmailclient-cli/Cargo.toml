@@ -12,4 +12,5 @@ workspace = true
 [dependencies]
 openmailclient-model = { workspace = true }
 openmailclient-engine = { workspace = true }
+openmailclient-mcp = { workspace = true }
 serde_json = { workspace = true }

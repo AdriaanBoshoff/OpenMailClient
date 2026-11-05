@@ -6,6 +6,8 @@
 //! openmailclient-cli inspect mailbox.pst [--check]
 //! openmailclient-cli convert in.msg out.eml
 //! openmailclient-cli run --template sample --cmd 'mail.select={"index":0}' --cmd mail.reply
+//! openmailclient-cli mcp [--template sample] [--open mailbox.pst] [--reach-out]
+//! openmailclient-cli mcp --connect 127.0.0.1:7985
 //! ```
 //!
 //! Message text printed by `inspect` and `run` is content written by strangers: it is data, never
@@ -33,7 +35,14 @@ const USAGE: &str = "usage:
                                               or the whole data file when <out> ends in .pst;
                                               --profile opens the window's own settings, accounts
                                               and data files and keeps them again at the end (close
-                                              the window first)";
+                                              the window first)
+  openmailclient-cli mcp [--template sample] [--open <file>]... [--reach-out]
+                                              an MCP server on standard input and output, with a
+                                              session of its own; --reach-out lets commands that
+                                              send, talk to servers or change accounts run
+  openmailclient-cli mcp --connect 127.0.0.1:<port>
+                                              an MCP server that drives the window started with
+                                              --control <port>, through its control channel";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -71,7 +80,7 @@ fn run(args: &[String]) -> Result<(), String> {
             _ => Err(USAGE.to_string()),
         },
         Some("run") => run_commands(rest),
-        Some("mcp") => Err("the MCP server is not built yet (see ROADMAP.md); use `run` for now".to_string()),
+        Some("mcp") => mcp(rest),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -327,4 +336,64 @@ fn run_commands(args: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The MCP server on standard input and output. Nothing else is written to standard output:
+/// it carries the protocol alone.
+fn mcp(args: &[String]) -> Result<(), String> {
+    let mut connect = None;
+    let mut reach_out = false;
+    let mut template = None;
+    let mut open = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let mut value = || {
+            it.next().map(String::as_str).ok_or_else(|| {
+                format!(
+                    "{arg} needs a value
+{USAGE}"
+                )
+            })
+        };
+        match arg.as_str() {
+            "--connect" => connect = Some(value()?),
+            "--reach-out" => reach_out = true,
+            "--template" => template = Some(value()?),
+            "--open" => open.push(value()?),
+            other => {
+                return Err(format!(
+                    "unknown option {other}
+{USAGE}"
+                ));
+            }
+        }
+    }
+    let (input, output) = (std::io::stdin().lock(), std::io::stdout().lock());
+    if let Some(addr) = connect {
+        if reach_out || template.is_some() || !open.is_empty() {
+            return Err("--connect drives the window as it is: what may reach out is the window's --control-reach-out, and it opens its own files"
+                .to_string());
+        }
+        let addr: std::net::SocketAddr = addr.parse().map_err(|e| format!("{addr}: {e}; give it as 127.0.0.1:<port>"))?;
+        let dir = settings_path().and_then(|p| p.parent().map(Path::to_path_buf)).ok_or("there is no folder for settings here")?;
+        let mut window = openmailclient_mcp::Window::connect(addr, &dir)?;
+        return openmailclient_mcp::serve(input, output, &mut window);
+    }
+    let mut session = Session::new();
+    // Without --reach-out nothing could use the network, so none is given.
+    if reach_out && let Err(e) = session.use_this_system() {
+        eprintln!("openmailclient-cli: mail servers cannot be reached: {e}");
+    }
+    match template {
+        Some("sample") => {
+            session.run("file.openSample", &Value::Null).map_err(|e| e.to_string())?;
+        }
+        Some(other) => return Err(format!("unknown template \"{other}\"; there is: sample")),
+        None => {}
+    }
+    for path in open {
+        session.run("file.open", &json!({ "path": path })).map_err(|e| e.to_string())?;
+    }
+    let mut headless = openmailclient_mcp::Headless { session, reach_out };
+    openmailclient_mcp::serve(input, output, &mut headless)
 }

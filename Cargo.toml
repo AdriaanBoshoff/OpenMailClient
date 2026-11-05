@@ -21,6 +21,7 @@ openmailclient-layout = { path = "crates/layout" }
 openmailclient-render = { path = "crates/render" }
 openmailclient-net = { path = "crates/net" }
 openmailclient-engine = { path = "crates/engine" }
+openmailclient-mcp = { path = "crates/mcp" }
 openmailclient-ui-egui = { path = "crates/ui-egui" }
 
 # foundation

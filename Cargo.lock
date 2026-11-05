@@ -2921,6 +2921,7 @@ name = "openmailclient-cli"
 version = "0.1.0-alpha.4"
 dependencies = [
  "openmailclient-engine",
+ "openmailclient-mcp",
  "openmailclient-model",
  "serde_json",
 ]
@@ -2979,6 +2980,14 @@ dependencies = [
  "openmailclient-formats",
  "skrifa",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "openmailclient-mcp"
+version = "0.1.0-alpha.4"
+dependencies = [
+ "openmailclient-engine",
+ "serde_json",
 ]
 
 [[package]]

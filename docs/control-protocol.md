@@ -48,7 +48,7 @@ The window answers between frames; a request it has not answered within a minute
 | `control.ping` | none | `{"pong": true, "port", "reachOut"}` |
 | `engine.commands` | none | every command, the engine's and the window's own: `[{"id", "label", "params", "reachesOut"}]` |
 | `engine.execute` | `{"command": id, "params": {…}}` | `{"result", "note"}`: the command run as if from the ribbon |
-| `engine.state` | none | `{"module", "folder", "items", "unread", "selected", "status", "unsaved", "jobs"}`, without the words of any message |
+| `engine.state` | none | `{"module", "folder", "items", "unread", "selected", "selectedCount", "status", "unsaved", "jobs"}`, without the words of any message; `selected` is the selected item's id, `selectedCount` how many are selected |
 | `ui.screenshot` | `{"path": "….png"}` | `{"path", "width", "height"}`: the window as it is drawn |
 
 `openmailclient-cli commands` lists the commands and their parameters too.
