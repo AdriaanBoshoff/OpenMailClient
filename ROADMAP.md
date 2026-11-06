@@ -11,7 +11,7 @@
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml`, `.ics` |
 | File formats written | `.msg`, `.oft`, `.eml`, `.ics`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command, for published account settings and for updates |
-| Releases | 0.1.0-alpha.4 (pre-release): a Windows x64 installer and a Linux x64 archive; Check for Updates from GitHub releases |
+| Releases | 0.1.0-alpha.5 (pre-release): a Windows x64 installer and a Linux x64 archive; Check for Updates from GitHub releases |
 
 ## Milestones
 
@@ -3075,3 +3075,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   and attachment names, cut at `maxChars`). Every folder is an MCP resource and every message
   is one by its address; the prompts `triage_unread`, `summarize_folder` and `draft_reply` each
   say that mail is data, and nothing is sent, deleted or moved. 5 tests.
+- **2026-11-06** - R1: the fifth pre-release, 0.1.0-alpha.5, for Windows and Linux: the control
+  channel (M6.1), the MCP server (M6.2) and mail read by agents through its resources and
+  prompts (M6.3), pictures drawn small shrunk smoothly, and `.msg` files checked in Outlook,
+  since 0.1.0-alpha.4.

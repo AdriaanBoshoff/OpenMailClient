@@ -186,10 +186,10 @@ a reader we can try without driving a window, a printer we may use).
 
 ## Download
 
-The newest pre-release, **0.1.0-alpha.4**, is on the
+The newest pre-release, **0.1.0-alpha.5**, is on the
 [releases page](https://github.com/AdriaanBoshoff/OpenMailClient/releases) for Windows and Linux.
 
-**Windows 10 and 11 (x64):** `OpenMailClient-0.1.0-alpha.4-windows-x64-setup.exe`. It installs for you alone unless you
+**Windows 10 and 11 (x64):** `OpenMailClient-0.1.0-alpha.5-windows-x64-setup.exe`. It installs for you alone unless you
 choose everyone, needs no administrator, and asks whether to put OpenMailClient on the Start menu
 and the desktop. Uninstalling it leaves your mail, settings and accounts where they are.
 `SHA256SUMS.txt` beside it gives the installer's SHA-256.
@@ -197,17 +197,17 @@ and the desktop. Uninstalling it leaves your mail, settings and accounts where t
 The installer is not signed yet, so Windows SmartScreen may ask whether to run it ("More info",
 then "Run anyway").
 
-**Linux (x64):** `OpenMailClient-0.1.0-alpha.4-linux-x64.tar.gz`, for any distribution with glibc
+**Linux (x64):** `OpenMailClient-0.1.0-alpha.5-linux-x64.tar.gz`, for any distribution with glibc
 2.31 or newer (Ubuntu 20.04, Debian 11, Fedora 32 and since) and an X11 or Wayland desktop. It
 installs for you alone, under `~/.local`, with no administrator, and puts OpenMailClient among
 your applications:
 
 ```bash
-tar xzf OpenMailClient-0.1.0-alpha.4-linux-x64.tar.gz
+tar xzf OpenMailClient-0.1.0-alpha.5-linux-x64.tar.gz
 ```
 
 ```bash
-OpenMailClient-0.1.0-alpha.4-linux-x64/install.sh
+OpenMailClient-0.1.0-alpha.5-linux-x64/install.sh
 ```
 
 `install.sh --uninstall` takes it away again and leaves your mail, settings and accounts where

@@ -2901,7 +2901,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "eframe",
  "egui",
@@ -2918,7 +2918,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-cli"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "openmailclient-engine",
  "openmailclient-mcp",
@@ -2928,7 +2928,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-engine"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "base64 0.22.1",
  "cfb",
@@ -2956,7 +2956,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-fonts"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "fontdb",
  "skrifa",
@@ -2965,7 +2965,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-formats"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "openmailclient-fonts",
  "openmailclient-model",
@@ -2973,7 +2973,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-layout"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "harfrust",
  "openmailclient-fonts",
@@ -2984,7 +2984,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-mcp"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "openmailclient-engine",
  "serde_json",
@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-mime"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
@@ -3002,7 +3002,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-model"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "encoding_rs",
  "thiserror 2.0.21",
@@ -3010,7 +3010,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-msg"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "cfb",
  "openmailclient-model",
@@ -3020,7 +3020,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-net"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "base64 0.22.1",
  "keyring",
@@ -3036,7 +3036,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-pdf"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "miniz_oxide 0.8.9",
  "openmailclient-fonts",
@@ -3046,7 +3046,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-pst"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "miniz_oxide 0.8.9",
  "openmailclient-model",
@@ -3055,7 +3055,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-render"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "openmailclient-fonts",
  "openmailclient-formats",
@@ -3064,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "openmailclient-ui-egui"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -5572,7 +5572,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "image",
  "openmailclient-engine",
