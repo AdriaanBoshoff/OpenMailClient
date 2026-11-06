@@ -18,7 +18,8 @@ use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// Something the host gives so that it is woken when a watch heard something: the window
 /// repaints, and asks `Session::send_receive_due`.

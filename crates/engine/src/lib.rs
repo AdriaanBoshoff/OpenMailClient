@@ -629,7 +629,7 @@ impl Read {
 
 impl Session {
     pub fn new() -> Self {
-        let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let unix = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         Self {
             accounts: Vec::new(),
             vault: std::sync::Arc::new(openmailclient_net::MemoryVault::default()),

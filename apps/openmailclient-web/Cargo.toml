@@ -1,0 +1,23 @@
+[package]
+name = "openmailclient-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "OpenMailClient in a web browser: the same window, built for WebAssembly"
+
+[lints]
+workspace = true
+
+[dependencies]
+openmailclient-engine = { workspace = true }
+openmailclient-ui-egui = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit"] }
+egui = { workspace = true }
+# The browser's clock and time zone for chrono, where the system has none.
+chrono = { workspace = true, features = ["wasmbind"] }
+wasm-bindgen-futures = "0.4"
+web-time = { workspace = true }

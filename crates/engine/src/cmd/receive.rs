@@ -243,7 +243,7 @@ struct Handing<'a> {
     so_far: usize,
     unsaved: u64,
     #[cfg(not(target_arch = "wasm32"))]
-    last: std::time::Instant,
+    last: web_time::Instant,
 }
 
 impl Handing<'_> {
@@ -270,7 +270,7 @@ impl Handing<'_> {
         part.part = Some((self.so_far, save));
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.last = std::time::Instant::now();
+            self.last = web_time::Instant::now();
         }
         (self.give)(part)
     }
@@ -431,7 +431,7 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
                 so_far: 0,
                 unsaved: 0,
                 #[cfg(not(target_arch = "wasm32"))]
-                last: std::time::Instant::now(),
+                last: web_time::Instant::now(),
             };
             let one = match t.reach.account.kind {
                 Kind::Imap => match t.gather.take().map(|g| g.finish(progress)).transpose() {
@@ -1063,8 +1063,8 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, said: V
 fn kept(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut said: Vec<String>, last: bool) -> (String, Value) {
     let mut failed = false;
     let now = s.now.max(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .ok()
             .and_then(|d| i64::try_from(d.as_secs()).ok())
             .map_or(0, openmailclient_model::time::from_unix),

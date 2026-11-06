@@ -8,12 +8,14 @@
 //! cargo xtask wasm      the engine and everything under it builds for wasm32
 //! cargo xtask icon      draw the program's icon into apps/openmailclient/assets
 //! cargo xtask package   build for release and make the Windows installer, or the Linux archive, and its sums
+//! cargo xtask web       build the web app into target/web
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[path = "../../crates/ui-egui/src/app_icon.rs"]
 mod app_icon;
 mod package;
+mod web;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -35,6 +37,7 @@ const LAYERS: &[(&str, &str, u8)] = &[
     ("openmailclient-ui-egui", "crates/ui-egui", 6),
     ("openmailclient", "apps/openmailclient", 7),
     ("openmailclient-cli", "apps/openmailclient-cli", 7),
+    ("openmailclient-web", "apps/openmailclient-web", 7),
 ];
 
 /// The only dependencies allowed inside one layer, each named: the rasteriser draws the pages
@@ -55,6 +58,8 @@ const WASM_CRATES: &[&str] = &[
     "openmailclient-render",
     "openmailclient-net",
     "openmailclient-engine",
+    "openmailclient-ui-egui",
+    "openmailclient-web",
 ];
 const ASSET_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "icns", "svg", "ttf", "otf", "woff", "woff2", "wav", "mp3", "ogg", "flac", "cur", "ani",
@@ -72,7 +77,8 @@ fn main() -> ExitCode {
         "wasm" => wasm(),
         "icon" => icon(),
         "package" => package::package(),
-        _ => Err("usage: cargo xtask <ci | assets | layers | parity | wasm | icon | package>".to_string()),
+        "web" => web::web(),
+        _ => Err("usage: cargo xtask <ci | assets | layers | parity | wasm | icon | package | web>".to_string()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

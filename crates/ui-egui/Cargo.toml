@@ -18,6 +18,7 @@ egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 chrono = { workspace = true }
+web-time = { workspace = true }
 # Decodes pictures a message carries as attachments; nothing else is read with it.
 image = { workspace = true, features = ["jpeg", "gif", "bmp"] }
 # Pictures copied and pasted, written into HTML.

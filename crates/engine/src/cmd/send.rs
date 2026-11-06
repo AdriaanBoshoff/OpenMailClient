@@ -105,8 +105,8 @@ type Outcome = Result<openmailclient_net::smtp::Sent, NetError>;
 
 /// The time now, as the store keeps times; the session's own clock where there is none.
 pub(crate) fn clock(s: &Session) -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .ok()
         .and_then(|d| i64::try_from(d.as_secs()).ok())
         .map_or(s.now, openmailclient_model::time::from_unix)

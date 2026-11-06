@@ -730,7 +730,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -1127,6 +1129,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "egui_glow",
+ "glow",
  "glutin",
  "glutin-winit",
  "image",
@@ -2951,6 +2954,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.21",
+ "web-time",
  "windows-registry",
 ]
 
@@ -3082,6 +3086,21 @@ dependencies = [
  "openmailclient-model",
  "openmailclient-net",
  "serde_json",
+ "web-time",
+]
+
+[[package]]
+name = "openmailclient-web"
+version = "0.1.0-alpha.5"
+dependencies = [
+ "chrono",
+ "eframe",
+ "egui",
+ "openmailclient-engine",
+ "openmailclient-ui-egui",
+ "serde_json",
+ "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]

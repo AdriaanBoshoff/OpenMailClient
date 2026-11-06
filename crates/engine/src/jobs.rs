@@ -137,11 +137,11 @@ impl Session {
             return;
         }
         self.stop_jobs();
-        let until = std::time::Instant::now() + within;
+        let until = web_time::Instant::now() + within;
         loop {
             self.end_saves(true);
             self.end_jobs(false);
-            if self.jobs.is_empty() || std::time::Instant::now() >= until {
+            if self.jobs.is_empty() || web_time::Instant::now() >= until {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));

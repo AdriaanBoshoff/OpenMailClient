@@ -39,6 +39,8 @@ cfb = "0.15"
 uuid = "1"
 # Local time zone for display only; the model stores UTC FILETIME ticks.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# The clock: the system's on the desktop, the browser's on the web, where `std::time` has none.
+web-time = "1.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Installed fonts by family name; no font is bundled through it.
 fontdb = "0.24"
