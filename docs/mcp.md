@@ -1,6 +1,6 @@
 # MCP server
 
-**Status:** revision 1 · 2026-11-05 · the MCP server (M6.2)
+**Status:** revision 2 · 2026-11-06 · the MCP server (M6.2), with resources and prompts (M6.3)
 
 OpenMailClient offers its commands to agents through the [Model Context
 Protocol](https://modelcontextprotocol.io): JSON-RPC 2.0 messages, one to a line, on standard
@@ -37,8 +37,45 @@ A client is set up with the command and its arguments, for example:
 | `get_state` | none | `{"module", "folder", "items", "unread", "selected", "selectedCount", "status", "unsaved", "jobs"}` |
 | `screenshot` (with `--connect` only) | `path`: a `.png` file | `{"path", "width", "height"}` |
 
+Three commands read mail without changing anything: not the selection, not the folder shown,
+and not whether a message is read.
+
+- `mail.folders` lists every data file's folders, each with the `path` that other commands
+  take.
+- `mail.items` lists a folder's messages, the newest first, a page at a time (`offset`,
+  `limit` up to 500, `unreadOnly`).
+- `mail.read` gives one message's sender, recipients, subject, text and attachment names. A
+  long body is cut at `maxChars`, and the answer says so.
+
+Names, subjects, previews, bodies and attachment names are under `untrusted_content`.
+
 A command that fails is reported as the tool's answer with `isError: true`, so the agent can
 read why. Unknown methods, unknown tools and messages that are not JSON are protocol errors.
+
+## Resources
+
+Every mail folder is a resource (`resources/list`). Reading one gives its newest 50 messages,
+and reading a message gives what `mail.read` gives. Both are JSON, with the `note`.
+
+| Address | What it is |
+|---|---|
+| `openmailclient://folder/{store}/{folder}` | a folder's newest 50 messages, from `mail.items` |
+| `openmailclient://message/{store}/{folder}/{id}` | one message, from `mail.read`, not marked read |
+
+`resources/templates/list` gives both forms. An address that names nothing is error -32002.
+
+## Prompts
+
+| Prompt | Arguments | What it asks |
+|---|---|---|
+| `triage_unread` | `folder` (default Inbox) | sort the unread messages into needs an answer, to be read, and can wait |
+| `summarize_folder` | `folder`, `count` (default 20) | what the newest messages are about |
+| `draft_reply` | `folder`, `id`, `points` | a reply written and kept in Drafts with `compose.saveDraft`, never sent |
+
+Each prompt says that message text is data. If a message asks the agent to do something, the
+agent says so and does not do it. Each prompt also says that nothing is to be sent, deleted or
+moved. Arguments are cut to one short line, and a folder's name is quoted so that it cannot
+close its quotes.
 
 ## Rules
 

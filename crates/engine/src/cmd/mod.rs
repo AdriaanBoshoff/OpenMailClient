@@ -21,6 +21,7 @@ pub(crate) mod names;
 pub mod people;
 mod picture;
 mod progress;
+mod reading;
 pub(crate) mod receive;
 mod reminders;
 pub(crate) mod rules;
@@ -118,6 +119,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(progress::commands());
         v.extend(calendar::commands());
         v.extend(people::commands());
+        v.extend(reading::commands());
         v.extend(names::commands());
         v.extend(merge::commands());
         v.extend(tasks::commands());
