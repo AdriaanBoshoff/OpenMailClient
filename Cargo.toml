@@ -22,6 +22,7 @@ openmailclient-render = { path = "crates/render" }
 openmailclient-net = { path = "crates/net" }
 openmailclient-engine = { path = "crates/engine" }
 openmailclient-mcp = { path = "crates/mcp" }
+openmailclient-serve = { path = "crates/serve" }
 openmailclient-ui-egui = { path = "crates/ui-egui" }
 
 # foundation
@@ -55,6 +56,12 @@ harfrust = "0.12"
 unicode-bidi = { version = "0.3", default-features = false, features = ["hardcoded-data"] }
 # zlib streams in PDF files.
 miniz_oxide = "0.8"
+# The web password, kept only as an Argon2id hash (RustCrypto; MIT OR Apache-2.0).
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
+# Salts, keys and tokens from the system's source of randomness.
+getrandom = "0.3"
+# A password asked for at the console without showing it (Apache-2.0).
+rpassword = "7"
 
 # ui
 egui = "0.36"

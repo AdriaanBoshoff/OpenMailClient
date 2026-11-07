@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 170 · 2026-11-07 · ranked: the top of the list is what hurts most.
+**Status:** revision 171 · 2026-11-07 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -59,7 +59,7 @@
 4. **Tasks** has its views and the To-Do List with flagged mail beside the tasks (M5.9), and reminders come up for appointments, tasks and flagged mail (M5.10), and to-dos in calendar files are read into Tasks and Tasks saved as one (M5.11); tasks are kept in step with a CalDAV server's task lists (M5.12); the To-Do Bar stands beside every module (M5.12); tasks recur, made and changed in their window, and move on to their next occurrence once done (M5.17); a task is given to someone by mail, accepted or declined, and kept up to date from them (M5.18). People has its five views, contacts and groups and vCard files (M5.8); contacts are kept in step with a CardDAV server, and the Address Book, Check Names and Mail Merge are there (M5.11). The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6) and meetings, invitations sent, answered and called off (M5.7), answered with a comment or without telling (M5.12); the Scheduling Assistant shows when everyone asked is free and suggests times (M5.30).
 5. **Agents** reach OpenMailClient through the control channel (M6.1, [control-protocol.md](control-protocol.md)) and the MCP server (M6.2, [mcp.md](mcp.md)), which reads mail through resources and offers prompts (M6.3) and tells the agent of new mail, jobs ended, reminders and folders subscribed to (M6.5); not yet: the server over HTTP for agents elsewhere (M7).
 6. **Web build and web access.** The window runs in a browser (M6.4, [web.md](web.md)), opens data files and messages chosen there, gives them back as downloads, keeps its settings in the browser's storage and draws SVG (M6.6); long work there holds the page, as it has no threads; and the mailbox cannot be reached from a browser on another device (M7: served over HTTPS by
-   OpenMailClient itself from the machine it runs on, beside the window or headless on a server with no display, signed in from anywhere with one password, reset by a command on the host, failed sign-ins rate-limited and banned by address; see the M7 plan in [ROADMAP.md](../ROADMAP.md#m7-plan)).
+   OpenMailClient itself from the machine it runs on, beside the window or headless on a server with no display, signed in from anywhere with one password, reset by a command on the host, failed sign-ins rate-limited and banned by address; the password, its reset at the console and the bans are written (M7.2, M7.4, `crates/serve`), the server that uses them is not (M7.1); see the M7 plan in [ROADMAP.md](../ROADMAP.md#m7-plan)).
 
 ## Built but unproven
 
@@ -95,6 +95,7 @@
 
 ## Revision history
 
+- 171 · 2026-11-07 — M7.2, M7.4 (first parts): the web password and bans, `crates/serve` (item 6).
 - 170 · 2026-11-07 — M7 plan: one password, reset from the host's console; rate limits and bans (item 6).
 - 169 · 2026-11-07 — M7 plan: signing in from anywhere without the host's console, reaching a home from outside (item 6).
 - 168 · 2026-11-07 — M7 plan: a password and TOTP by default, hosts reached by an IP address (item 6).

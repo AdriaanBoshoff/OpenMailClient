@@ -13,4 +13,6 @@ workspace = true
 openmailclient-model = { workspace = true }
 openmailclient-engine = { workspace = true }
 openmailclient-mcp = { workspace = true }
+openmailclient-serve = { workspace = true }
+rpassword = { workspace = true }
 serde_json = { workspace = true }

@@ -34,6 +34,7 @@ const LAYERS: &[(&str, &str, u8)] = &[
     ("openmailclient-net", "crates/net", 3),
     ("openmailclient-engine", "crates/engine", 4),
     ("openmailclient-mcp", "crates/mcp", 5),
+    ("openmailclient-serve", "crates/serve", 5),
     ("openmailclient-ui-egui", "crates/ui-egui", 6),
     ("openmailclient", "apps/openmailclient", 7),
     ("openmailclient-cli", "apps/openmailclient-cli", 7),

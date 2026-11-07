@@ -1,0 +1,15 @@
+[package]
+name = "openmailclient-serve"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Web access (M7): the web password, sign-in limits and bans, and later the HTTPS server"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+argon2 = { workspace = true }
+getrandom = { workspace = true }
