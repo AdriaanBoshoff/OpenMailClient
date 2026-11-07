@@ -68,6 +68,16 @@ fn new_unread_mail_is_told_of_and_opened_but_not_what_was_there_first() {
         assert_eq!(s.run("mail.dismissArrived", &json!({ "seq": first })).unwrap()["left"], 1);
         assert_eq!(s.arrived.list[0].subject, "fourth");
         assert_eq!(s.run("mail.dismissArrived", &Value::Null).unwrap()["left"], 0);
+        // Agents hear of each, whatever was opened or put away meanwhile (M6.5).
+        let events = s.run("mail.events", &json!({})).unwrap();
+        let heard: Vec<String> = events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "newMail")
+            .map(|e| e["untrusted_content"]["subject"].as_str().unwrap().to_string())
+            .collect();
+        assert!(heard.ends_with(&["third".to_string(), "fourth".to_string()]), "{kind}: {heard:?}");
         assert!(s.run("mail.dismissArrived", &json!({ "seq": "x" })).is_err());
     }
 }

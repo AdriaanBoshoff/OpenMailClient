@@ -14,6 +14,7 @@ pub mod attachments;
 pub mod autocomplete;
 pub mod catalog;
 pub mod cmd;
+pub mod events;
 pub mod folder_view;
 pub mod io;
 pub mod jobs;
@@ -438,6 +439,8 @@ pub struct Session {
     pub(crate) parts: Vec<cmd::receive::PartsOf>,
     /// What the jobs that ended last came to, the newest last.
     pub finished: Vec<Value>,
+    /// What agents are told of: mail that came, work that ended, reminders that came due.
+    pub events: events::Events,
     /// The Outbox is to be sent again once the send under way ends: more was put in it.
     pub send_again: bool,
     /// Saves of data files that are being done away from the caller: `file.save` with
@@ -638,6 +641,7 @@ impl Session {
             job_seq: 0,
             parts: Vec::new(),
             finished: Vec::new(),
+            events: events::Events::default(),
             send_again: false,
             saves: Vec::new(),
             exports: Vec::new(),

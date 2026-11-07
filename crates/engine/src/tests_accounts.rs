@@ -158,6 +158,8 @@ fn a_test_runs_on_a_thread_of_its_own_and_ends_in_poll() {
     assert!(s.jobs.is_empty());
     let last = s.finished.last().unwrap();
     assert_eq!(last["result"]["incoming"]["ok"], true, "{last}");
+    let (events, _) = s.events.since(0);
+    assert_eq!(events.last().map(|e| e["kind"].clone()), Some(json!("jobEnded")));
     assert!(s.status.contains("nothing was sent"), "{}", s.status);
 }
 

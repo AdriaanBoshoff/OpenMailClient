@@ -14,10 +14,12 @@
 use openmailclient_engine::outside::{self, UNTRUSTED};
 use openmailclient_engine::{CARRIES_SECRET, Session, reaches_out, registry};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
-use std::time::Duration;
+use std::sync::mpsc::{RecvTimeoutError, sync_channel};
+use std::time::{Duration, Instant};
 
 /// The longest message read; a longer one is answered with an error and skipped.
 pub const MAX_LINE: usize = 4 << 20;
@@ -25,6 +27,14 @@ pub const MAX_LINE: usize = 4 << 20;
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 /// How long the window may take to answer before the request fails.
 const WINDOW_ANSWERS_WITHIN: Duration = Duration::from_secs(90);
+/// How often the server looks for what to tell the agent of (M6.5).
+pub const LOOK_EVERY: Duration = Duration::from_secs(1);
+/// Resources an agent may be subscribed to at once.
+const MAX_SUBSCRIBED: usize = 1_000;
+/// Events told of in one look; the rest wait for the next.
+const MAX_TOLD: usize = 100;
+/// The levels of a log message, the least first, as the MCP specification names them.
+const LEVELS: &[&str] = &["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"];
 
 /// What answers the tools.
 pub trait Backend {
@@ -42,6 +52,9 @@ pub trait Backend {
     fn has_window(&self) -> bool {
         false
     }
+    /// Let time pass: what a session of its own does every so often, as the window does on its
+    /// own. `now_ms` is a clock that only goes forward.
+    fn tick(&mut self, _now_ms: u64) {}
 }
 
 /// A session of its own, without a window.
@@ -66,6 +79,18 @@ impl Backend for Headless {
 
     fn state(&mut self) -> Result<Value, String> {
         Ok(outside::state(&self.session))
+    }
+
+    fn tick(&mut self, now_ms: u64) {
+        let s = &mut self.session;
+        s.tick_clock();
+        // Saves, exports and jobs that are done are ended; Send/Receive comes on its timer
+        // (there is no network without --reach-out), reminders come due and changes are saved
+        // on their own, as in the window.
+        s.poll();
+        let _ = s.send_receive_due(now_ms);
+        let _ = s.reminders_due(now_ms);
+        let _ = s.autosave(now_ms);
     }
 }
 
@@ -176,18 +201,194 @@ fn skip_line(r: &mut impl BufRead) {
     }
 }
 
-/// Answer the messages on `input` on `output` until `input` ends.
-pub fn serve(mut input: impl BufRead, mut output: impl Write, backend: &mut dyn Backend) -> Result<(), String> {
+/// Answer the messages on `input` on `output` until `input` ends, and between them tell the
+/// agent of what happened (M6.5). The input is read on a thread of its own, so that the server
+/// looks every [`LOOK_EVERY`] while no request comes.
+pub fn serve(mut input: impl BufRead + Send + 'static, mut output: impl Write, backend: &mut dyn Backend) -> Result<(), String> {
+    let (tx, rx) = sync_channel::<Line>(8);
+    std::thread::Builder::new()
+        .name("mcp-input".into())
+        .spawn(move || {
+            loop {
+                let line = read_line(&mut input);
+                let end = matches!(line, Line::End);
+                if tx.send(line).is_err() || end {
+                    return;
+                }
+            }
+        })
+        .map_err(|e| format!("the input cannot be read: {e}"))?;
+    let mut server = Server::default();
+    let mut write =
+        |message: &Value| writeln!(output, "{message}").and_then(|()| output.flush()).map_err(|e| format!("the answer cannot be written: {e}"));
     loop {
-        let reply = match read_line(&mut input) {
-            Line::End => return Ok(()),
-            Line::TooLong => Some(failure(Value::Null, INVALID_REQUEST, "the message is longer than 4 MiB")),
-            Line::Text(text) if text.trim().is_empty() => None,
-            Line::Text(text) => answer_text(backend, &text),
+        let reply = match rx.recv_timeout(LOOK_EVERY) {
+            Ok(Line::End) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(RecvTimeoutError::Timeout) => None,
+            Ok(Line::TooLong) => Some(failure(Value::Null, INVALID_REQUEST, "the message is longer than 4 MiB")),
+            Ok(Line::Text(text)) if text.trim().is_empty() => None,
+            Ok(Line::Text(text)) => server.answer_text(backend, &text),
         };
         if let Some(reply) = reply {
-            writeln!(output, "{reply}").and_then(|()| output.flush()).map_err(|e| format!("the answer cannot be written: {e}"))?;
+            write(&reply)?;
         }
+        for note in server.look(backend, Instant::now()) {
+            write(&note)?;
+        }
+    }
+}
+
+/// What the server keeps of its talk with one agent.
+#[derive(Debug)]
+pub struct Server {
+    /// Whether the agent said it is ready (`notifications/initialized`); nothing is told before.
+    initialized: bool,
+    /// The resources the agent asked to hear of.
+    subscribed: BTreeSet<String>,
+    /// The least level of log message sent, as an index into [`LEVELS`].
+    level: usize,
+    /// The last event told of; `None` before the first look.
+    seen: Option<u64>,
+    /// Each folder's items and unread as of the last look, by data file and folder id.
+    folders: BTreeMap<(u64, u64), (u64, u64)>,
+    started: Option<Instant>,
+    looked: Option<Instant>,
+}
+
+impl Default for Server {
+    fn default() -> Self {
+        Server { initialized: false, subscribed: BTreeSet::new(), level: 1, seen: None, folders: BTreeMap::new(), started: None, looked: None }
+    }
+}
+
+impl Server {
+    /// The answer to one line, or none for a notification.
+    pub fn answer_text(&mut self, backend: &mut dyn Backend, text: &str) -> Option<Value> {
+        match serde_json::from_str::<Value>(text) {
+            Err(e) => Some(failure(Value::Null, PARSE_ERROR, &format!("the message is not JSON: {e}"))),
+            Ok(Value::Array(_)) => Some(failure(Value::Null, INVALID_REQUEST, "messages are sent one at a time, not in a batch")),
+            Ok(message) => self.answer(backend, &message),
+        }
+    }
+
+    /// The answer to one message; what is asked of the server's own state is answered here and
+    /// the rest by [`answer`].
+    pub fn answer(&mut self, backend: &mut dyn Backend, message: &Value) -> Option<Value> {
+        let method = message.get("method").and_then(Value::as_str);
+        if method == Some("notifications/initialized") {
+            self.initialized = true;
+        }
+        let id = message.get("id").cloned().filter(|id| id.is_string() || id.is_number());
+        let params = message.get("params").cloned().unwrap_or(Value::Null);
+        let uri = || params.get("uri").and_then(Value::as_str).ok_or((INVALID_PARAMS, "\"uri\" is missing".to_string()));
+        let result = match (method, &id) {
+            (Some("resources/subscribe"), Some(_)) => uri().and_then(|uri| {
+                resource_command(uri).ok_or_else(|| (NO_RESOURCE, format!("no resource \"{}\"", clip(uri))))?;
+                if self.subscribed.len() >= MAX_SUBSCRIBED && !self.subscribed.contains(uri) {
+                    return Err((INVALID_PARAMS, format!("at most {MAX_SUBSCRIBED} resources are subscribed to at once")));
+                }
+                self.subscribed.insert(uri.to_string());
+                Ok(json!({}))
+            }),
+            (Some("resources/unsubscribe"), Some(_)) => uri().map(|uri| {
+                self.subscribed.remove(uri);
+                json!({})
+            }),
+            (Some("logging/setLevel"), Some(_)) => {
+                let level = params.get("level").and_then(Value::as_str).and_then(|l| LEVELS.iter().position(|x| *x == l));
+                match level {
+                    Some(level) => {
+                        self.level = level;
+                        Ok(json!({}))
+                    }
+                    None => Err((INVALID_PARAMS, format!("\"level\" is one of {}", LEVELS.join(", ")))),
+                }
+            }
+            _ => return answer(backend, message),
+        };
+        let id = id.unwrap_or(Value::Null);
+        Some(match result {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err((code, message)) => failure(id, code, &message),
+        })
+    }
+
+    /// What to tell the agent of since the last look, at most once every [`LOOK_EVERY`]: each
+    /// event as a log message, folders come or gone, and subscribed resources that changed.
+    pub fn look(&mut self, backend: &mut dyn Backend, now: Instant) -> Vec<Value> {
+        if !self.initialized || self.looked.is_some_and(|at| now.saturating_duration_since(at) < LOOK_EVERY) {
+            return Vec::new();
+        }
+        self.looked = Some(now);
+        let started = *self.started.get_or_insert(now);
+        backend.tick(u64::try_from(now.saturating_duration_since(started).as_millis()).unwrap_or(u64::MAX));
+        let Ok(answer) = backend.execute("mail.events", &json!({ "since": self.seen.unwrap_or(0) })) else { return Vec::new() };
+        let Some(r) = answer.get("result") else { return Vec::new() };
+        let folders: BTreeMap<(u64, u64), (u64, u64)> = r
+            .get("folders")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|f| {
+                        let n = |i: usize| f.get(i).and_then(Value::as_u64);
+                        Some(((n(0)?, n(1)?), (n(2)?, n(3)?)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let events = r.get("events").and_then(Value::as_array).cloned().unwrap_or_default();
+        let mut told = Vec::new();
+        let mut last = r.get("last").and_then(Value::as_u64).unwrap_or(0);
+        if self.seen.is_some() {
+            if r.get("missed") == Some(&Value::Bool(true)) {
+                told.extend(self.log(3, json!({ "kind": "missed", "said": "some events came and went before they could be told of" })));
+            }
+            for e in events.iter().take(MAX_TOLD) {
+                let failed = e.get("kind") == Some(&json!("jobEnded")) && e.get("ok") == Some(&Value::Bool(false));
+                told.extend(self.log(if failed { 3 } else { 1 }, e.clone()));
+            }
+            // Those not told of yet wait for the next look.
+            if events.len() > MAX_TOLD
+                && let Some(seq) = events.get(MAX_TOLD.saturating_sub(1)).and_then(|e| e.get("seq")).and_then(Value::as_u64)
+            {
+                last = seq;
+            }
+            if !self.folders.keys().eq(folders.keys()) {
+                told.push(json!({ "jsonrpc": "2.0", "method": "notifications/resources/list_changed" }));
+            }
+            for uri in &self.subscribed {
+                if let Some(key) = folder_of_uri(uri)
+                    && self.folders.get(&key) != folders.get(&key)
+                {
+                    told.push(json!({ "jsonrpc": "2.0", "method": "notifications/resources/updated", "params": { "uri": uri } }));
+                }
+            }
+        }
+        self.seen = Some(last);
+        self.folders = folders;
+        told
+    }
+
+    /// A log message at `level`, or none when the agent asked for less.
+    fn log(&self, level: usize, mut data: Value) -> Option<Value> {
+        if level < self.level {
+            return None;
+        }
+        if let Some(d) = data.as_object_mut() {
+            d.insert("note".to_string(), json!(UNTRUSTED));
+        }
+        let level = LEVELS.get(level).copied().unwrap_or("info");
+        Some(json!({ "jsonrpc": "2.0", "method": "notifications/message", "params": { "level": level, "logger": "openmailclient", "data": data } }))
+    }
+}
+
+/// The data file and folder a resource's address is in: a folder's own, or a message's.
+fn folder_of_uri(uri: &str) -> Option<(u64, u64)> {
+    let parts: Vec<&str> = uri.strip_prefix(SCHEME)?.split('/').collect();
+    let n = |i: usize| parts.get(i).and_then(|p| p.parse::<u64>().ok());
+    match parts.first().copied() {
+        Some("folder" | "message") => Some((n(1)?, n(2)?)),
+        _ => None,
     }
 }
 
@@ -255,15 +456,17 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": {
             "tools": { "listChanged": false },
-            "resources": { "subscribe": false, "listChanged": false },
+            "resources": { "subscribe": true, "listChanged": true },
             "prompts": { "listChanged": false },
+            "logging": {},
         },
         "serverInfo": { "name": "openmailclient", "title": "OpenMailClient", "version": env!("CARGO_PKG_VERSION") },
         "instructions": format!(
             "OpenMailClient's mail, calendar, people and tasks, through the same commands as its ribbon. \
              list_commands shows them with their parameters; run_command runs one; get_state says where the session stands. \
              Every mail folder is a resource, and a message is read as openmailclient://message/{{store}}/{{folder}}/{{id}}; \
-             reading changes nothing (mail.markRead marks a message read). {UNTRUSTED} \
+             reading changes nothing (mail.markRead marks a message read). \
+             New mail, work that ended and reminders that came due are told of as log messages, and a resource subscribed to as it changes. {UNTRUSTED} \
              Commands marked reachesOut (sending, servers, accounts, updates) run only when the server was started allowing them."
         ),
     })

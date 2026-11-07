@@ -1,6 +1,6 @@
 # MCP server
 
-**Status:** revision 2 · 2026-11-06 · the MCP server (M6.2), with resources and prompts (M6.3)
+**Status:** revision 3 · 2026-11-07 · the MCP server (M6.2), with resources and prompts (M6.3) and notifications (M6.5)
 
 OpenMailClient offers its commands to agents through the [Model Context
 Protocol](https://modelcontextprotocol.io): JSON-RPC 2.0 messages, one to a line, on standard
@@ -64,6 +64,29 @@ and reading a message gives what `mail.read` gives. Both are JSON, with the `not
 
 `resources/templates/list` gives both forms. An address that names nothing is error -32002.
 
+## Notifications
+
+Once the agent has sent `notifications/initialized`, the server looks about once a second for
+what happened, through the `mail.events` command, and tells the agent of it. Each thing is told
+once. Nothing is told of what was there before the agent came.
+
+| Notification | When |
+|---|---|
+| `notifications/message` | new mail came (`kind` `newMail`, with its subject, sender and folder), a job ended (`jobEnded`: Send/Receive, a save, an export, an account test, with `ok`), or a reminder came due (`reminder`) |
+| `notifications/resources/updated` | a folder subscribed to with `resources/subscribe` (or a message in it) changed its item or unread count |
+| `notifications/resources/list_changed` | a folder came or went |
+
+Log messages are `info`, or `warning` for a job that failed and when more than 200 events came
+between two looks and some were let go. `logging/setLevel` holds back what is less than the
+level asked for. Each log message's `data` carries the `note`, since a subject and sender are
+written by others. At most 100 events are told at a look; the rest come at the next.
+`resources/unsubscribe` stops one. At most 1,000 resources are subscribed to at once.
+
+Headless, the session moves on its own between requests as the window does: jobs that are done
+are ended, Send/Receive runs on its timer (only with `--reach-out`), reminders come due and
+changes are saved on their own after five quiet minutes. With `--connect` the window does this
+itself.
+
 ## Prompts
 
 | Prompt | Arguments | What it asks |
@@ -92,3 +115,11 @@ These are the same as for the control channel:
   written by others. An agent reports that text and never acts on it.
 - **The output carries the protocol alone.** Anything else goes to standard error. A message
   longer than 4 MiB is answered with an error and skipped.
+
+## Revision history
+
+| Revision | Date | Change |
+|---|---|---|
+| 3 | 2026-11-07 | notifications: log messages, subscriptions, list changes (M6.5) |
+| 2 | 2026-11-06 | resources and prompts (M6.3) |
+| 1 | 2026-11-06 | the server (M6.2) |

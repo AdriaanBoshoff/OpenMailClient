@@ -53,7 +53,33 @@ pub fn commands() -> Vec<CommandSpec> {
             enabled: always,
             run: read,
         },
+        CommandSpec {
+            id: "mail.events",
+            label: "Events",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"since": the "last" of the answer before (default 0)}; returns {"last", "missed": whether some after "since" are no longer kept, "events": [{"seq", "kind": "newMail" (with "store", "folder", "item", "account", "untrusted_content": {"from", "subject", "preview"}), "jobEnded" (with "job", "said", "ok", "stopped") or "reminder" (with "reminder")}], "folders": [[store, folder id, items, unread]] of every folder mail.folders lists}; nothing changes"#,
+            enabled: always,
+            run: events,
+        },
     ]
+}
+
+/// What came since an agent last asked, and every folder's counts, for it to see what changed.
+fn events(s: &mut Session, p: &Value) -> CmdResult {
+    let since = match p.get("since") {
+        None | Some(Value::Null) => 0,
+        Some(v) => v.as_u64().ok_or_else(|| EngineError::BadParams("\"since\" is the \"last\" of an answer before".into()))?,
+    };
+    let (events, missed) = s.events.since(since);
+    let mut folders = Vec::new();
+    for (store, list) in s.folders.iter().enumerate() {
+        for f in list.iter().filter(|f| !f.hidden && f.kind != FolderKind::Root).take(MAX_FOLDERS.saturating_sub(folders.len())) {
+            folders.push(json!([store, f.id.0, f.total, f.unread]));
+        }
+    }
+    Ok(json!({ "last": s.events.last(), "missed": missed, "events": events, "folders": folders }))
 }
 
 /// A folder's path from the top of its data file, as `mail.select` and `folder.select` take it.
@@ -232,6 +258,30 @@ mod tests {
         assert_eq!(short["id"].as_u64(), s.selected);
         assert!(short["untrusted_content"]["body"].as_str().unwrap().chars().count() <= 5);
         assert_eq!((s.current, s.selected, s.unsaved()), before);
+    }
+
+    #[test]
+    fn events_are_told_once_with_every_folder_s_counts() {
+        let mut s = sample();
+        let first = s.run("mail.events", &json!({})).unwrap();
+        let folders = first["folders"].as_array().unwrap();
+        assert_eq!(folders.len(), s.run("mail.folders", &json!({})).unwrap()["folders"].as_array().unwrap().len());
+        let last = first["last"].as_u64().unwrap();
+        s.events.note("jobEnded", json!({ "job": "Sending", "ok": true }));
+        let next = s.run("mail.events", &json!({ "since": last })).unwrap();
+        assert_eq!(next["events"].as_array().unwrap().len(), 1);
+        assert_eq!(next["events"][0]["kind"], "jobEnded");
+        assert_eq!(next["missed"], false);
+        let again = s.run("mail.events", &json!({ "since": next["last"] })).unwrap();
+        assert!(again["events"].as_array().unwrap().is_empty());
+        assert!(s.run("mail.events", &json!({ "since": "x" })).is_err());
+        // A message marked read is seen in its folder's counts.
+        s.run("mail.select", &json!({ "folder": "Inbox", "index": 0 })).unwrap();
+        s.run("mail.markRead", &Value::Null).unwrap();
+        let before = s.run("mail.events", &json!({})).unwrap()["folders"].clone();
+        s.run("mail.markUnread", &Value::Null).unwrap();
+        let after = s.run("mail.events", &json!({})).unwrap()["folders"].clone();
+        assert_ne!(before, after);
     }
 
     #[test]

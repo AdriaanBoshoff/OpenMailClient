@@ -1194,6 +1194,9 @@ fn kept(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut said
                     };
                     if let Some(told) = told.filter(|_| still_new) {
                         s.arrived.note(store, at, openmailclient_model::ItemId(id), &t.name, told);
+                        if let Some(a) = s.arrived.list.last() {
+                            s.events.note("newMail", a.to_json());
+                        }
                     }
                     kept += 1;
                     unread += usize::from(is_unread);

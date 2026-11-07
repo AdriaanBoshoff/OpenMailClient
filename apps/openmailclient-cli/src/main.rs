@@ -368,7 +368,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             }
         }
     }
-    let (input, output) = (std::io::stdin().lock(), std::io::stdout().lock());
+    let (input, output) = (std::io::BufReader::new(std::io::stdin()), std::io::stdout().lock());
     if let Some(addr) = connect {
         if reach_out || template.is_some() || !open.is_empty() {
             return Err("--connect drives the window as it is: what may reach out is the window's --control-reach-out, and it opens its own files"

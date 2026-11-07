@@ -285,15 +285,25 @@ impl Session {
         }
         due.sort_by_key(|p| (p.reminder.signal, p.key()));
         due.truncate(MAX_DUE);
+        let mut came = Vec::new();
         for p in &due {
             if r.told.get(&p.key()) != Some(&p.reminder.signal) {
                 r.told.insert(p.key(), p.reminder.signal);
                 r.fresh = r.fresh.wrapping_add(1);
+                came.push(p.key());
             }
         }
         r.told.retain(|key, _| due.iter().any(|p| p.key() == *key));
         r.due = due;
         r.next = next;
+        // Agents hear of each as it comes due (M6.5).
+        let today = self.today();
+        for key in came {
+            if let Some(p) = self.reminders.due.iter().find(|p| p.key() == key) {
+                let said = p.to_json(now, today);
+                self.events.note("reminder", serde_json::json!({ "reminder": said }));
+            }
+        }
     }
 
     fn auto_runs(&self) -> u64 {

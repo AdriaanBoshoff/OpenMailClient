@@ -151,6 +151,7 @@ impl Session {
 
     /// Keep what came of a piece of work that ended, the newest last.
     pub(crate) fn ended(&mut self, what: Value) {
+        self.events.note("jobEnded", what.clone());
         self.finished.push(what);
         if self.finished.len() > MAX_FINISHED {
             self.finished.remove(0);

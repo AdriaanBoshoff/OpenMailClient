@@ -55,6 +55,11 @@ fn the_sample_opens_on_none_due_and_an_appointment_comes_its_minutes_before() {
     assert_eq!(due["untrusted_content"]["location"], "Bridge Street Clinic");
     let fresh = s.reminders.fresh;
     assert!(fresh > 0, "a reminder that comes is counted, so the window comes up");
+    let events = s.run("mail.events", &json!({})).unwrap();
+    let told = events["events"].as_array().unwrap().iter().filter(|e| e["kind"] == "reminder").count();
+    assert_eq!(told, 1, "agents hear of it once: {events}");
+    s.look_for_reminders(0);
+    assert_eq!(s.run("mail.events", &json!({})).unwrap()["events"].as_array().unwrap().len(), events["events"].as_array().unwrap().len());
 
     // Snoozed for 5 minutes, written into the item: gone until then.
     let until = run(&mut s, "reminders.snooze", json!({}));

@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 164 · 2026-11-06 · ranked: the top of the list is what hurts most.
+**Status:** revision 165 · 2026-11-07 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -57,7 +57,7 @@
    right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), a printer's own settings (trays, two-sided; it prints on any printer the system has, with copies and pages, M1.10),
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **Tasks** has its views and the To-Do List with flagged mail beside the tasks (M5.9), and reminders come up for appointments, tasks and flagged mail (M5.10), and to-dos in calendar files are read into Tasks and Tasks saved as one (M5.11); tasks are kept in step with a CalDAV server's task lists (M5.12); the To-Do Bar stands beside every module (M5.12); tasks recur, made and changed in their window, and move on to their next occurrence once done (M5.17); a task is given to someone by mail, accepted or declined, and kept up to date from them (M5.18). People has its five views, contacts and groups and vCard files (M5.8); contacts are kept in step with a CardDAV server, and the Address Book, Check Names and Mail Merge are there (M5.11). The Calendar has its views, appointments (M5.1) and recurring appointments with occurrences changed or deleted alone (M5.3) and calendar files opened, imported and saved (M5.4) and calendars kept in step with a CalDAV server (M5.5) and time zones with their summer time (M5.6) and meetings, invitations sent, answered and called off (M5.7), answered with a comment or without telling (M5.12); the Scheduling Assistant shows when everyone asked is free and suggests times (M5.30).
-5. **Agents** reach OpenMailClient through the control channel (M6.1, [control-protocol.md](control-protocol.md)) and the MCP server (M6.2, [mcp.md](mcp.md)), which reads mail through resources and offers prompts (M6.3); not yet: notifications to the agent when mail comes (M6.5).
+5. **Agents** reach OpenMailClient through the control channel (M6.1, [control-protocol.md](control-protocol.md)) and the MCP server (M6.2, [mcp.md](mcp.md)), which reads mail through resources and offers prompts (M6.3) and tells the agent of new mail, jobs ended, reminders and folders subscribed to (M6.5); not yet: the server over HTTP for agents elsewhere (M7).
 6. **Web build and web access.** The window runs in a browser (M6.4, [web.md](web.md)), on the sample mailbox only: it
    cannot open a data file or keep settings there, nor draw SVG (M6.6); and the mailbox cannot be reached from a browser on another device (M7: served over HTTPS by
    OpenMailClient itself from the machine it runs on, paired once and signed in with a passkey).
@@ -96,6 +96,7 @@
 
 ## Revision history
 
+- 165 · 2026-11-07 — M6.5: notifications to agents (item 5).
 - 164 · 2026-11-06 — M6.4: the web build (item 6).
 - 163 · 2026-11-06 — M6.3: MCP resources and prompts, and mail read without a window.
 - 162 · 2026-11-05 — M6.2: the MCP server built.

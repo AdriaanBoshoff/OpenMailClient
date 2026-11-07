@@ -270,3 +270,105 @@ fn prompts_say_mail_is_data_and_never_send() {
         assert_eq!(ask(&mut b, "prompts/get", bad.clone())["error"]["code"], INVALID_PARAMS, "{bad}");
     }
 }
+
+/// The sample's Inbox, as its resource is addressed.
+fn inbox_uri(b: &mut Headless) -> String {
+    let folders = b.session.run("mail.folders", &json!({})).unwrap();
+    let inbox = folders["folders"].as_array().unwrap().iter().find(|f| f["name"] == "Inbox").unwrap().clone();
+    format!("openmailclient://folder/{}/{}", inbox["store"], inbox["id"])
+}
+
+fn ready(server: &mut Server, b: &mut dyn Backend) {
+    let init = server.answer(b, &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} })).unwrap();
+    assert_eq!(init["result"]["capabilities"]["resources"]["subscribe"], true);
+    assert!(init["result"]["capabilities"]["logging"].is_object());
+    assert!(server.answer(b, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).is_none());
+}
+
+fn methods(notes: &[Value]) -> Vec<String> {
+    notes.iter().map(|n| n["method"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn an_agent_hears_of_events_once_and_of_the_folders_it_subscribed_to() {
+    let mut b = sample(false);
+    let mut server = Server::default();
+    let t0 = Instant::now();
+    // Nothing is told before the agent is ready.
+    assert!(server.look(&mut b, t0).is_empty());
+    ready(&mut server, &mut b);
+    let uri = inbox_uri(&mut b);
+    let ok = server.answer(&mut b, &json!({ "jsonrpc": "2.0", "id": 2, "method": "resources/subscribe", "params": { "uri": uri } })).unwrap();
+    assert_eq!(ok["result"], json!({}));
+    // The first look is where things stand, told of nothing.
+    assert!(server.look(&mut b, t0).is_empty());
+    b.session.events.note("jobEnded", json!({ "job": "Sending", "ok": false }));
+    b.session.run("mail.select", &json!({ "folder": "Inbox", "index": 0 })).unwrap();
+    b.session.run("mail.markRead", &Value::Null).unwrap();
+    b.session.run("mail.markUnread", &Value::Null).unwrap();
+    b.session.run("mail.markRead", &Value::Null).unwrap();
+    // Not again within a second.
+    assert!(server.look(&mut b, t0 + Duration::from_millis(500)).is_empty());
+    let t1 = t0 + LOOK_EVERY;
+    let notes = server.look(&mut b, t1);
+    let m = methods(&notes);
+    assert!(m.contains(&"notifications/message".to_string()), "{notes:?}");
+    let log = notes.iter().find(|n| n["method"] == "notifications/message").unwrap();
+    assert_eq!(log["params"]["level"], "warning");
+    assert_eq!(log["params"]["data"]["kind"], "jobEnded");
+    assert_eq!(log["params"]["data"]["note"], UNTRUSTED);
+    // Each event is told once.
+    assert!(!methods(&server.look(&mut b, t1 + LOOK_EVERY)).contains(&"notifications/message".to_string()));
+    // A count that changes is told of for the folder subscribed to, and not once unsubscribed.
+    b.session.run("mail.markUnread", &Value::Null).unwrap();
+    let notes = server.look(&mut b, t1 + LOOK_EVERY * 2);
+    let updated: Vec<&Value> = notes.iter().filter(|n| n["method"] == "notifications/resources/updated").collect();
+    assert_eq!(updated.len(), 1, "{notes:?}");
+    assert_eq!(updated[0]["params"]["uri"], uri);
+    server.answer(&mut b, &json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/unsubscribe", "params": { "uri": uri } })).unwrap();
+    b.session.run("mail.markRead", &Value::Null).unwrap();
+    assert!(server.look(&mut b, t1 + LOOK_EVERY * 3).is_empty());
+}
+
+#[test]
+fn the_level_asked_for_holds_back_what_is_less() {
+    let mut b = sample(false);
+    let mut server = Server::default();
+    ready(&mut server, &mut b);
+    let t0 = Instant::now();
+    server.look(&mut b, t0);
+    let set = server.answer(&mut b, &json!({ "jsonrpc": "2.0", "id": 2, "method": "logging/setLevel", "params": { "level": "warning" } })).unwrap();
+    assert_eq!(set["result"], json!({}));
+    b.session.events.note("jobEnded", json!({ "job": "Saving", "ok": true }));
+    b.session.events.note("jobEnded", json!({ "job": "Sending", "ok": false }));
+    let notes: Vec<Value> = server.look(&mut b, t0 + LOOK_EVERY).into_iter().filter(|n| n["method"] == "notifications/message").collect();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["params"]["data"]["job"], "Sending");
+    // Many events at once are told a hundred at a time, none lost.
+    server.answer(&mut b, &json!({ "jsonrpc": "2.0", "id": 3, "method": "logging/setLevel", "params": { "level": "debug" } })).unwrap();
+    for i in 0..150 {
+        b.session.events.note("reminder", json!({ "i": i }));
+    }
+    let a = server.look(&mut b, t0 + LOOK_EVERY * 2).into_iter().filter(|n| n["method"] == "notifications/message").count();
+    let c = server.look(&mut b, t0 + LOOK_EVERY * 3).into_iter().filter(|n| n["method"] == "notifications/message").count();
+    assert_eq!((a, c), (100, 50));
+}
+
+#[test]
+fn bad_subscriptions_and_levels_are_refused() {
+    let mut b = sample(false);
+    let mut server = Server::default();
+    let ask = |server: &mut Server, b: &mut Headless, method: &str, params: Value| {
+        server.answer(b, &json!({ "jsonrpc": "2.0", "id": 4, "method": method, "params": params })).unwrap()
+    };
+    assert_eq!(ask(&mut server, &mut b, "resources/subscribe", json!({}))["error"]["code"], INVALID_PARAMS);
+    assert_eq!(ask(&mut server, &mut b, "resources/subscribe", json!({ "uri": "http://x/y" }))["error"]["code"], NO_RESOURCE);
+    assert_eq!(ask(&mut server, &mut b, "resources/subscribe", json!({ "uri": 7 }))["error"]["code"], INVALID_PARAMS);
+    assert_eq!(ask(&mut server, &mut b, "logging/setLevel", json!({ "level": "loud" }))["error"]["code"], INVALID_PARAMS);
+    assert_eq!(ask(&mut server, &mut b, "logging/setLevel", json!(null))["error"]["code"], INVALID_PARAMS);
+    // A notification of either is not answered.
+    assert!(server.answer(&mut b, &json!({ "jsonrpc": "2.0", "method": "resources/subscribe", "params": {} })).is_none());
+    assert_eq!(folder_of_uri("openmailclient://message/0/5/9"), Some((0, 5)));
+    assert_eq!(folder_of_uri("openmailclient://folder/x/5"), None);
+    assert_eq!(folder_of_uri("openmailclient://other/0/5"), None);
+}

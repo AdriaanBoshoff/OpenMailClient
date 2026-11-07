@@ -46,6 +46,7 @@ impl Arrived {
         json!({
             "seq": self.seq,
             "store": self.store,
+            "folder": self.folder.0,
             "item": self.item.0,
             "account": self.account,
             "untrusted_content": { "from": self.from, "subject": self.subject, "preview": self.preview },
