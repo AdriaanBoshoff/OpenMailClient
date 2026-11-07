@@ -42,6 +42,8 @@ mod tests_arrival;
 #[cfg(test)]
 mod tests_autocomplete;
 #[cfg(test)]
+mod tests_bytes;
+#[cfg(test)]
 mod tests_caldav;
 #[cfg(test)]
 mod tests_caldav_tasks;
@@ -776,6 +778,38 @@ impl Session {
     }
 
     /// Add a store and show its Inbox (or first folder) when nothing is shown yet.
+    /// Open a file that is held in memory, as one chosen in a browser, where there are no
+    /// paths (M6.6): a data file beside the others, a message in Opened Files. `name` is the
+    /// name the file came under.
+    pub fn open_bytes(&mut self, name: &str, data: Vec<u8>) -> CmdResult {
+        cmd::file::open_bytes(self, name, data)
+    }
+
+    /// The data file shown, as the bytes of a new `.pst` with its unsaved changes, and a name
+    /// for it: for a download, where there are no files (M6.6). The data file is only read.
+    pub fn store_bytes(&mut self) -> Result<(String, Vec<u8>), EngineError> {
+        let idx = self.current.map(|(i, _)| i).ok_or(StoreError::NoFolder)?;
+        let id = io::new_store_id(self.now);
+        let store = self.stores.get_mut(idx).ok_or(StoreError::NoFolder)?;
+        let name = format!("{}.pst", download_name(&store.display_name(), "Outlook Data File"));
+        let (data, saved) = io::store_bytes(store.as_mut(), id, io::PstKind::Unicode)?;
+        self.status = format!("{name} written: {} folders, {} items", saved.folders, saved.items);
+        Ok((name, data))
+    }
+
+    /// The message open, as the bytes of a `.msg`, `.eml` or `.oft` file (`format`), and a name
+    /// for it: for a download (M6.6).
+    pub fn item_bytes(&self, format: &str) -> Result<(String, Vec<u8>), EngineError> {
+        let item = self.open.as_ref().ok_or(StoreError::NoItem)?;
+        let format = format.to_ascii_lowercase();
+        if !["msg", "eml", "oft"].contains(&format.as_str()) {
+            return Err(EngineError::BadParams(format!("\"{format}\" is not msg, eml or oft")));
+        }
+        let name = format!("{}.{format}", download_name(&item.subject(), "Untitled"));
+        let data = io::encode_item(item, std::path::Path::new(&name))?;
+        Ok((name, data))
+    }
+
     pub fn add_store(&mut self, store: Box<dyn Store>) -> usize {
         self.stores.push(store);
         self.folders.push(Vec::new());
@@ -1517,4 +1551,11 @@ fn system_zone_name() -> Option<String> {
 #[cfg(target_arch = "wasm32")]
 fn system_zone_name() -> Option<String> {
     None
+}
+
+/// A file's name, before its ending, from untrusted text such as a subject: one name and not a
+/// path (`attachments::safe_name`), or `fallback` when nothing of it is left.
+fn download_name(text: &str, fallback: &str) -> String {
+    let stem = attachments::safe_name(text.trim());
+    if text.trim().is_empty() || stem == "attachment" { fallback.to_string() } else { stem.trim_end_matches('.').to_string() }
 }

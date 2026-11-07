@@ -36,7 +36,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{"path": a file ending in .json, "reopen": true to open the data files it lists}; a file that is not there changes nothing; returns {"found", "applied": parts taken, "ignored": parts that made no sense, "opened", "missing": data files that could not be opened, "ui"}"#,
+            params: r#"{"path": a file ending in .json, or "text": the settings as JSON text (null: none kept), "reopen": true to open the data files it lists}; a file that is not there changes nothing; returns {"found", "applied": parts taken, "ignored": parts that made no sense, "opened", "missing": data files that could not be opened, "ui"}"#,
             enabled: always,
             run: load,
         },
@@ -123,19 +123,29 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn load(s: &mut Session, p: &Value) -> CmdResult {
-    let path = json_path(p)?;
     let nothing = |found: bool| json!({"found": found, "applied": 0, "ignored": 0, "opened": 0, "missing": 0});
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        // The first run: there is nothing to take.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(nothing(false)),
-        Err(e) => return Err(EngineError::Io(e)),
+    let text = match p.get("text") {
+        // Settings kept where there are no files, as in a browser's storage (M6.6).
+        Some(Value::String(text)) if text.len() as u64 > MAX_FILE => return Ok(nothing(true)),
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Null) => return Ok(nothing(false)),
+        Some(_) => return Err(EngineError::BadParams("\"text\" is the settings as JSON text".into())),
+        None => {
+            let path = json_path(p)?;
+            let file = match std::fs::File::open(path) {
+                Ok(file) => file,
+                // The first run: there is nothing to take.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(nothing(false)),
+                Err(e) => return Err(EngineError::Io(e)),
+            };
+            let mut text = String::new();
+            // Not text, or longer than any settings of ours: nothing is taken from it.
+            if file.take(MAX_FILE + 1).read_to_string(&mut text).is_err() || text.len() as u64 > MAX_FILE {
+                return Ok(nothing(true));
+            }
+            text
+        }
     };
-    let mut text = String::new();
-    // Not text, or longer than any settings of ours: nothing is taken from it.
-    if file.take(MAX_FILE + 1).read_to_string(&mut text).is_err() || text.len() as u64 > MAX_FILE {
-        return Ok(nothing(true));
-    }
     let Ok(Value::Object(all)) = serde_json::from_str::<Value>(&text) else { return Ok(nothing(true)) };
     let (mut applied, mut ignored) = (0u32, 0u32);
     let mut took = |ok: bool| if ok { applied += 1 } else { ignored += 1 };

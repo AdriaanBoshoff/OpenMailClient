@@ -88,6 +88,52 @@ pub fn open_path(path: &Path) -> Result<Opened, EngineError> {
     Ok(Opened::Item(Box::new(item)))
 }
 
+/// Open a file that is held in memory, as one chosen in a browser (M6.6): `name` is the name it
+/// came under. The name's extension decides, as for `open_path`; without one, the first bytes.
+pub fn open_bytes(name: &str, data: Vec<u8>) -> Result<Opened, EngineError> {
+    let kind = kind_by_extension(Path::new(name)).unwrap_or(if data.starts_with(b"!BDN") {
+        Kind::Pst
+    } else if data.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]) {
+        Kind::Msg
+    } else {
+        Kind::Eml
+    });
+    if kind == Kind::Pst {
+        let store = openmailclient_pst::PstStore::from_bytes_named(data, name).map_err(|e| EngineError::Format(e.to_string()))?;
+        return Ok(Opened::Store(Box::new(store)));
+    }
+    if u64::try_from(data.len()).unwrap_or(u64::MAX) > MAX_ITEM_FILE {
+        return Err(EngineError::Format("this file is too large to open as one message".into()));
+    }
+    let item = match kind {
+        Kind::Eml => openmailclient_mime::parse(&data).map_err(|e| EngineError::Format(e.to_string()))?,
+        _ => openmailclient_msg::read(&data).map_err(|e| EngineError::Format(e.to_string()))?,
+    };
+    Ok(Opened::Item(Box::new(item)))
+}
+
+/// Everything a store holds as the bytes of a new `.pst`, held against the structure check,
+/// for a place that has no files: a download in a browser (M6.6). It is written from the
+/// model, with the changes not yet saved, each folder's hidden items and own properties.
+pub fn store_bytes(store: &mut dyn Store, id: [u8; 16], kind: PstKind) -> Result<(Vec<u8>, Saved), EngineError> {
+    let out = std::io::Cursor::new(Vec::new());
+    let written = match kind {
+        PstKind::Ansi => openmailclient_pst::write_store_ansi(out, store, id, None),
+        PstKind::Big => openmailclient_pst::write_store_4k(out, store, id, None),
+        _ => openmailclient_pst::write_store_until(out, store, id, None),
+    };
+    let (mut out, done) = written.map_err(pst_error)?;
+    out.set_position(0);
+    let found = openmailclient_pst::check_until(&mut out, None).map_err(pst_error)?;
+    if !found.sound() {
+        let first = found.problems.first().or(found.inside.first()).map(String::as_str).unwrap_or("no detail");
+        return Err(EngineError::Format(format!("the data file that was written did not pass its own check ({first})")));
+    }
+    let data = out.into_inner();
+    let bytes = u64::try_from(data.len()).unwrap_or(u64::MAX);
+    Ok((data, Saved { folders: done.folders, items: done.items, unreadable: done.unreadable, bytes, copied: false, not_copied: None }))
+}
+
 /// The bytes of an item in the format the path's extension names.
 pub fn encode_item(item: &Item, path: &Path) -> Result<Vec<u8>, EngineError> {
     match kind_by_extension(path) {

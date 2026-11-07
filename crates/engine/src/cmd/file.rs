@@ -376,7 +376,20 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
         s.select_default_folder(idx);
         return Ok(json!({ "store": idx, "already": true }));
     }
-    match io::open_path(path)? {
+    let opened = io::open_path(path)?;
+    take_opened(s, p, opened)
+}
+
+/// A file held in memory opened, as one chosen in a browser (M6.6); `Session::open_bytes`.
+pub(crate) fn open_bytes(s: &mut Session, name: &str, data: Vec<u8>) -> CmdResult {
+    let opened = io::open_bytes(name, data)?;
+    take_opened(s, &Value::Null, opened)
+}
+
+/// What was opened put where it is seen: a data file beside the others, a message in Opened
+/// Files.
+fn take_opened(s: &mut Session, p: &Value, opened: Opened) -> CmdResult {
+    match opened {
         Opened::Store(mut store) => {
             let name = store.display_name();
             // What a run that ended without saving left in the journal comes back, unsaved

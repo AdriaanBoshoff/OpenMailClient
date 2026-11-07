@@ -7,7 +7,7 @@ pub(crate) mod caldav;
 pub mod calendar;
 mod calendar_file;
 pub(crate) mod compose;
-mod file;
+pub(crate) mod file;
 mod folder;
 pub(crate) mod format;
 pub mod free_busy;

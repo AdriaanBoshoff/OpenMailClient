@@ -183,6 +183,16 @@ impl PstStore {
         Self::from_source(Box::new(std::io::Cursor::new(data)))
     }
 
+    /// Open a data file held in memory that came from a file of this name, as one chosen in
+    /// a browser: a file that does not name itself is known by the name it came under.
+    pub fn from_bytes_named(data: Vec<u8>, file_name: &str) -> Result<Self, PstError> {
+        let mut store = Self::from_bytes(data)?;
+        if store.name.is_empty() {
+            store.name = Path::new(file_name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        }
+        Ok(store)
+    }
+
     fn from_source(src: Box<dyn ndb::Source>) -> Result<Self, PstError> {
         let ndb = Ndb::open(src)?;
         let mut store = Self {

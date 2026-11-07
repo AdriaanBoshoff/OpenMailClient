@@ -2939,6 +2939,7 @@ dependencies = [
  "iana-time-zone",
  "image",
  "log",
+ "miniz_oxide 0.8.9",
  "openmailclient-fonts",
  "openmailclient-formats",
  "openmailclient-layout",
@@ -3096,10 +3097,13 @@ dependencies = [
  "chrono",
  "eframe",
  "egui",
+ "js-sys",
  "openmailclient-engine",
  "openmailclient-ui-egui",
  "serde_json",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
  "web-time",
 ]
 

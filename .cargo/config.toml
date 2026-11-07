@@ -1,2 +1,7 @@
 [alias]
 xtask = "run --package xtask --"
+
+# The web build draws SVG pictures in place (crates/engine/src/svg.rs): a page's stack of
+# 1 MiB is too small for the reader, so it is given 16 MiB (M6.6).
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=16777216"]

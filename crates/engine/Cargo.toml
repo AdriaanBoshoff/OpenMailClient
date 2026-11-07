@@ -22,6 +22,8 @@ openmailclient-net = { workspace = true }
 # Decodes the pictures a message body shows.
 image = { workspace = true, features = ["jpeg", "gif", "bmp", "webp", "tiff"] }
 resvg = { workspace = true }
+# Compressed drawings (`.svgz`), unpacked to a limit.
+miniz_oxide = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
