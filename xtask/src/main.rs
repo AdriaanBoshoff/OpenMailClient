@@ -42,8 +42,9 @@ const LAYERS: &[(&str, &str, u8)] = &[
 ];
 
 /// The only dependencies allowed inside one layer, each named: the rasteriser draws the pages
-/// the layout made, and both are L3 in the architecture.
-const WITHIN_LAYER: &[(&str, &str)] = &[("openmailclient-render", "openmailclient-layout")];
+/// the layout made, and both are L3 in the architecture; the web server reaches the session
+/// through MCP's backends, and will offer MCP over HTTPS (M7.7), and both are L5.
+const WITHIN_LAYER: &[(&str, &str)] = &[("openmailclient-render", "openmailclient-layout"), ("openmailclient-serve", "openmailclient-mcp")];
 /// Crates that must never appear below the UI layer.
 const GUI_CRATES: &[&str] = &["egui", "eframe", "winit", "rfd", "egui_kittest", "wgpu"];
 /// Everything the web build needs must compile for wasm32.

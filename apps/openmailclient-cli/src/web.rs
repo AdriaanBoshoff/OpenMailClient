@@ -1,18 +1,31 @@
-//! `openmailclient-cli web …`: web access looked after from the host's console (M7.2, M7.4), so
-//! a forgotten password is set again over SSH and an owner locked out of their own address can
-//! let it back in. Nothing here touches the network.
+//! `openmailclient-cli web …`: web access served and looked after from the host's console (M7.1,
+//! M7.2, M7.4), so a forgotten password is set again over SSH and an owner locked out of their own
+//! address can let it back in. Only `web serve` listens; nothing here reaches out.
 
+use openmailclient_engine::Session;
 use openmailclient_serve::guard::{self, Guard, Net};
-use openmailclient_serve::password;
+use openmailclient_serve::{password, server, tls};
+use serde_json::{Value, json};
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 
-pub const USAGE: &str = "  openmailclient-cli web password [--dir <folder>]
+pub const USAGE: &str = "  openmailclient-cli web serve [--listen <address:port>] [--name <host>]... [--template sample]
+                          [--open <file>]... [--web-dir <folder>] [--reach-out] [--new-certificate]
+                          [--dir <folder>]
+                                              serve the mailbox to browsers over HTTPS, on
+                                              127.0.0.1:8443 unless another address is named
+                                              (0.0.0.0:8443 for every network this machine is on);
+                                              --name adds a name browsers reach it by
+  openmailclient-cli web password [--dir <folder>]
                                               set the web password, or set it again when it is
                                               forgotten (asked for twice, never on the command line;
                                               read from standard input when that is not a console);
                                               every browser signed in with the old one is signed out
-  openmailclient-cli web status [--dir <folder>]  whether a password is set, and the bans
+  openmailclient-cli web status [--dir <folder>]  whether a password is set, the bans, whether it
+                                              is serving and the certificate's fingerprint
+  openmailclient-cli web certificate [--dir <folder>]
+                                              the certificate as PEM, to trust on a phone by hand
+  openmailclient-cli web log [--dir <folder>]     the last sign-ins and failures
   openmailclient-cli web bans [--dir <folder>]    the addresses banned for failing to sign in
   openmailclient-cli web unban <address> [--dir <folder>]
                                               lift a ban (an IPv6 address lifts its whole /64)
@@ -25,19 +38,31 @@ pub fn web(rest: &[String], default_dir: Option<PathBuf>) -> Result<(), String> 
     let mut words = Vec::new();
     let mut dir = None;
     let mut remove = false;
+    let mut serve = Serve::default();
     let mut args = rest.iter();
     while let Some(arg) = args.next() {
+        let mut value = || args.next().cloned().ok_or_else(|| format!("{arg} needs a value"));
         match arg.as_str() {
-            "--dir" => dir = Some(PathBuf::from(args.next().ok_or("--dir needs a folder")?)),
+            "--dir" => dir = Some(PathBuf::from(value()?)),
             "--remove" => remove = true,
+            "--listen" => serve.listen = Some(value()?),
+            "--name" => serve.names.push(value()?),
+            "--template" => serve.template = Some(value()?),
+            "--open" => serve.open.push(value()?),
+            "--web-dir" => serve.web_dir = Some(PathBuf::from(value()?)),
+            "--reach-out" => serve.reach_out = true,
+            "--new-certificate" => serve.new_certificate = true,
             other if other.starts_with("--") => return Err(format!("{other}: not an option of `web`\n{USAGE}")),
             other => words.push(other),
         }
     }
     let dir = dir.or(default_dir).ok_or("there is no folder for settings here; name one with --dir")?;
     match words.as_slice() {
+        ["serve"] => run_server(dir, serve),
         ["password"] => set_password(&dir),
         ["status"] => status(&dir),
+        ["certificate"] => certificate(&dir),
+        ["log"] => log(&dir),
         ["bans"] => bans(&dir),
         ["unban", address] => unban(&dir, address),
         ["never-ban"] if !remove => never_ban_list(&dir),
@@ -47,7 +72,7 @@ pub fn web(rest: &[String], default_dir: Option<PathBuf>) -> Result<(), String> 
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+    openmailclient_serve::now_ms()
 }
 
 /// The password, asked for twice at a console, or read from standard input's first line.
@@ -79,7 +104,7 @@ fn set_password(dir: &Path) -> Result<(), String> {
     if was.is_some() {
         println!("The web password is set again (setting {}). Every browser signed in with the old one is signed out.", kept.generation);
     } else {
-        println!("The web password is set. Browsers can sign in with it once web access is turned on.");
+        println!("The web password is set. Start web access with `openmailclient-cli web serve`.");
     }
     println!("Only its Argon2id hash is kept, in {}.", openmailclient_serve::password_file(dir).display());
     Ok(())
@@ -110,7 +135,129 @@ fn status(dir: &Path) -> Result<(), String> {
     println!("Banned addresses: {}.", g.bans(now).len());
     let spared: Vec<String> = g.spared().iter().map(Net::to_string).collect();
     println!("Never banned: {}.", if spared.is_empty() { "none".to_string() } else { spared.join(", ") });
-    println!("Serving: not yet; the server comes with M7.1.");
+    match tls::load(dir) {
+        Ok(Some(kept)) => {
+            println!("Certificate: made {} ago for {}.", span(now.saturating_sub(kept.made_ms)), kept.names.join(", "));
+            println!("  SHA-256 fingerprint: {}", kept.fingerprint());
+        }
+        Ok(None) => println!("Certificate: none yet; one is made the first time `openmailclient-cli web serve` runs."),
+        Err(e) => println!("Certificate: {e}"),
+    }
+    println!("{}", serving(dir));
+    Ok(())
+}
+
+/// Whether a server started from this folder is listening now.
+fn serving(dir: &Path) -> String {
+    let no = || "Serving: no.".to_string();
+    let Ok(text) = std::fs::read_to_string(server::serving_file(dir)) else { return no() };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else { return no() };
+    let Some(listen) = value.get("listen").and_then(Value::as_str).and_then(|l| l.parse::<std::net::SocketAddr>().ok()) else { return no() };
+    // Asked of this machine only: the address it listens on, or this machine's own for every address.
+    let mut ask = listen;
+    if ask.ip().is_unspecified() {
+        ask.set_ip(if ask.is_ipv4() { std::net::Ipv4Addr::LOCALHOST.into() } else { std::net::Ipv6Addr::LOCALHOST.into() });
+    }
+    if std::net::TcpStream::connect_timeout(&ask, std::time::Duration::from_secs(1)).is_err() {
+        return format!("Serving: no (it last listened on {listen} and has stopped).");
+    }
+    let names: Vec<&str> = value.get("names").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    let port = listen.port();
+    let urls: Vec<String> =
+        names.iter().map(|n| if n.contains(':') { format!("https://[{n}]:{port}/") } else { format!("https://{n}:{port}/") }).collect();
+    let since = now_ms().saturating_sub(value.get("started").and_then(Value::as_u64).unwrap_or(0));
+    format!("Serving: yes, on {listen}, for {}; reach it at {}", span(since), urls.join("  "))
+}
+
+fn certificate(dir: &Path) -> Result<(), String> {
+    let kept = tls::load(dir)?.ok_or("there is no certificate yet; one is made the first time `openmailclient-cli web serve` runs")?;
+    print!("{}", kept.pem());
+    eprintln!("SHA-256 fingerprint: {}", kept.fingerprint());
+    Ok(())
+}
+
+fn log(dir: &Path) -> Result<(), String> {
+    let path = server::log_file(dir);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("No one has tried to sign in yet.");
+            return Ok(());
+        }
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    for line in lines.iter().skip(lines.len().saturating_sub(40)) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct Serve {
+    listen: Option<String>,
+    names: Vec<String>,
+    template: Option<String>,
+    open: Vec<String>,
+    web_dir: Option<PathBuf>,
+    reach_out: bool,
+    new_certificate: bool,
+}
+
+fn run_server(dir: PathBuf, serve: Serve) -> Result<(), String> {
+    let listen_text = serve.listen.unwrap_or_else(|| "127.0.0.1:8443".to_string());
+    let listen: std::net::SocketAddr =
+        listen_text.parse().map_err(|e| format!("{listen_text}: {e}; give it as 127.0.0.1:8443, 0.0.0.0:8443 or [::]:8443"))?;
+    if let Some(t) = &serve.template
+        && t != "sample"
+    {
+        return Err(format!("unknown template \"{t}\"; there is: sample"));
+    }
+    if let Some(web) = &serve.web_dir
+        && !web.join("index.html").is_file()
+    {
+        return Err(format!("{}: there is no index.html; `cargo xtask web` builds it", web.display()));
+    }
+    let (template, open, reach_out) = (serve.template, serve.open, serve.reach_out);
+    let make = move || {
+        let mut session = Session::new();
+        // Without --reach-out nothing could use the network, so none is given.
+        if reach_out && let Err(e) = session.use_this_system() {
+            eprintln!("openmailclient-cli: mail servers cannot be reached: {e}");
+        }
+        if template.is_some() {
+            session.run("file.openSample", &Value::Null).map_err(|e| e.to_string())?;
+        }
+        for path in open {
+            session.run("file.open", &json!({ "path": path })).map_err(|e| e.to_string())?;
+        }
+        Ok(openmailclient_mcp::Headless { session, reach_out })
+    };
+    let options = server::Options { listen, names: serve.names, dir: dir.clone(), web_dir: serve.web_dir, new_certificate: serve.new_certificate };
+    let running = server::serve(options, make)?;
+    let s = &running.started;
+    if s.new_certificate {
+        println!("A new certificate was made; browsers will ask about it once.");
+    }
+    println!("Web access is on, listening on {}.", s.listen);
+    let port = s.listen.port();
+    for n in &s.names {
+        println!("  https://{}:{port}/", if n.contains(':') { format!("[{n}]") } else { n.clone() });
+    }
+    println!("The browser will warn that it does not know the certificate. Go on only if it shows this fingerprint:");
+    println!("  SHA-256 {}", s.fingerprint);
+    let ip = s.listen.ip();
+    if ip.is_loopback() {
+        println!("Only this machine can reach it. To reach it from other devices, start it with --listen 0.0.0.0:{port}.");
+    } else if ip.is_unspecified() {
+        println!("Every network this machine is on can reach it. A port forwarded to it from the internet makes the sign-in page public.");
+    } else if !server::is_private(ip) {
+        println!(
+            "WARNING: {ip} is a public address. Anyone on the internet can reach the sign-in page; only the password and the bans keep them out."
+        );
+    }
+    println!("Sign-ins are logged in {}. Stop with Ctrl+C.", server::log_file(&dir).display());
+    running.wait();
     Ok(())
 }
 

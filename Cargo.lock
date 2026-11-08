@@ -3101,7 +3101,12 @@ name = "openmailclient-serve"
 version = "0.1.0-alpha.5"
 dependencies = [
  "argon2",
+ "base64 0.22.1",
  "getrandom 0.3.4",
+ "openmailclient-mcp",
+ "rcgen",
+ "ring",
+ "rustls",
  "serde_json",
 ]
 

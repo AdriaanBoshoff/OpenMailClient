@@ -366,6 +366,13 @@ impl Guard {
         Ok(Guard::from_json(&value))
     }
 
+    /// Take the bans and spared networks of `kept`, read again after the console changed them
+    /// (`openmailclient-cli web unban`), keeping the failures counted here.
+    pub fn take_kept(&mut self, kept: Guard) {
+        self.bans = kept.bans;
+        self.never = kept.never;
+    }
+
     /// Keep the bans and spared networks in `dir`.
     pub fn save(&self, dir: &Path) -> Result<(), String> {
         crate::write_private(&crate::bans_file(dir), &format!("{:#}\n", self.to_json()))

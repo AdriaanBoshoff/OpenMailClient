@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Web access (M7): the web password, sign-in limits and bans, and later the HTTPS server"
+description = "Web access (M7): the HTTPS server, the web password, sessions, sign-in limits and bans"
 
 [lints]
 workspace = true
@@ -13,3 +13,10 @@ workspace = true
 serde_json = { workspace = true }
 argon2 = { workspace = true }
 getrandom = { workspace = true }
+base64 = { workspace = true }
+# The session the server serves is reached through the same backends as MCP's.
+openmailclient-mcp = { workspace = true }
+# TLS for the server, with a certificate of its own; ring gives SHA-1 for the WebSocket key and SHA-256.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+ring = "0.17"
