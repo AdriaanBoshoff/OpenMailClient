@@ -20,3 +20,9 @@ openmailclient-mcp = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 ring = "0.17"
+# The owner's mailbox opened from the settings, as the window opens it.
+openmailclient-engine = { workspace = true }
+# Told to stop by Ctrl+C or by the service manager (SIGTERM).
+ctrlc = { version = "3.4", features = ["termination"] }
+# Where mail account passwords are kept on a server with no desktop.
+openmailclient-net = { workspace = true }

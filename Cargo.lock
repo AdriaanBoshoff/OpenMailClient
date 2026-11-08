@@ -1007,6 +1007,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctrlc"
+version = "3.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0b1fab2ae45819af2d0731d60f2afe17227ebb1a1538a236da84c93e9a60162"
+dependencies = [
+ "dispatch2",
+ "nix 0.31.3",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2452,6 +2463,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nohash-hasher"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2939,6 +2962,8 @@ dependencies = [
  "openmailclient-engine",
  "openmailclient-formats",
  "openmailclient-model",
+ "openmailclient-net",
+ "openmailclient-serve",
  "openmailclient-ui-egui",
  "rfd",
  "rodio",
@@ -2953,6 +2978,7 @@ dependencies = [
  "openmailclient-engine",
  "openmailclient-mcp",
  "openmailclient-model",
+ "openmailclient-net",
  "openmailclient-serve",
  "rpassword",
  "serde_json",
@@ -3102,8 +3128,11 @@ version = "0.1.0-alpha.5"
 dependencies = [
  "argon2",
  "base64 0.22.1",
+ "ctrlc",
  "getrandom 0.3.4",
+ "openmailclient-engine",
  "openmailclient-mcp",
+ "openmailclient-net",
  "rcgen",
  "ring",
  "rustls",
@@ -5702,7 +5731,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "hex",
- "nix",
+ "nix 0.29.0",
  "ordered-stream",
  "rand",
  "serde",

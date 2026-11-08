@@ -24,6 +24,9 @@ pub mod smtp;
 pub mod utf7;
 mod vault;
 
+/// Passwords sealed in a file where the system has no store of its own (M7.5).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sealed;
 #[cfg(not(target_arch = "wasm32"))]
 mod tcp;
 #[cfg(not(target_arch = "wasm32"))]

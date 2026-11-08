@@ -23,6 +23,7 @@ pub mod outgoing;
 pub mod outlook;
 pub mod outside;
 pub mod pictures;
+pub mod places;
 pub mod print;
 pub mod print_more;
 pub mod printers;

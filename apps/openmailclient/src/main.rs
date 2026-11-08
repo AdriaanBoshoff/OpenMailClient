@@ -433,15 +433,60 @@ impl eframe::App for App {
 
 /// Where the settings are kept: the per-user configuration folder of the system.
 fn settings_path() -> Option<std::path::PathBuf> {
-    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
-    let dir = if cfg!(target_os = "windows") {
-        var("APPDATA")?.join("OpenMailClient")
-    } else if cfg!(target_os = "macos") {
-        var("HOME")?.join("Library").join("Application Support").join("OpenMailClient")
-    } else {
-        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|home| home.join(".config")))?.join("openmailclient")
+    openmailclient_engine::places::settings_file()
+}
+
+const SERVE_USAGE: &str = "openmailclient serve [--listen <address:port>] [--name <host>]... [--web-dir <folder>]
+                     [--new-certificate] [--passwords system|sealed|either] [--dir <folder>]
+    Serve this user's mailbox to browsers over HTTPS without a window, until Ctrl+C or the
+    service manager stops it: on 127.0.0.1:8443 unless another address is named (0.0.0.0:8443
+    for every network this machine is on). Set the web password first with
+    `openmailclient-cli web password`, and mail account passwords with
+    `openmailclient-cli account password <account>`.";
+
+/// `openmailclient serve`: the mailbox served headless, as on a server with no display (M7.5).
+fn serve(args: &[String]) -> ExitCode {
+    let mut plan = openmailclient_serve::host::Plan::default();
+    let mut passwords = openmailclient_net::sealed::Choice::Either;
+    let mut dir = settings_path().and_then(|p| p.parent().map(std::path::Path::to_path_buf));
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let mut value = || it.next().cloned();
+        let wanted = match arg.as_str() {
+            "--listen" => value().map(|v| plan.listen = Some(v)),
+            "--name" => value().map(|v| plan.names.push(v)),
+            "--web-dir" => value().map(|v| plan.web_dir = Some(v.into())),
+            "--dir" => value().map(|v| dir = Some(v.into())),
+            "--new-certificate" => {
+                plan.new_certificate = true;
+                Some(())
+            }
+            "--passwords" => value().and_then(|v| openmailclient_net::sealed::Choice::parse(&v)).map(|c| passwords = c),
+            "--help" | "-h" => {
+                println!("{SERVE_USAGE}");
+                return ExitCode::SUCCESS;
+            }
+            _ => None,
+        };
+        if wanted.is_none() {
+            eprintln!(
+                "openmailclient serve: {arg} is not understood
+{SERVE_USAGE}"
+            );
+            return ExitCode::FAILURE;
+        }
+    }
+    let Some(dir) = dir else {
+        eprintln!("openmailclient serve: there is no folder for settings here; name one with --dir");
+        return ExitCode::FAILURE;
     };
-    Some(dir.join("settings.json"))
+    match openmailclient_serve::host::serve_profile(&dir, plan, passwords) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("openmailclient serve: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Where updates are brought down: the per-user folder for what can be made again, as the
@@ -456,6 +501,10 @@ fn updates_path() -> Option<std::path::PathBuf> {
 }
 
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "serve") {
+        return serve(args.get(1..).unwrap_or_default());
+    }
     let mut session = Session::new();
     if let Err(e) = session.use_this_system() {
         eprintln!("openmailclient: mail servers cannot be reached: {e}");
@@ -464,8 +513,20 @@ fn main() -> ExitCode {
     session.region = region::of_this_system();
     // Copies of attachments an earlier run opened and could not clear away, a day on.
     openmailclient_engine::attachments::clear_opened(false);
-    let args: Vec<String> = std::env::args().skip(1).collect();
     let settings = if args.iter().any(|a| a == "--no-settings") { None } else { settings_path() };
+    // One run at a time has the settings' data files: a second window, or the mailbox served
+    // headless by `openmailclient serve`, would write them too.
+    openmailclient_engine::places::name_this_run("the OpenMailClient window");
+    let _hold = match settings.as_ref().and_then(|p| p.parent()).map(openmailclient_engine::places::hold) {
+        Some(Err(who)) => {
+            let said = format!("{who}. Close it, or stop it, and open OpenMailClient again.");
+            eprintln!("openmailclient: {said}");
+            rfd::MessageDialog::new().set_title("OpenMailClient").set_description(said).set_level(rfd::MessageLevel::Warning).show();
+            return ExitCode::FAILURE;
+        }
+        Some(Ok(hold)) => Some(hold),
+        None => None,
+    };
     // Journals that cannot be kept beside their data file go beside the settings.
     session.journal_dir = settings_path().and_then(|p| p.parent().map(|dir| dir.join("journals")));
     // Each account's mail is kept in a data file of its own beside the settings, as Outlook

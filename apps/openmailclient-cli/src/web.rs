@@ -3,19 +3,22 @@
 //! address can let it back in. Only `web serve` listens; nothing here reaches out.
 
 use openmailclient_engine::Session;
+use openmailclient_net::sealed::Choice;
 use openmailclient_serve::guard::{self, Guard, Net};
-use openmailclient_serve::{password, server, tls};
+use openmailclient_serve::{host, password, server, tls};
 use serde_json::{Value, json};
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 
-pub const USAGE: &str = "  openmailclient-cli web serve [--listen <address:port>] [--name <host>]... [--template sample]
-                          [--open <file>]... [--web-dir <folder>] [--reach-out] [--new-certificate]
-                          [--dir <folder>]
-                                              serve the mailbox to browsers over HTTPS, on
+pub const USAGE: &str = "  openmailclient-cli web serve [--listen <address:port>] [--name <host>]... [--web-dir <folder>]
+                          [--new-certificate] [--dir <folder>]
+                          (--profile [--passwords system|sealed|either]
+                           | [--template sample] [--open <file>]... [--reach-out])
+                                              serve a mailbox to browsers over HTTPS, on
                                               127.0.0.1:8443 unless another address is named
                                               (0.0.0.0:8443 for every network this machine is on);
-                                              --name adds a name browsers reach it by
+                                              --name adds a name browsers reach it by; --profile
+                                              serves the owner's own, as `openmailclient serve`
   openmailclient-cli web password [--dir <folder>]
                                               set the web password, or set it again when it is
                                               forgotten (asked for twice, never on the command line;
@@ -52,6 +55,11 @@ pub fn web(rest: &[String], default_dir: Option<PathBuf>) -> Result<(), String> 
             "--web-dir" => serve.web_dir = Some(PathBuf::from(value()?)),
             "--reach-out" => serve.reach_out = true,
             "--new-certificate" => serve.new_certificate = true,
+            "--profile" => serve.profile = true,
+            "--passwords" => {
+                let v = value()?;
+                serve.passwords = Choice::parse(&v).ok_or_else(|| format!("--passwords {v}: say system, sealed or either"))?;
+            }
             other if other.starts_with("--") => return Err(format!("{other}: not an option of `web`\n{USAGE}")),
             other => words.push(other),
         }
@@ -202,21 +210,22 @@ struct Serve {
     web_dir: Option<PathBuf>,
     reach_out: bool,
     new_certificate: bool,
+    profile: bool,
+    passwords: Choice,
 }
 
 fn run_server(dir: PathBuf, serve: Serve) -> Result<(), String> {
-    let listen_text = serve.listen.unwrap_or_else(|| "127.0.0.1:8443".to_string());
-    let listen: std::net::SocketAddr =
-        listen_text.parse().map_err(|e| format!("{listen_text}: {e}; give it as 127.0.0.1:8443, 0.0.0.0:8443 or [::]:8443"))?;
     if let Some(t) = &serve.template
         && t != "sample"
     {
         return Err(format!("unknown template \"{t}\"; there is: sample"));
     }
-    if let Some(web) = &serve.web_dir
-        && !web.join("index.html").is_file()
-    {
-        return Err(format!("{}: there is no index.html; `cargo xtask web` builds it", web.display()));
+    if serve.profile && (serve.template.is_some() || !serve.open.is_empty()) {
+        return Err("--profile serves the owner's own mailbox; it is not given with --template or --open".to_string());
+    }
+    let plan = host::Plan { listen: serve.listen, names: serve.names, web_dir: serve.web_dir, new_certificate: serve.new_certificate };
+    if serve.profile {
+        return host::serve_profile(&dir, plan, serve.passwords);
     }
     let (template, open, reach_out) = (serve.template, serve.open, serve.reach_out);
     let make = move || {
@@ -233,32 +242,7 @@ fn run_server(dir: PathBuf, serve: Serve) -> Result<(), String> {
         }
         Ok(openmailclient_mcp::Headless { session, reach_out })
     };
-    let options = server::Options { listen, names: serve.names, dir: dir.clone(), web_dir: serve.web_dir, new_certificate: serve.new_certificate };
-    let running = server::serve(options, make)?;
-    let s = &running.started;
-    if s.new_certificate {
-        println!("A new certificate was made; browsers will ask about it once.");
-    }
-    println!("Web access is on, listening on {}.", s.listen);
-    let port = s.listen.port();
-    for n in &s.names {
-        println!("  https://{}:{port}/", if n.contains(':') { format!("[{n}]") } else { n.clone() });
-    }
-    println!("The browser will warn that it does not know the certificate. Go on only if it shows this fingerprint:");
-    println!("  SHA-256 {}", s.fingerprint);
-    let ip = s.listen.ip();
-    if ip.is_loopback() {
-        println!("Only this machine can reach it. To reach it from other devices, start it with --listen 0.0.0.0:{port}.");
-    } else if ip.is_unspecified() {
-        println!("Every network this machine is on can reach it. A port forwarded to it from the internet makes the sign-in page public.");
-    } else if !server::is_private(ip) {
-        println!(
-            "WARNING: {ip} is a public address. Anyone on the internet can reach the sign-in page; only the password and the bans keep them out."
-        );
-    }
-    println!("Sign-ins are logged in {}. Stop with Ctrl+C.", server::log_file(&dir).display());
-    running.wait();
-    Ok(())
+    host::run(&dir, plan, make, &[])
 }
 
 fn bans(dir: &Path) -> Result<(), String> {

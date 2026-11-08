@@ -55,6 +55,8 @@ pub trait Backend {
     /// Let time pass: what a session of its own does every so often, as the window does on its
     /// own. `now_ms` is a clock that only goes forward.
     fn tick(&mut self, _now_ms: u64) {}
+    /// The host is going: save what is unsaved and end what runs, as the window does on closing.
+    fn finish(&mut self) {}
 }
 
 /// A session of its own, without a window.
@@ -91,6 +93,14 @@ impl Backend for Headless {
         let _ = s.send_receive_due(now_ms);
         let _ = s.reminders_due(now_ms);
         let _ = s.autosave(now_ms);
+    }
+
+    fn finish(&mut self) {
+        let s = &mut self.session;
+        // Work on threads of its own is stopped, not waited out; saves are finished.
+        s.leave_jobs(std::time::Duration::from_secs(2));
+        s.finish_saves();
+        s.settle();
     }
 }
 

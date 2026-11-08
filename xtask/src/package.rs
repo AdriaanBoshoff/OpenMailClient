@@ -66,6 +66,28 @@ MimeType=message/rfc822;text/calendar;text/vcard;text/x-vcard;
 StartupWMClass=openmailclient
 ";
 
+/// Web access as a service of the one who installed it (M7.5): `install.sh` puts it in
+/// `~/.config/systemd/user` with the path of the programs filled in, and never starts it;
+/// `docs/web-access.md` says how. The console program serves, as it needs no display.
+const SERVICE: &str = "[Unit]
+Description=OpenMailClient web access
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@LIB@/openmailclient-cli web serve --profile --listen 0.0.0.0:8443
+# A stop (SIGTERM) finishes what is being saved first; it is given up to two minutes.
+TimeoutStopSec=150
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
+";
+
 /// Installs the programs for the one who runs it, under `~/.local` (no administrator), or takes
 /// them away with `--uninstall`; mail, settings and accounts are left where they are.
 const INSTALL: &str = r#"#!/bin/sh
@@ -76,7 +98,13 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 bin=$HOME/.local/bin
 lib=$data/openmailclient
+units=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 if [ "${1:-}" = "--uninstall" ]; then
+    if [ -f "$units/openmailclient.service" ]; then
+        command -v systemctl >/dev/null 2>&1 && systemctl --user disable --now openmailclient.service >/dev/null 2>&1 || true
+        rm -f "$units/openmailclient.service"
+        command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
     rm -f "$bin/openmailclient" "$bin/openmailclient-cli" "$data/applications/openmailclient.desktop" "$data/icons/hicolor/256x256/apps/openmailclient.png"
     rm -rf "$lib"
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$data/applications" || true
@@ -93,8 +121,13 @@ cp "$here/openmailclient.png" "$data/icons/hicolor/256x256/apps/openmailclient.p
 sed "s|^Exec=.*|Exec=$lib/openmailclient %F|" "$here/openmailclient.desktop" > "$data/applications/openmailclient.desktop"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$data/applications" || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$data/icons/hicolor" || true
+# Web access as a service of yours, put in place but not started: see docs/web-access.md.
+mkdir -p "$units"
+sed "s|@LIB@|$lib|" "$here/openmailclient.service" > "$units/openmailclient.service"
+command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload >/dev/null 2>&1 || true
 echo "OpenMailClient is installed: find it among your applications, or run $bin/openmailclient"
 case ":$PATH:" in *":$bin:"*) ;; *) echo "($bin is not on your PATH; add it to run openmailclient-cli by name.)" ;; esac
+echo "Web access from a browser: set its password with openmailclient-cli web password, then systemctl --user enable --now openmailclient"
 "#;
 
 /// The Linux archive: the programs, the icon, the desktop entry and `install.sh`, in a folder
@@ -131,6 +164,7 @@ fn linux() -> Result<(), String> {
     let write = |to: &str, text: &str| std::fs::write(folder.join(to), text).map_err(|e| format!("{to}: {e}"));
     write("openmailclient.desktop", DESKTOP)?;
     write("install.sh", INSTALL)?;
+    write("openmailclient.service", SERVICE)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

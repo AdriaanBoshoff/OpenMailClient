@@ -94,6 +94,8 @@ enum Ask {
     Commands,
     Execute(String, Value),
     State,
+    /// Save what is unsaved and end the session: the server is stopping.
+    Finish,
 }
 
 struct Job {
@@ -166,6 +168,9 @@ struct Shared {
     stop: AtomicBool,
 }
 
+/// How long a stop waits for the session to save what is unsaved.
+pub const FINISH_WITHIN: Duration = Duration::from_secs(120);
+
 /// A server running on threads of its own.
 pub struct Running {
     pub started: Started,
@@ -174,7 +179,8 @@ pub struct Running {
 }
 
 impl Running {
-    /// Stop listening; connections open end as their browsers leave.
+    /// Stop listening and end the session, saving what is unsaved; connections open end as
+    /// their browsers leave.
     pub fn stop(mut self) {
         self.halt();
     }
@@ -199,6 +205,12 @@ impl Running {
             let _ = t.join();
         }
         let _ = std::fs::remove_file(serving_file(&self.shared.dir));
+        // The session saves what is unsaved before the server is gone; a save that hangs is
+        // waited for only so long, and its journal keeps the changes meanwhile.
+        let (reply, done) = sync_channel(1);
+        if self.shared.jobs.send(Job { ask: Ask::Finish, reply }).is_ok() {
+            let _ = done.recv_timeout(FINISH_WITHIN);
+        }
     }
 }
 
@@ -346,6 +358,11 @@ fn session_thread<B: Backend>(mut backend: B, inbox: Receiver<Job>) {
                     Ask::Commands => backend.commands(),
                     Ask::Execute(command, params) => backend.execute(&command, &params),
                     Ask::State => backend.state(),
+                    Ask::Finish => {
+                        backend.finish();
+                        let _ = job.reply.send(Ok(Value::Null));
+                        return;
+                    }
                 };
                 let _ = job.reply.send(answer);
             }

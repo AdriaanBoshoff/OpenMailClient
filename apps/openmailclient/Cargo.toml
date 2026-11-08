@@ -14,6 +14,9 @@ openmailclient-engine = { workspace = true }
 openmailclient-ui-egui = { workspace = true }
 openmailclient-formats = { workspace = true }
 openmailclient-model = { workspace = true }
+# `openmailclient serve`: the mailbox served to browsers without a window (M7.5).
+openmailclient-serve = { workspace = true }
+openmailclient-net = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "persistence", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 log = { workspace = true }

@@ -359,3 +359,35 @@ fn hosts_are_known_by_name_or_by_the_address_dialled() {
     assert!(is_private("192.168.1.20".parse().unwrap()) && is_private("100.100.1.1".parse().unwrap()) && is_private("fd00::1".parse().unwrap()));
     assert!(!is_private("8.8.8.8".parse().unwrap()));
 }
+
+/// A backend that says when it was told to finish.
+struct Finishing(Arc<std::sync::atomic::AtomicBool>);
+
+impl Backend for Finishing {
+    fn commands(&mut self) -> Result<Value, String> {
+        Ok(json!([]))
+    }
+    fn execute(&mut self, command: &str, _: &Value) -> Result<Value, String> {
+        Err(format!("{command}: not here"))
+    }
+    fn state(&mut self) -> Result<Value, String> {
+        Ok(Value::Null)
+    }
+    fn finish(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_stop_lets_the_mailbox_finish_what_it_saves() {
+    let dir = std::env::temp_dir().join(format!("omc-serve-finish-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    password::set(&dir, PASSWORD, crate::now_ms()).unwrap();
+    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = finished.clone();
+    let options = Options { listen: "127.0.0.1:0".parse().unwrap(), names: vec![], dir: dir.clone(), web_dir: None, new_certificate: false };
+    let running = serve(options, move || Ok(Finishing(flag))).unwrap();
+    running.stop();
+    assert!(finished.load(std::sync::atomic::Ordering::SeqCst), "the session was told to finish before the stop returned");
+    let _ = std::fs::remove_dir_all(&dir);
+}

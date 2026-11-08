@@ -21,7 +21,7 @@ pub trait Vault: Send + Sync {
 }
 
 /// An account's id as a key: a line of no more than 200 characters.
-fn key(account: &str) -> Result<&str, NetError> {
+pub(crate) fn key(account: &str) -> Result<&str, NetError> {
     if account.is_empty() || account.chars().count() > 200 || account.chars().any(char::is_control) {
         return Err(NetError::Unsupported(format!("{} does not name an account", said(account))));
     }

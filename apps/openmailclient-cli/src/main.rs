@@ -15,6 +15,7 @@
 //! an instruction to whoever reads the output.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod account;
 mod web;
 
 use openmailclient_engine::io::{self, Opened};
@@ -85,10 +86,13 @@ fn run(args: &[String]) -> Result<(), String> {
         Some("run") => run_commands(rest),
         Some("mcp") => mcp(rest),
         Some("web") => web::web(rest, settings_path().and_then(|p| p.parent().map(Path::to_path_buf))),
+        Some("account") => account::account(rest, settings_path().and_then(|p| p.parent().map(Path::to_path_buf))),
         _ => Err(format!(
             "{USAGE}
+{}
 {}",
-            web::USAGE
+            web::USAGE,
+            account::USAGE
         )),
     }
 }
@@ -172,15 +176,7 @@ fn props(path: &Path) -> Result<(), String> {
 
 /// Where the window keeps its settings, as `apps/openmailclient` finds it.
 fn settings_path() -> Option<std::path::PathBuf> {
-    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
-    let dir = if cfg!(target_os = "windows") {
-        var("APPDATA")?.join("OpenMailClient")
-    } else if cfg!(target_os = "macos") {
-        var("HOME")?.join("Library").join("Application Support").join("OpenMailClient")
-    } else {
-        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|home| home.join(".config")))?.join("openmailclient")
-    };
-    Some(dir.join("settings.json"))
+    openmailclient_engine::places::settings_file()
 }
 
 fn depth(folders: &[FolderInfo], f: &FolderInfo) -> usize {
@@ -288,6 +284,8 @@ fn run_commands(args: &[String]) -> Result<(), String> {
     // The window's own settings and accounts, as the window opens them: kept again at the end,
     // with every data file that changed, so what was done here is there when the window opens.
     let mut profile: Option<(std::path::PathBuf, Value)> = None;
+    // The profile's folder is held while it is used, as the window and `openmailclient serve` hold it.
+    let mut _hold = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || it.next().map(String::as_str).ok_or_else(|| format!("{arg} needs a value\n{USAGE}"));
@@ -316,6 +314,10 @@ fn run_commands(args: &[String]) -> Result<(), String> {
                 session.set_system_zone(openmailclient_engine::local_zone());
                 let path = settings_path().ok_or("there is no folder for settings here")?;
                 let dir = path.parent().map(Path::to_path_buf);
+                if let Some(d) = &dir {
+                    openmailclient_engine::places::name_this_run("openmailclient-cli run --profile");
+                    _hold = Some(openmailclient_engine::places::hold(d)?);
+                }
                 session.journal_dir = dir.as_ref().map(|d| d.join("journals"));
                 session.account_dir = dir.as_ref().map(|d| d.join("Accounts"));
                 let loaded =
